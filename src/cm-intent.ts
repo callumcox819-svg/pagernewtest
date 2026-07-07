@@ -101,6 +101,9 @@ export function isDepositTierChoice(text: string): boolean {
   if (t.split(/\s+/).length <= 12 && /\b(1000|1500|1\s?000|1\s?500)\s*(?:cfa|fr|f)?\b/i.test(t)) {
     return true;
   }
+  if (/\b(1000|1500)\s*f\b/i.test(t) || /\b(1000f|1500f)\b/i.test(t)) {
+    return true;
+  }
   return isCmTier1000Choice(t) || isCmTier1500Choice(t);
 }
 

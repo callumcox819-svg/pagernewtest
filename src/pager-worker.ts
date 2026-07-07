@@ -17,8 +17,9 @@ import {
   regLinkSentInHistory,
   regSendTriggersInProgress,
   resolveCmFunnelScripts,
+  tierSentInHistory,
 } from "./cm-script-engine.js";
-import { isRegistrationConfirmed } from "./cm-intent.js";
+import { isDepositTierChoice, isRegistrationConfirmed } from "./cm-intent.js";
 import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
@@ -273,19 +274,28 @@ async function processCmConversation(
   const lastIncoming = latest;
   const lastIncomingAt = lastIncoming.createdAt ?? "";
   const outgoingTexts = collectOutgoingTexts(messages);
+  const latestCustomerText = (lastIncoming.text || "").trim();
+  const awaitingRegAfterTierChoice =
+    tierSentInHistory(outgoingTexts) &&
+    !regLinkSentInHistory(outgoingTexts) &&
+    isDepositTierChoice(latestCustomerText);
 
   if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
-    return false;
+    if (!awaitingRegAfterTierChoice) {
+      return false;
+    }
   }
 
   if (hasDeliveredReplyAfter(sorted, lastIncomingAt)) {
-    if (convState.lastCustomerMessageId !== lastIncoming.id) {
-      await patchConversationState(deps.stateStore, state.chatId, convId, {
-        lastCustomerMessageId: lastIncoming.id,
-        lastCustomerMessageAt: lastIncoming.createdAt,
-      });
+    if (!awaitingRegAfterTierChoice) {
+      if (convState.lastCustomerMessageId !== lastIncoming.id) {
+        await patchConversationState(deps.stateStore, state.chatId, convId, {
+          lastCustomerMessageId: lastIncoming.id,
+          lastCustomerMessageAt: lastIncoming.createdAt,
+        });
+      }
+      return false;
     }
-    return false;
   }
 
   const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
@@ -305,7 +315,6 @@ async function processCmConversation(
   const threadStep = inferStepFromThread(messages);
   const gapStep = funnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
-  const latestCustomerText = (lastIncoming.text || "").trim();
   const imageUrl = extractImageUrl(lastIncoming);
   const intent = classifyCmMessage(latestCustomerText, {
     hasImage: Boolean(imageUrl),
@@ -347,6 +356,18 @@ async function processCmConversation(
     if (!replyText?.trim()) {
       if (scriptKey === "01_intro_2") {
         console.warn(`CM script optional miss ${convId.slice(0, 8)}: ${scriptKey}`);
+        continue;
+      }
+      if (scriptKey === "06_link" && sentAny) {
+        const fallbackLink = "https://tinyurl.com/Camerun01";
+        const sent = await client.sendMessageReliable(convId, fallbackLink, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          await sleep(500);
+        }
         continue;
       }
       console.warn(

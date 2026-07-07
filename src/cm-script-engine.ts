@@ -331,7 +331,7 @@ export function resolveCmFunnelScripts(
 
   if (!tierSent) {
     if (tierChoice) {
-      return ["04_tier", ...CM_REG_BUNDLE];
+      return ["04_tier"];
     }
     if (positiveSignal || intent === "question" || wantsDetailsAfterIntro(t) || intent === "unknown") {
       return ["04_tier"];
