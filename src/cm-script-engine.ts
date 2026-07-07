@@ -242,7 +242,8 @@ export function resolveCmFunnelScripts(
     isFunnelPositiveReaction(t, effectiveStep) ||
     intent === "positive" ||
     intent === "ready" ||
-    intent === "interested";
+    intent === "interested" ||
+    isListeningReady(t);
   const tierChoice = isDepositTierChoice(t);
 
   if (intent === "declined") {
@@ -256,11 +257,14 @@ export function resolveCmFunnelScripts(
   const tierSent = tierSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
 
-  if (isAgeAnswer(t) && !stepsSent && effectiveStep < 5 && !linkSent) {
+  if (isAgeAnswer(t) && !stepsSent && !linkSent) {
     return ["03_steps"];
   }
 
   if (linkSent) {
+    if (isRegistrationHelpRequest(t)) {
+      return ["07_chrome", "06_link"];
+    }
     if ((options?.hasImage || isRegistrationConfirmed(t)) && !depositSentInHistory(out)) {
       return ["09_deposit"];
     }
@@ -270,77 +274,81 @@ export function resolveCmFunnelScripts(
     return [];
   }
 
-  if (tierSent && tierChoice && !linkSent) {
+  if (tierSent && tierChoice) {
     return [...CM_REG_BUNDLE];
   }
 
-  if (wantsRegistrationLink(t) && stepsSent && !linkSent) {
+  if (wantsRegistrationLink(t) && stepsSent) {
     return tierSent ? [...CM_REG_BUNDLE] : ["04_tier"];
   }
 
-  if (effectiveStep < 1) {
-    if (!introSent) {
-      if (["interested", "positive", "ready", "question", "unknown"].includes(intent) || positiveSignal) {
-        return ["01_intro", "01_intro_2"];
-      }
-      return [];
-    }
-    if (!intro2Sent) {
-      return ["01_intro_2"];
+  if (!introSent) {
+    if (["interested", "positive", "ready", "question", "unknown"].includes(intent) || positiveSignal || t.length > 0) {
+      return ["01_intro", "01_intro_2"];
     }
     return [];
   }
 
-  if (effectiveStep < 2) {
-    if (intro2Sent && !ageSent) {
-      if (
-        positiveSignal ||
-        intent === "question" ||
-        wantsDetailsAfterIntro(t) ||
-        /\boui\b/i.test(t)
-      ) {
-        return ["02_age"];
-      }
+  if (!intro2Sent) {
+    return ["01_intro_2"];
+  }
+
+  if (!ageSent) {
+    if (positiveSignal || intent === "question" || wantsDetailsAfterIntro(t) || /\boui\b/i.test(t) || t.length > 0) {
+      return ["02_age"];
     }
     return [];
   }
 
-  if (effectiveStep < 3) {
-    if (ageSent && !stepsSent) {
-      if (isAgeAnswer(t) || positiveSignal || intent === "question") {
-        return ["03_steps"];
-      }
+  if (!stepsSent) {
+    if (isAgeAnswer(t) || positiveSignal || intent === "question" || intent === "unknown") {
+      return ["03_steps"];
     }
     return [];
   }
 
-  if (effectiveStep < 4) {
-    if (stepsSent && !tierSent) {
-      if (tierChoice) {
-        return ["04_tier", ...CM_REG_BUNDLE];
-      }
-      if (positiveSignal || intent === "question" || wantsDetailsAfterIntro(t)) {
-        return ["04_tier"];
-      }
-      return [];
+  if (!tierSent) {
+    if (tierChoice) {
+      return ["04_tier", ...CM_REG_BUNDLE];
     }
-    if (tierSent && !linkSent) {
-      if (tierChoice || agreesAfterTierTable(t)) {
-        return [...CM_REG_BUNDLE];
-      }
+    if (positiveSignal || intent === "question" || wantsDetailsAfterIntro(t) || intent === "unknown") {
+      return ["04_tier"];
     }
     return [];
   }
 
-  if (isRegistrationPending(t) && !linkSent) {
+  if (tierSent && (tierChoice || agreesAfterTierTable(t))) {
     return [...CM_REG_BUNDLE];
   }
 
-  if (tierSent && !linkSent && (tierChoice || agreesAfterTierTable(t) || wantsRegistrationLink(t))) {
+  if (isRegistrationPending(t)) {
     return [...CM_REG_BUNDLE];
   }
 
-  return resolveCmBacklogFallback(effectiveStep, out, intent, t, options);
+  if (tierSent && (wantsRegistrationLink(t) || agreesAfterTierTable(t))) {
+    return [...CM_REG_BUNDLE];
+  }
+
+  return [];
+}
+
+function isListeningReady(text: string): boolean {
+  const t = (text || "").trim().toLowerCase();
+  return (
+    /\b(je suis à l'écoute|je suis a l'ecoute|à l'écoute|a l'ecoute)\b/i.test(t) ||
+    /\bje vous écoute|je t'écoute\b/i.test(t)
+  );
+}
+
+function isRegistrationHelpRequest(text: string): boolean {
+  const t = (text || "").trim().toLowerCase();
+  if (!t) {
+    return false;
+  }
+  return (
+    /\b(je ne sais pas|je sais pas|sais pas faire|pas faire|aide|help|comment faire)\b/i.test(t) ||
+    /\b(je connais pas|connais pas)\b/i.test(t)
+  );
 }
 
 function agreesAfterTierTable(text: string): boolean {
@@ -358,58 +366,6 @@ function agreesAfterTierTable(text: string): boolean {
     return true;
   }
   return false;
-}
-
-function resolveCmBacklogFallback(
-  effectiveStep: number,
-  outgoingTexts: string[],
-  intent: CmIntent,
-  text: string,
-  options?: { hasImage?: boolean; messageReaction?: string },
-): string[] {
-  const out = outgoingTexts;
-  const introSent = cmScriptSentInHistory(out, "01_intro");
-  const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
-  const ageSent = cmScriptSentInHistory(out, "02_age") || ageQuestionSentInHistory(out);
-  const stepsSent = stepsSentInHistory(out);
-  const tierSent = tierSentInHistory(out);
-  const linkSent = regLinkSentInHistory(out);
-
-  if (linkSent) {
-    if (isRegistrationConfirmed(text) && !depositSentInHistory(out)) {
-      return ["09_deposit"];
-    }
-    return [];
-  }
-
-  if (!introSent) {
-    if (["interested", "positive", "ready", "question", "unknown"].includes(intent)) {
-      return ["01_intro", "01_intro_2"];
-    }
-    return [];
-  }
-  if (!intro2Sent) {
-    return ["01_intro_2"];
-  }
-  if (!ageSent && effectiveStep < 5) {
-    return ["02_age"];
-  }
-  if (!stepsSent && effectiveStep < 5) {
-    return ["03_steps"];
-  }
-  if (wantsRegistrationLink(text) && stepsSent && !linkSent) {
-    return tierSent ? [...CM_REG_BUNDLE] : ["04_tier"];
-  }
-  if (!tierSent && effectiveStep < 5) {
-    return ["04_tier"];
-  }
-  if (isDepositTierChoice(text)) {
-    return [...CM_REG_BUNDLE];
-  }
-  if (effectiveStep < 6 && tierSent && agreesAfterTierTable(text)) {
-    return [...CM_REG_BUNDLE];
-  }
-  return [];
 }
 
 export function classifyCmMessage(

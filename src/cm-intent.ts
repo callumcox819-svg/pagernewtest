@@ -66,6 +66,9 @@ export function classifyCmIntent(
   if (FR_INTERESTED.test(t)) {
     return "interested";
   }
+  if (/\b(je suis à l'écoute|je suis a l'ecoute|à l'écoute|je vous écoute)\b/i.test(t)) {
+    return "positive";
+  }
   if (/\boui\b/i.test(t) && step < 4) {
     return "positive";
   }
