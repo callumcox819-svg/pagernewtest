@@ -6,7 +6,7 @@ import {
   getDefaultEnabledChannel,
   getPlaybook,
 } from "./config.js";
-import { enrichPagerCookies } from "./clerk-auth.js";
+import { cleanPagerCookies, enrichPagerCookies } from "./clerk-auth.js";
 import { decideNextAction } from "./decision-engine.js";
 import type { AppEnv } from "./env.js";
 import {
@@ -81,9 +81,6 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     baseUrl: deps.env.PAGER_BASE_URL,
     cookieHeader: enrichPagerCookies(cookies, {
       organizationId: freshState.pagerAccount?.organizationId,
-      organizationSlug:
-        freshState.pagerAccount?.organizationSlug ??
-        freshState.pagerAccount?.organizationName?.toLowerCase(),
     }),
     orgId: freshState.pagerAccount?.organizationId,
     orgSlug:
@@ -531,13 +528,16 @@ async function ensureStatusFolders(
       client ??
       new PagerClient({
         baseUrl: deps.env.PAGER_BASE_URL,
-        cookieHeader: cookies,
+        cookieHeader: enrichPagerCookies(cookies, {
+          organizationId: state.pagerAccount?.organizationId,
+        }),
         orgId: state.pagerAccount?.organizationId,
         orgSlug:
           state.pagerAccount?.organizationSlug ??
           state.pagerAccount?.organizationName?.toLowerCase(),
         locale: "uk",
       });
+    await pagerClient.prepareSession();
     const session = await pagerClient.bootstrapSession();
     const statuses = await pagerClient.loadAllStatuses().catch(() => []);
     const statusFolders = mergeStatusFolderList(statuses, state.statusFolders);

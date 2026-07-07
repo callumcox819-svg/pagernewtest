@@ -713,7 +713,7 @@ async function showFoldersMenu(chatId: number, state: ChatState, messageId?: num
     return;
   }
 
-  if (!currentState.statusFolders?.length) {
+  if (!currentState.statusFolders?.length || countApiStatusFolders(currentState.statusFolders) === 0) {
     const synced = await syncStatusFolders(chatId, currentState);
     currentState = synced.state ?? currentState;
     if (!currentState.statusFolders?.length) {
@@ -772,16 +772,10 @@ async function syncStatusFolders(
       state.pagerAccount?.organizationId,
       resolvePagerOrgSlug(state),
     );
+    await client.prepareSession();
     const session = await client.bootstrapSession();
 
-    let statuses: Array<{ id: string; name: string }> = [];
-    try {
-      statuses = await client.loadAllStatuses();
-    } catch (error) {
-      console.warn("listStatuses failed, retrying after live org resolve:", error);
-      await client.resolveOrgIdLive();
-      statuses = await client.loadAllStatuses().catch(() => []);
-    }
+    const statuses = await client.loadAllStatuses();
 
     const statusFolders = mergeStatusFolderList(statuses, state.statusFolders);
     const apiCount = countApiStatusFolders(statusFolders);
@@ -921,10 +915,7 @@ function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
 }
 
 function buildPagerClient(cookieHeader: string, orgId?: string, orgSlug?: string) {
-  const enriched = enrichPagerCookies(cookieHeader, {
-    organizationId: orgId,
-    organizationSlug: orgSlug,
-  });
+  const enriched = enrichPagerCookies(cookieHeader, { organizationId: orgId });
   const cookies = parseCookieHeader(enriched);
   return new PagerClient({
     baseUrl: env.PAGER_BASE_URL,
@@ -950,7 +941,6 @@ function buildPagerAccountPatch(
     ...base,
     cookies: enrichPagerCookies(session.cookieHeader, {
       organizationId: session.organizationId ?? base.organizationId,
-      organizationSlug: session.organizationSlug ?? base.organizationSlug,
     }),
     organizationId: session.organizationId ?? base.organizationId,
     organizationSlug: session.organizationSlug ?? base.organizationSlug,
@@ -1014,7 +1004,6 @@ async function handlePendingInput(
       const statusFolders = mergeStatusFolderList(statuses);
       const enrichedCookies = enrichPagerCookies(login.cookieHeader, {
         organizationId: session.organizationId ?? login.organizationId,
-        organizationSlug: session.organizationSlug,
         pagerUserId: login.pagerUserId,
       });
 
@@ -1086,7 +1075,6 @@ async function handlePendingInput(
       const statusFolders = mergeStatusFolderList(statuses);
       const enrichedCookies = enrichPagerCookies(text.trim(), {
         organizationId: session.organizationId,
-        organizationSlug: session.organizationSlug,
       });
       await stateStore.patch(chatId, {
         pendingAction: undefined,

@@ -269,6 +269,22 @@ export function cookiesToHeader(cookies: Record<string, string>): string {
     .join("; ");
 }
 
+const PAGER_COOKIE_KEEP = new Set(["_pager_org_id", "_pager_user_id"]);
+
+export function cleanPagerCookies(cookieHeader: string): string {
+  const cookies = parseCookieHeader(cookieHeader);
+  const cleaned: Record<string, string> = {};
+  for (const [key, value] of Object.entries(cookies)) {
+    if (key.startsWith("_pager_") && !PAGER_COOKIE_KEEP.has(key)) {
+      continue;
+    }
+    if (value) {
+      cleaned[key] = value;
+    }
+  }
+  return cookiesToHeader(cleaned);
+}
+
 export function enrichPagerCookies(
   cookieHeader: string,
   session: {
@@ -277,20 +293,16 @@ export function enrichPagerCookies(
     pagerUserId?: string;
   },
 ): string {
-  const cookies = parseCookieHeader(cookieHeader);
+  const cookies = parseCookieHeader(cleanPagerCookies(cookieHeader));
   const orgId = session.organizationId?.trim();
   if (orgId?.startsWith("org_")) {
     cookies._pager_org_id = orgId;
-  }
-  const orgSlug = session.organizationSlug?.trim();
-  if (orgSlug) {
-    cookies._pager_org_slug = orgSlug;
   }
   const userId = session.pagerUserId?.trim();
   if (userId?.startsWith("user_")) {
     cookies._pager_user_id = userId;
   }
-  return cookiesToHeader(cookies);
+  return cleanPagerCookies(cookiesToHeader(cookies));
 }
 
 function extractClerkSessionInfo(payload: ClerkClientPayload): {
