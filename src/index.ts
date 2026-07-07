@@ -457,7 +457,7 @@ function getOrCreateState(chatId: number): ChatState {
       config.channels.map((item) => [
         item.id,
         {
-          enabled: true,
+          enabled: false,
           country: item.country,
           templateBank: `${item.country.toLowerCase()}-default`,
         },
@@ -531,7 +531,7 @@ function getChannelRuntime(
 
   const bank = pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), fallbackCountry);
   return {
-    enabled: true,
+    enabled: false,
     country: fallbackCountry,
     templateBank: bank?.name,
     templateBankId: bank?.id,
@@ -565,7 +565,7 @@ function buildChannelRuntimeMap(
       return [
         channel.id,
         {
-          enabled: true,
+          enabled: false,
           country,
           templateBank: bank?.name,
           templateBankId: bank?.id,
@@ -576,7 +576,8 @@ function buildChannelRuntimeMap(
 }
 
 async function showChannelsMenu(chatId: number, state: ChatState, messageId?: number) {
-  const text = "Слева 🟢/🔴 — вкл/выкл, по центру страна, справа папка шаблонов.";
+  const text =
+    "Слева 🟢/🔴 — вкл/выкл (по умолчанию все выкл), по центру страна, справа папка шаблонов.";
   const keyboard = buildChannelKeyboard(getSelectableChannels(state));
 
   if (messageId) {
@@ -659,7 +660,7 @@ function resolveChannelForState(state: ChatState, channelId: string) {
 }
 
 function getChannelEnabled(state: ChatState, channelId: string): boolean {
-  return state.channels?.[channelId]?.enabled ?? true;
+  return state.channels?.[channelId]?.enabled ?? false;
 }
 
 function getChannelCountry(
