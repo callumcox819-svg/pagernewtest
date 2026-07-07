@@ -510,7 +510,7 @@ async function safeEditMenu(
   messageId: number | undefined,
   text: string,
   keyboard: ReturnType<typeof buildChannelKeyboard>,
-  callbackId: string,
+  callbackId?: string,
 ) {
   if (!messageId) {
     await telegram.sendMessage(chatId, text, keyboard);
@@ -520,8 +520,14 @@ async function safeEditMenu(
   try {
     await telegram.editMessageText(chatId, messageId, text, keyboard);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("message is not modified")) {
+      return;
+    }
     console.error("Failed to edit Telegram menu:", error);
-    await telegram.answerCallbackQuery(callbackId, "Открываю меню заново");
+    if (callbackId) {
+      await telegram.answerCallbackQuery(callbackId, "Открываю меню заново");
+    }
     await telegram.sendMessage(chatId, text, keyboard);
   }
 }
@@ -618,7 +624,13 @@ async function showChannelsMenu(chatId: number, state: ChatState, messageId?: nu
   const text =
     "Слева 🟢/🔴 — вкл/выкл (по умолчанию все выкл), по центру страна, справа папка шаблонов.";
   const keyboard = buildChannelKeyboard(getSelectableChannels(state));
-  await safeEditMenu(chatId, messageId, text, keyboard, "");
+
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+
+  await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
 async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatState | undefined> {
