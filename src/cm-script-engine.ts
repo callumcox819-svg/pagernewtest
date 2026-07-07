@@ -6,11 +6,13 @@ import {
   isClientReadyPhrase,
   isDepositTierChoice,
   isFunnelPositiveReaction,
+  isReadyForRegistration,
   isRegistrationConfirmed,
   isRegistrationPending,
   wantsDetailsAfterIntro,
   wantsRegistrationLink,
 } from "./cm-intent.js";
+import { registrationHelpScriptKeys, registrationLinkScriptKeys } from "./funnel-common.js";
 
 export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "Tu es du Cameroun",
@@ -49,6 +51,8 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "04_tier": [
     "140 000 cfa",
     "190 000 cfa",
+    "1 000 cfa — 140 000",
+    "1 000 cfa - 140 000",
     "que vas-tu choisir",
     "tu choisis quoi",
     "voici ce que tu peux obtenir",
@@ -64,10 +68,20 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "11_tg_link": ["xtiy04zvcvw", "t.me/"],
 };
 
+export const CM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
+  "05_registration": ["voici comment ça fonctionne", "d'accord, voici comment", "crée ton compte casino"],
+  "06_link": ["voici comment ça fonctionne", "d'accord, voici comment"],
+  "07_chrome": ["voici comment ça fonctionne", "que vas-tu choisir"],
+  "03_steps": ["cash056", "camerun01", "google chrome"],
+  "04_tier": ["cash056", "camerun01", "google chrome"],
+};
+
 export const CM_FOLDER_NAME_HINTS = ["камерун", "cameroon", "cameroun", "cm"];
 
 export const CM_REG_SEND_KEYS = new Set(["05_registration", "06_link", "07_chrome"]);
 export const CM_INTRO_SEND_KEYS = new Set(["01_intro", "01_intro_2"]);
+
+const CM_REG_BUNDLE = ["05_registration", "06_link", "07_chrome"] as const;
 
 export function scriptSnippet(key: string): string {
   return CM_SCRIPT_SNIPPETS[key] ?? "";
@@ -95,11 +109,13 @@ export function tierSentInHistory(outgoingTexts: string[]): boolean {
   return (
     blob.includes("140 000 cfa") ||
     blob.includes("190 000 cfa") ||
+    blob.includes("1 000 cfa") ||
     blob.includes("que vas-tu choisir") ||
     blob.includes("tu choisis quoi") ||
     blob.includes("voici ce que tu peux obtenir") ||
     blob.includes("investissement → gain") ||
-    blob.includes("investissement -> gain")
+    blob.includes("investissement -> gain") ||
+    blob.includes("obtenir avec mon aide")
   );
 }
 
@@ -114,8 +130,6 @@ export function stepsSentInHistory(outgoingTexts: string[]): boolean {
       blob.includes("dépôt minimum"))
   );
 }
-
-const CM_REG_BUNDLE = ["05_registration", "06_link", "07_chrome"] as const;
 
 function ageQuestionSentInHistory(outgoingTexts: string[]): boolean {
   const blob = outgoingTexts.join("\n").toLowerCase();
@@ -166,7 +180,10 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("camerun01") || (t.includes("google chrome") && t.includes("colle"))) {
     return 5;
   }
-  if (t.includes("cash056") || t.includes("140 000 cfa") || t.includes("190 000 cfa")) {
+  if (t.includes("cash056")) {
+    return 5;
+  }
+  if (t.includes("140 000 cfa") || t.includes("190 000 cfa") || t.includes("que vas-tu choisir")) {
     return 4;
   }
   if (t.includes("quel âge") || t.includes("mon équipe cumule")) {
@@ -208,7 +225,7 @@ export function funnelStepFromScriptGaps(
   if (!cmScriptSentInHistory(outgoingTexts, "02_age")) {
     return Math.min(step, 2);
   }
-  if (!cmScriptSentInHistory(outgoingTexts, "03_steps")) {
+  if (!stepsSentInHistory(outgoingTexts)) {
     return Math.min(step, 2);
   }
   if (!tierSentInHistory(outgoingTexts)) {
@@ -240,6 +257,19 @@ export function collectOutgoingTexts(messages: PagerMessage[]): string[] {
   return texts;
 }
 
+function positiveSignal(
+  text: string,
+  intent: CmIntent,
+  effectiveStep: number,
+): boolean {
+  return (
+    isFunnelPositiveReaction(text, effectiveStep) ||
+    intent === "positive" ||
+    intent === "ready" ||
+    intent === "interested"
+  );
+}
+
 export function resolveCmFunnelScripts(
   effectiveStep: number,
   text: string,
@@ -249,17 +279,20 @@ export function resolveCmFunnelScripts(
 ): string[] {
   const out = outgoingTexts;
   const t = (text || "").trim();
-  const positiveSignal =
-    isFunnelPositiveReaction(t, effectiveStep) ||
-    intent === "positive" ||
-    intent === "ready" ||
-    intent === "interested" ||
-    isListeningReady(t) ||
-    isClientReadyPhrase(t);
-  const readyPhrase = isClientReadyPhrase(t);
-  const tierChoice = isDepositTierChoice(t);
 
   if (intent === "declined") {
+    return [];
+  }
+
+  if (isRegistrationHelpRequest(t)) {
+    return [...registrationHelpScriptKeys("CM")];
+  }
+
+  if (wantsRegistrationLink(t)) {
+    return registrationLinkScriptKeys("CM", regLinkSentInHistory(out));
+  }
+
+  if (intent === "game_id_text") {
     return [];
   }
 
@@ -269,9 +302,15 @@ export function resolveCmFunnelScripts(
   const stepsSent = stepsSentInHistory(out);
   const tierSent = tierSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
+  const tierChoice = isDepositTierChoice(t);
+  const signal = positiveSignal(t, intent, effectiveStep);
 
-  if (isAgeAnswer(t) && !stepsSent && !linkSent) {
-    return ["03_steps"];
+  if (tierSent && tierChoice && !linkSent) {
+    return [...CM_REG_BUNDLE];
+  }
+
+  if (wantsRegistrationLink(t) && stepsSent && !linkSent) {
+    return [...CM_REG_BUNDLE];
   }
 
   if (linkSent) {
@@ -287,88 +326,96 @@ export function resolveCmFunnelScripts(
     return [];
   }
 
-  if (tierSent && tierChoice) {
-    return [...CM_REG_BUNDLE];
-  }
-
-  if (tierSent && readyPhrase && !linkSent) {
-    return [...CM_REG_BUNDLE];
-  }
-
-  if (wantsRegistrationLink(t) && stepsSent) {
-    return tierSent ? [...CM_REG_BUNDLE] : ["04_tier"];
-  }
-
-  if (!intro2Sent) {
+  if (effectiveStep < 1) {
     if (!introSent) {
-      return ["01_intro", "01_intro_2"];
+      if (["interested", "positive", "ready", "question"].includes(intent) || signal) {
+        return ["01_intro", "01_intro_2"];
+      }
+      return [];
     }
-    return ["01_intro_2"];
-  }
-
-  if (!introSent && intro2Sent) {
-    // Intro #1 was skipped but intro #2 is already in the thread — continue the funnel.
-  } else if (!introSent) {
-    if (["interested", "positive", "ready", "question", "unknown"].includes(intent) || positiveSignal || t.length > 0) {
-      return ["01_intro", "01_intro_2"];
+    if (introSent && !intro2Sent) {
+      return ["01_intro_2"];
     }
     return [];
   }
 
-  if (!ageSent) {
-    if (positiveSignal || intent === "question" || wantsDetailsAfterIntro(t) || /\boui\b/i.test(t) || t.length > 0) {
-      return ["02_age"];
+  if (effectiveStep < 2) {
+    if (intro2Sent && !ageSent) {
+      if (
+        ["interested", "positive", "ready", "question"].includes(intent) ||
+        signal ||
+        wantsDetailsAfterIntro(t)
+      ) {
+        return ["02_age"];
+      }
     }
     return [];
   }
 
-  if (!stepsSent) {
-    if (isAgeAnswer(t) || positiveSignal || intent === "question" || intent === "unknown") {
-      return ["03_steps"];
-    }
-    return [];
-  }
-
-  if (!tierSent) {
-    if (tierChoice) {
-      return ["04_tier"];
-    }
-    if (positiveSignal || intent === "question" || wantsDetailsAfterIntro(t) || intent === "unknown") {
-      return ["04_tier"];
-    }
-    return [];
-  }
-
-  if (tierSent && (tierChoice || agreesAfterTierTable(t) || readyPhrase || wantsRegistrationLink(t))) {
-    return [...CM_REG_BUNDLE];
-  }
-
-  if (isRegistrationPending(t)) {
-    return [...CM_REG_BUNDLE];
-  }
-
-  if (readyPhrase) {
-    if (!ageSent) {
-      return ["02_age"];
-    }
-    if (!tierSent) {
-      if (!stepsSent) {
+  if (effectiveStep < 3) {
+    if (ageSent && !stepsSent) {
+      if (
+        isAgeAnswer(t) ||
+        ["positive", "ready", "interested", "question"].includes(intent) ||
+        signal
+      ) {
         return ["03_steps"];
       }
-      return ["04_tier"];
     }
+    return [];
+  }
+
+  if (effectiveStep < 4) {
+    if (wantsRegistrationLink(t) && stepsSent && !linkSent) {
+      return [...CM_REG_BUNDLE];
+    }
+    if (stepsSent && !tierSent) {
+      if (
+        ["positive", "ready", "interested", "question"].includes(intent) ||
+        signal ||
+        isReadyForRegistration(t)
+      ) {
+        return ["04_tier"];
+      }
+    }
+    if (tierSent && (tierChoice || signal)) {
+      return [...CM_REG_BUNDLE];
+    }
+    return [];
+  }
+
+  if (isRegistrationConfirmed(t) && linkSent) {
+    if (!depositSentInHistory(out)) {
+      return ["09_deposit"];
+    }
+    return [];
+  }
+
+  if (isRegistrationPending(t) && !linkSent) {
     return [...CM_REG_BUNDLE];
+  }
+
+  if (effectiveStep < 7) {
+    if (isRegistrationConfirmed(t) || intent === "joined") {
+      if (!depositSentInHistory(out)) {
+        return ["09_deposit"];
+      }
+    }
+    if (
+      tierSent &&
+      !linkSent &&
+      (isReadyForRegistration(t) ||
+        wantsRegistrationLink(t) ||
+        ["ready", "interested", "positive", "question"].includes(intent) ||
+        signal ||
+        isClientReadyPhrase(t))
+    ) {
+      return [...CM_REG_BUNDLE];
+    }
+    return [];
   }
 
   return [];
-}
-
-function isListeningReady(text: string): boolean {
-  const t = (text || "").trim().toLowerCase();
-  return (
-    /\b(je suis à l'écoute|je suis a l'ecoute|à l'écoute|a l'ecoute)\b/i.test(t) ||
-    /\bje vous écoute|je t'écoute\b/i.test(t)
-  );
 }
 
 function isRegistrationHelpRequest(text: string): boolean {
@@ -380,23 +427,6 @@ function isRegistrationHelpRequest(text: string): boolean {
     /\b(je ne sais pas|je sais pas|sais pas faire|pas faire|aide|help|comment faire)\b/i.test(t) ||
     /\b(je connais pas|connais pas)\b/i.test(t)
   );
-}
-
-function agreesAfterTierTable(text: string): boolean {
-  const t = (text || "").trim();
-  if (!t) {
-    return false;
-  }
-  if (isDepositTierChoice(t)) {
-    return true;
-  }
-  if (/^(oui|ok|yes|d'accord)\.?$/i.test(t)) {
-    return true;
-  }
-  if (/\boui\b/i.test(t) && t.split(/\s+/).length <= 6) {
-    return true;
-  }
-  return false;
 }
 
 export function classifyCmMessage(

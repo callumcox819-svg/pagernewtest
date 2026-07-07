@@ -1,3 +1,5 @@
+import { isPositiveMessageReaction } from "./message-attachments.js";
+
 export type ZmIntent =
   | "interested"
   | "positive"
@@ -18,6 +20,8 @@ const JOINED = /\b(have joined|joined|i joined|registered already|done registeri
 const DECLINED = /\b(not interested|no thanks|stop|scam|leave me alone)\b/i;
 const GAME_ID = /\b(17\d{6,}|16\d{6,}|account\s*\d+)\b/i;
 const POSITIVE_EMOJI = /^[\s👍👌✅🔥❤️🙏😊🙂]+$/u;
+const EN_LINK_ASK =
+  /\b(?:send|give|share|want|need|get|where|gimme).{0,28}\b(?:link|url)\b|\b(?:link|url)\b.{0,28}\b(?:please|pls|send|registration|register)\b|\bregistration\s+link\b|\bregister\s+link\b|\bneed\s+(?:the\s+)?link\b/i;
 
 export function classifyZmIntent(
   text: string,
@@ -45,10 +49,10 @@ export function classifyZmIntent(
   if (wantsRegistrationLink(t)) {
     return "ready";
   }
-  if (!t && (options?.hasImage || options?.messageReaction)) {
-    return step < 5 ? "positive" : "image_only";
+  if (!t && isPositiveMessageReaction(options?.messageReaction)) {
+    return "positive";
   }
-  if (!t && POSITIVE_EMOJI.test(options?.messageReaction ?? "")) {
+  if (!t && options?.hasImage) {
     return step < 5 ? "positive" : "image_only";
   }
   if (POSITIVE_EMOJI.test(t) && t.length <= 4) {
@@ -108,11 +112,22 @@ export function wantsRegistrationLink(text: string): boolean {
   if (!t) {
     return false;
   }
+  if (isRegistrationConfirmed(t)) {
+    return false;
+  }
+  if (isRegistrationHelpRequest(t)) {
+    return true;
+  }
+  if (/^(?:the\s+)?(?:link|url)(?:\s+please)?\s*[.!?]*$/i.test(t)) {
+    return true;
+  }
+  if (EN_LINK_ASK.test(t)) {
+    return true;
+  }
   return (
-    /\b(send|give|share|want|need|where).{0,24}\b(link|url)\b/i.test(t) ||
+    /\b(send|give|share|want|need|where).{0,28}\b(link|url)\b/i.test(t) ||
     /\bregistration\s+link\b/i.test(t) ||
-    /\bregister\s+link\b/i.test(t) ||
-    /^link\.?$/i.test(t)
+    /\bregister\s+link\b/i.test(t)
   );
 }
 

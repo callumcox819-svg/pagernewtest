@@ -1,3 +1,5 @@
+import { isPositiveMessageReaction } from "./message-attachments.js";
+
 export type CmIntent =
   | "interested"
   | "positive"
@@ -54,13 +56,10 @@ export function classifyCmIntent(
   if (wantsRegistrationLink(t)) {
     return "ready";
   }
-  if (!t && (options?.messageReaction || options?.hasImage)) {
-    if (step < 5) {
-      return "positive";
-    }
-    return "image_only";
+  if (!t && isPositiveMessageReaction(options?.messageReaction)) {
+    return "positive";
   }
-  if (!t && POSITIVE_EMOJI.test(options?.messageReaction ?? "")) {
+  if (!t && options?.hasImage) {
     return step < 5 ? "positive" : "image_only";
   }
   if (POSITIVE_EMOJI.test(t) && t.length <= 4) {
@@ -215,9 +214,18 @@ export function isAgeAnswer(text: string): boolean {
 }
 
 export function wantsRegistrationLink(text: string): boolean {
-  const t = (text || "").trim().toLowerCase();
+  const t = (text || "").trim();
   if (!t) {
     return false;
+  }
+  if (isRegistrationConfirmed(t)) {
+    return false;
+  }
+  if (/^(?:le\s+)?(?:lien|link)(?:\s+please)?\s*[.!?]*$/i.test(t)) {
+    return true;
+  }
+  if (/\benvoy\w*.*\blien\b|\blien\b.*\benvoy\w*\b/i.test(t)) {
+    return true;
   }
   return (
     /\b(lien|link|inscri|register|compte|account)\b/i.test(t) &&

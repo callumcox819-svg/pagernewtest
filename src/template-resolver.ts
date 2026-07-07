@@ -4,6 +4,7 @@ import { loadLocalCmScript } from "./cm-local-scripts.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import {
   CM_FOLDER_NAME_HINTS,
+  CM_SCRIPT_EXCLUDE_SNIPPETS,
   scriptSearchNeedles as cmScriptSearchNeedles,
   scriptSnippet as cmScriptSnippet,
 } from "./cm-script-engine.js";
@@ -194,7 +195,10 @@ function matchReplyByScriptKey(
 ): PagerSavedReply | undefined {
   const snippetForCountry = country === "ZM" ? zmScriptSnippet : cmScriptSnippet;
   const needlesForCountry = country === "ZM" ? zmScriptSearchNeedles : cmScriptSearchNeedles;
-  const excludes = country === "ZM" ? ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [] : [];
+  const excludes =
+    country === "ZM"
+      ? ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? []
+      : CM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [];
   const primary = snippetForCountry(scriptKey).trim().toLowerCase();
 
   const candidates = replies.filter((reply) => {
@@ -256,7 +260,10 @@ function pickBestScriptReply(replies: PagerSavedReply[], scriptKey: string): Pag
 
 function isScriptReplyAcceptable(text: string, scriptKey: string, country: CountryCode): boolean {
   const snippetForCountry = country === "ZM" ? zmScriptSnippet : cmScriptSnippet;
-  const excludes = country === "ZM" ? ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [] : [];
+  const excludes =
+    country === "ZM"
+      ? ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? []
+      : CM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [];
   const body = text.trim().toLowerCase();
   if (!body || hasExcludedSnippet(body, excludes)) {
     return false;
@@ -265,6 +272,14 @@ function isScriptReplyAcceptable(text: string, scriptKey: string, country: Count
   const primary = snippetForCountry(scriptKey).trim().toLowerCase();
   if (primary && body.includes(primary)) {
     return true;
+  }
+
+  if (scriptKey === "05_registration" && country === "CM") {
+    return (
+      body.includes("cash056") ||
+      body.includes("je vous envoie le lien") ||
+      body.includes("télécharger l'application")
+    );
   }
 
   if (scriptKey === "04_registration" && country === "ZM") {

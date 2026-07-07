@@ -37,6 +37,7 @@ import {
   resolveZmFunnelScripts,
 } from "./zm-script-engine.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
+import { extractProofImageUrl, resolveMessageReaction } from "./message-attachments.js";
 import { isDepositTierChoice, isRegistrationConfirmed } from "./cm-intent.js";
 import type { AppEnv } from "./env.js";
 import {
@@ -342,7 +343,8 @@ async function processCmConversation(
   const threadStep = cmInferStepFromThread(messages);
   const gapStep = cmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
-  const imageUrl = extractImageUrl(lastIncoming);
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const messageReaction = resolveMessageReaction(lastIncoming);
   const playbook = getPlaybook(deps.config, channel.country);
 
   const specialHandled = await trySendSpecialCustomerResponse(deps, {
@@ -384,6 +386,7 @@ async function processCmConversation(
   const intent = classifyCmMessage(latestCustomerText, {
     hasImage: Boolean(imageUrl),
     funnelStep: effectiveStep,
+    messageReaction,
   });
 
   const scriptKeys = resolveCmFunnelScripts(
@@ -391,7 +394,7 @@ async function processCmConversation(
     latestCustomerText,
     intent,
     outgoingTexts,
-    { hasImage: Boolean(imageUrl) },
+    { hasImage: Boolean(imageUrl), messageReaction },
   );
 
   if (!scriptKeys.length) {
@@ -558,7 +561,8 @@ async function processZmConversation(
   const threadStep = zmInferStepFromThread(messages);
   const gapStep = zmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
-  const imageUrl = extractImageUrl(lastIncoming);
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const messageReaction = resolveMessageReaction(lastIncoming);
   const playbook = getPlaybook(deps.config, channel.country);
 
   const specialHandled = await trySendSpecialCustomerResponse(deps, {
@@ -600,6 +604,7 @@ async function processZmConversation(
   const intent = classifyZmMessage(latestCustomerText, {
     hasImage: Boolean(imageUrl),
     funnelStep: effectiveStep,
+    messageReaction,
   });
 
   const scriptKeys = resolveZmFunnelScripts(
@@ -607,7 +612,7 @@ async function processZmConversation(
     latestCustomerText,
     intent,
     outgoingTexts,
-    { hasImage: Boolean(imageUrl) },
+    { hasImage: Boolean(imageUrl), messageReaction },
   );
 
   if (!scriptKeys.length) {
@@ -783,7 +788,7 @@ async function processGenericConversation(
 
   const playbook = getPlaybook(deps.config, channel.country);
   const latestCustomerText = (lastIncoming.text || "").trim();
-  const imageUrl = extractImageUrl(lastIncoming);
+  const imageUrl = extractProofImageUrl(lastIncoming);
 
   const specialHandled = await trySendSpecialCustomerResponse(deps, {
     state,
@@ -1164,18 +1169,6 @@ function buildRuntimeChannelConfig(
     templateBank,
     statusMap: mapped?.statusMap ?? statusMapForCountry(config, country),
   };
-}
-
-function extractImageUrl(message: PagerMessage): string | undefined {
-  for (const attachment of message.attachments ?? []) {
-    if (attachment.type === "image") {
-      const url = attachment.payload?.url;
-      if (url) {
-        return url;
-      }
-    }
-  }
-  return undefined;
 }
 
 function truncate(value: string, max = 40): string {

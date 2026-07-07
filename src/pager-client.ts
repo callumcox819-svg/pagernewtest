@@ -50,7 +50,19 @@ export type PagerMessage = {
   createdAt?: string;
   isDelivered?: boolean;
   facebookMessageId?: string;
-  attachments?: Array<{ type?: string; payload?: { url?: string } }>;
+  reaction?: string | null;
+  attachments?: Array<{
+    type?: string;
+    sticker_id?: string;
+    width?: number;
+    height?: number;
+    payload?: {
+      url?: string;
+      sticker_id?: string;
+      width?: number;
+      height?: number;
+    };
+  }>;
 };
 
 export type PagerSavedReply = {

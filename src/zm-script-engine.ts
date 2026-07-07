@@ -10,6 +10,7 @@ import {
   wantsDetailsAfterIntro,
   wantsRegistrationLink,
 } from "./zm-intent.js";
+import { registrationHelpScriptKeys, registrationLinkScriptKeys } from "./funnel-common.js";
 
 export const ZM_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "Hi! I want to show you",
@@ -38,8 +39,10 @@ export const ZM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
 };
 
 export const ZM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
-  "04_registration": ["registration by e-mail", "make registration by e-mail", "by e-mail"],
-  "05_link": ["promo code", "special registration", "how it works"],
+  "04_registration": ["registration by e-mail", "make registration by e-mail", "by e-mail", "how it works:"],
+  "05_link": ["promo code", "special registration", "how it works", "30 zmw"],
+  "02_how_it_works": ["promo code zam577", "tinyurl.com/zam577"],
+  "03_zmw_table": ["promo code zam577", "tinyurl.com/zam577"],
 };
 
 export const ZM_FOLDER_NAME_HINTS = ["замб", "zamb", "zambia"];
@@ -198,79 +201,107 @@ function shouldSendDepositScript(
   return effectiveStep >= 4 && !depositSentInHistory(outgoingTexts);
 }
 
+function positiveSignal(text: string, intent: ZmIntent, effectiveStep: number): boolean {
+  return (
+    isFunnelPositiveReaction(text, effectiveStep) ||
+    intent === "positive" ||
+    intent === "ready" ||
+    intent === "interested"
+  );
+}
+
+function wantsExplain(
+  text: string,
+  intent: ZmIntent,
+  effectiveStep: number,
+): boolean {
+  return (
+    wantsDetailsAfterIntro(text) ||
+    ["interested", "positive", "ready", "question"].includes(intent) ||
+    positiveSignal(text, intent, effectiveStep) ||
+    isReadyForRegistration(text)
+  );
+}
+
+function wantsRegistrationNow(
+  text: string,
+  intent: ZmIntent,
+  effectiveStep: number,
+): boolean {
+  return (
+    wantsRegistrationLink(text) ||
+    isReadyForRegistration(text) ||
+    isRegistrationPending(text) ||
+    ["ready", "interested", "positive", "question"].includes(intent) ||
+    positiveSignal(text, intent, effectiveStep)
+  );
+}
+
 export function resolveZmFunnelScripts(
   effectiveStep: number,
   text: string,
   intent: ZmIntent,
   outgoingTexts: string[],
-  options?: { hasImage?: boolean },
+  options?: { hasImage?: boolean; messageReaction?: string },
 ): string[] {
   const t = (text || "").trim();
-  const positiveSignal =
-    isFunnelPositiveReaction(t, effectiveStep) ||
-    intent === "positive" ||
-    intent === "ready" ||
-    intent === "interested";
+  const out = outgoingTexts;
 
   if (intent === "declined") {
     return [];
   }
 
-  const introSent = zmScriptSentInHistory(outgoingTexts, "01_intro");
-  const explainSent = explainScriptsSentInHistory(outgoingTexts);
-  const linkSent = regLinkSentInHistory(outgoingTexts);
+  if (isRegistrationHelpRequest(t)) {
+    return [...registrationHelpScriptKeys("ZM")];
+  }
+
+  if (wantsRegistrationLink(t)) {
+    return registrationLinkScriptKeys("ZM", regLinkSentInHistory(out));
+  }
+
+  const introSent = zmScriptSentInHistory(out, "01_intro");
+  const explainSent = explainScriptsSentInHistory(out);
+  const linkSent = regLinkSentInHistory(out);
+  const signal = positiveSignal(t, intent, effectiveStep);
 
   if (effectiveStep < 1) {
     if (introSent) {
-      if (positiveSignal || intent === "question" || wantsDetailsAfterIntro(t)) {
+      if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
         return ["02_how_it_works", "03_zmw_table"];
+      }
+      if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
+        return ["04_registration", "05_link"];
       }
       return [];
     }
-    if (intent === "interested" || positiveSignal || intent === "question") {
+    if (intent === "interested" || signal || intent === "question") {
       return ["01_intro"];
     }
     return [];
   }
 
   if (effectiveStep < 3) {
-    if (
-      intent === "interested" ||
-      intent === "positive" ||
-      intent === "ready" ||
-      intent === "question" ||
-      wantsDetailsAfterIntro(t) ||
-      isReadyForRegistration(t) ||
-      positiveSignal
-    ) {
+    if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
       return ["02_how_it_works", "03_zmw_table"];
+    }
+    if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
+      return ["04_registration", "05_link"];
     }
     return [];
   }
 
   if (effectiveStep < 4) {
     if (isRegistrationConfirmed(t) && linkSent) {
-      if (shouldSendDepositScript(t, effectiveStep, outgoingTexts)) {
-        return ["06_deposit"];
-      }
-      return [];
+      return shouldSendDepositScript(t, effectiveStep, out) ? ["06_deposit"] : [];
     }
 
-    if (!explainSent && (wantsDetailsAfterIntro(t) || positiveSignal)) {
+    if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
       return ["02_how_it_works", "03_zmw_table"];
     }
 
-    if (
-      explainSent &&
-      (isReadyForRegistration(t) ||
-        wantsRegistrationLink(t) ||
-        intent === "ready" ||
-        intent === "interested" ||
-        intent === "positive" ||
-        intent === "question")
-    ) {
+    if (explainSent && wantsRegistrationNow(t, intent, effectiveStep)) {
       if (linkSent && isRegistrationConfirmed(t)) {
-        return shouldSendDepositScript(t, effectiveStep, outgoingTexts) ? ["06_deposit"] : [];
+        return shouldSendDepositScript(t, effectiveStep, out) ? ["06_deposit"] : [];
       }
       if (linkSent) {
         return [];
@@ -281,7 +312,7 @@ export function resolveZmFunnelScripts(
   }
 
   if (isRegistrationHelpRequest(t)) {
-    return ["04_registration", "05_link"];
+    return [...registrationHelpScriptKeys("ZM")];
   }
 
   if (isRegistrationPending(t) && !linkSent) {
@@ -289,19 +320,19 @@ export function resolveZmFunnelScripts(
   }
 
   if (effectiveStep < 7) {
-    if (intent === "game_id_text") {
-      return [];
-    }
     if (isRegistrationConfirmed(t) || intent === "joined" || options?.hasImage) {
-      if (shouldSendDepositScript(t, effectiveStep, outgoingTexts)) {
+      if (shouldSendDepositScript(t, effectiveStep, out)) {
         return ["06_deposit"];
       }
+    }
+    if (!linkSent && wantsRegistrationNow(t, intent, effectiveStep)) {
+      return ["04_registration", "05_link"];
     }
     return [];
   }
 
   if (effectiveStep < 8 && intent === "game_id_text") {
-    if (!zmScriptSentInHistory(outgoingTexts, "07_game_id")) {
+    if (!zmScriptSentInHistory(out, "07_game_id")) {
       return ["07_game_id"];
     }
   }
