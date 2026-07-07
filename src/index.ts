@@ -46,6 +46,13 @@ async function main() {
 }
 
 async function runTelegramBot(): Promise<never> {
+  try {
+    await telegram.deleteWebhook();
+    console.log("Telegram: webhook cleared, using long polling");
+  } catch (error) {
+    console.warn("Telegram: could not delete webhook:", formatError(error));
+  }
+
   let offset: number | undefined;
 
   while (true) {
@@ -56,6 +63,14 @@ async function runTelegramBot(): Promise<never> {
         await handleUpdate(update);
       }
     } catch (error) {
+      const message = formatError(error);
+      if (message.includes("409")) {
+        console.warn(
+          "Telegram 409 conflict — another bot instance may be running. Retrying in 10s...",
+        );
+        await sleep(10_000);
+        continue;
+      }
       console.error("Polling error:", error);
       await sleep(env.POLL_INTERVAL_MS);
     }

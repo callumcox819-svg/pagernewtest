@@ -62,6 +62,10 @@ export class TelegramApi {
     return result;
   }
 
+  async deleteWebhook(): Promise<void> {
+    await this.request("deleteWebhook", { drop_pending_updates: false });
+  }
+
   async sendMessage(
     chatId: number,
     text: string,

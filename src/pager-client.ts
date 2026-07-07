@@ -197,23 +197,45 @@ export class PagerClient {
 
   async collectConversationsForChannels(
     channelIds: string[],
-    maxPages = 3,
+    maxPages = 5,
   ): Promise<PagerConversation[]> {
+    const enabled = new Set(channelIds);
     const seen = new Map<string, PagerConversation>();
+
+    const addBatch = (conversations: PagerConversation[]) => {
+      for (const conv of conversations) {
+        const channelId = conv.channelId || conv.channel?.id;
+        if (!channelId || !enabled.has(channelId)) {
+          continue;
+        }
+        seen.set(conv.id, conv);
+      }
+    };
+
     for (const channelId of channelIds) {
       for (let page = 1; page <= maxPages; page += 1) {
-        const batch = await this.listConversations({ channelId, page, pageSize: 50 });
+        const batch = await this.listConversations({ channelId, page, pageSize: 100 });
         if (!batch.length) {
           break;
         }
-        for (const conv of batch) {
-          seen.set(conv.id, conv);
-        }
-        if (batch.length < 50) {
+        addBatch(batch);
+        if (batch.length < 100) {
           break;
         }
       }
     }
+
+    for (let page = 1; page <= 12; page += 1) {
+      const batch = await this.listConversations({ page, pageSize: 100 });
+      if (!batch.length) {
+        break;
+      }
+      addBatch(batch);
+      if (batch.length < 100) {
+        break;
+      }
+    }
+
     return [...seen.values()];
   }
 

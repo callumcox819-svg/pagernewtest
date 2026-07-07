@@ -52,58 +52,96 @@ export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
 
 async function processPagerAccounts(deps: WorkerDeps): Promise<void> {
   const states = await deps.stateStore.listAll();
-  for (const state of states) {
-    if (!state.pagerAccount?.cookies) {
-      continue;
-    }
+  const connected = states.filter((state) => state.pagerAccount?.cookies);
+
+  if (!connected.length) {
+    console.log("Pager worker: no connected Pager accounts in state store");
+    return;
+  }
+
+  for (const state of connected) {
     await processOperatorAccount(deps, state);
   }
 }
 
 async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promise<void> {
-  const enabledChannels = getEnabledChannels(state);
+  const freshState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const enabledChannels = getEnabledChannels(freshState);
+
   if (!enabledChannels.length) {
+    console.log(
+      `Pager worker: chat ${freshState.chatId} — Pager connected but no enabled channels`,
+    );
     return;
   }
 
   const client = new PagerClient({
     baseUrl: deps.env.PAGER_BASE_URL,
-    cookieHeader: state.pagerAccount!.cookies!,
-    orgId: state.pagerAccount?.organizationId,
+    cookieHeader: freshState.pagerAccount!.cookies!,
+    orgId: freshState.pagerAccount?.organizationId,
     locale: "uk",
   });
+
+  const channelIds = enabledChannels.map((item) => item.channelId);
+  const channelNames = enabledChannels.map((item) => item.channelName).join(", ");
 
   let conversations: PagerConversation[] = [];
   try {
     await client.warmSession();
-    conversations = await client.collectConversationsForChannels(
-      enabledChannels.map((item) => item.channelId),
-    );
+    conversations = await client.collectConversationsForChannels(channelIds);
   } catch (error) {
-    console.error(`Pager poll failed for chat ${state.chatId}:`, formatError(error));
+    console.error(`Pager poll failed for chat ${freshState.chatId}:`, formatError(error));
     return;
   }
 
-  const incoming = conversations.filter((conv) => isIncomingDirection(conv.lastMessageDirection));
-  for (const conv of incoming) {
+  console.log(
+    [
+      `Pager worker: chat ${freshState.chatId}`,
+      `channels=[${channelNames}]`,
+      `fetched=${conversations.length} conversations`,
+    ].join(" | "),
+  );
+
+  if (!conversations.length) {
+    return;
+  }
+
+  let checked = 0;
+  let replied = 0;
+  let skipped = 0;
+
+  for (const conv of conversations) {
     const channelId = conv.channelId || conv.channel?.id;
     if (!channelId) {
-      continue;
-    }
-    const runtime = enabledChannels.find((item) => item.channelId === channelId);
-    if (!runtime) {
+      skipped += 1;
       continue;
     }
 
+    const runtime = enabledChannels.find((item) => item.channelId === channelId);
+    if (!runtime) {
+      skipped += 1;
+      continue;
+    }
+
+    checked += 1;
     try {
-      await processConversation(deps, state, client, conv, runtime);
+      const didReply = await processConversation(deps, freshState, client, conv, runtime);
+      if (didReply) {
+        replied += 1;
+      } else {
+        skipped += 1;
+      }
     } catch (error) {
       console.error(
-        `Conversation ${conv.id.slice(0, 8)} failed for chat ${state.chatId}:`,
+        `Conversation ${conv.id.slice(0, 8)} failed for chat ${freshState.chatId}:`,
         formatError(error),
       );
     }
   }
+
+  console.log(
+    `Pager worker: chat ${freshState.chatId} — checked=${checked} replied=${replied} skipped=${skipped}`,
+  );
 }
 
 async function processConversation(
@@ -112,38 +150,45 @@ async function processConversation(
   client: PagerClient,
   conv: PagerConversation,
   runtime: EnabledChannel,
-): Promise<void> {
+): Promise<boolean> {
   const convId = conv.id;
-  const convState = getConversationState(state, convId, runtime.channelId);
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+
   if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
-    return;
+    return false;
   }
 
   const messages = await client.listMessages(convId, 1, 30);
   if (!messages.length) {
-    return;
+    return false;
   }
 
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
   const latest = sorted[0];
-  if (deps.config.bot.requireCustomerLastMessage && isOutgoingDirection(latest.messageDirection)) {
-    if (shouldSkipHumanReply(deps.config, convState, latest)) {
-      return;
-    }
+  const lastIncoming = sorted.find((message) => isIncomingDirection(message.messageDirection));
+
+  if (!lastIncoming) {
+    return false;
   }
 
-  const lastIncoming = sorted.find((message) => isIncomingDirection(message.messageDirection));
-  if (!lastIncoming) {
-    return;
+  if (deps.config.bot.requireCustomerLastMessage) {
+    if (isOutgoingDirection(latest.messageDirection)) {
+      if (shouldSkipHumanReply(deps.config, convState, latest)) {
+        return false;
+      }
+    }
+  } else if (!isIncomingDirection(conv.lastMessageDirection) && !lastIncoming) {
+    return false;
   }
 
   if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
-    return;
+    return false;
   }
 
-  const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
+  const channel = buildRuntimeChannelConfig(deps.config, currentState, runtime);
   const playbook = getPlaybook(deps.config, channel.country);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const imageUrl = extractImageUrl(lastIncoming);
@@ -173,7 +218,10 @@ async function processConversation(
   });
 
   if (!decision?.templateRole && !decision?.templateToSend) {
-    return;
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} — no rule matched (stage=${convState.currentStage}, text=${truncate(latestCustomerText)})`,
+    );
+    return false;
   }
 
   const templateRole = decision.templateRole ?? "intro";
@@ -187,8 +235,12 @@ async function processConversation(
 
   if (!replyText?.trim()) {
     console.warn(`No template text resolved for ${convId.slice(0, 8)} role=${templateRole}`);
-    return;
+    return false;
   }
+
+  console.log(
+    `Pager worker: sending to ${convId.slice(0, 8)} channel=${runtime.channelName} role=${templateRole}`,
+  );
 
   const sent = await client.sendMessageReliable(convId, replyText.trim(), {
     channelId: runtime.channelId,
@@ -200,16 +252,21 @@ async function processConversation(
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       sendFailures: failures,
     });
+    console.error(`Pager worker: send failed for ${convId.slice(0, 8)} (failures=${failures})`);
     if (failures >= MAX_SEND_FAILURES) {
-      await deps.telegram.sendMessage(
-        state.chatId,
-        `⚠️ Чат ${convId.slice(0, 8)} приостановлен после ${failures} неудачных отправок.`,
-      );
+      try {
+        await deps.telegram.sendMessage(
+          state.chatId,
+          `⚠️ Чат ${convId.slice(0, 8)} приостановлен после ${failures} неудачных отправок.`,
+        );
+      } catch {
+        // telegram may be unavailable
+      }
     }
-    return;
+    return false;
   }
 
-  const nextConvState: ConversationRuntimeState = {
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
     conversationId: convId,
     channelId: runtime.channelId,
     currentStage: decision.nextStage,
@@ -218,22 +275,25 @@ async function processConversation(
     lastReplyAt: new Date().toISOString(),
     lastReplyRole: templateRole,
     sendFailures: 0,
-  };
+  });
 
-  await patchConversationState(deps.stateStore, state.chatId, convId, nextConvState);
+  try {
+    await deps.telegram.sendMessage(
+      state.chatId,
+      [
+        `✅ Ответил в Pager`,
+        `Канал: ${runtime.channelName}`,
+        `Чат: ${convId.slice(0, 8)}…`,
+        `Клиент: ${truncate(latestCustomerText || "(image)")}`,
+        `Стадия: ${convState.currentStage} → ${decision.nextStage}`,
+        `Пресет: ${templateRole}`,
+      ].join("\n"),
+    );
+  } catch {
+    // telegram may be unavailable
+  }
 
-  const channelName = runtime.channelName;
-  await deps.telegram.sendMessage(
-    state.chatId,
-    [
-      `✅ Ответил в Pager`,
-      `Канал: ${channelName}`,
-      `Чат: ${convId.slice(0, 8)}…`,
-      `Стадия: ${convState.currentStage} → ${decision.nextStage}`,
-      `Пресет: ${templateRole}`,
-      `Причина: ${decision.reason}`,
-    ].join("\n"),
-  );
+  return true;
 }
 
 type EnabledChannel = {
@@ -261,8 +321,7 @@ function getEnabledChannels(state: ChatState): EnabledChannel[] {
     return enabled;
   }
 
-  for (const channel of Object.entries(state.channels ?? {})) {
-    const [channelId, runtime] = channel;
+  for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
     if (!runtime.enabled) {
       continue;
     }
@@ -382,6 +441,13 @@ function extractImageUrl(message: PagerMessage): string | undefined {
     }
   }
   return undefined;
+}
+
+function truncate(value: string, max = 40): string {
+  if (value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, max - 1)}…`;
 }
 
 function sleep(ms: number): Promise<void> {
