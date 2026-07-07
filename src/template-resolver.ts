@@ -1,8 +1,10 @@
 import type { BotConfig, CountryCode, TemplateRole } from "./config.js";
 import { getTemplateBank } from "./config.js";
+import { loadLocalCmScript } from "./cm-local-scripts.js";
 import {
   CM_FOLDER_NAME_HINTS,
   scriptSearchNeedles,
+  scriptSnippet,
 } from "./cm-script-engine.js";
 import type { PagerClient, PagerSavedReply } from "./pager-client.js";
 
@@ -75,7 +77,14 @@ export async function resolveCmTemplateFolderId(
     }
   }
 
-  return preferredId || liveBanks?.[0]?.id || banks[0]?.id;
+  for (const bank of liveBanks ?? []) {
+    const normalized = bank.name.toLowerCase();
+    if (CM_FOLDER_NAME_HINTS.some((hint) => normalized.includes(hint))) {
+      return bank.id;
+    }
+  }
+
+  return undefined;
 }
 
 export async function resolveScriptTextByKey(
@@ -91,13 +100,25 @@ export async function resolveScriptTextByKey(
     options.folderId,
     options.liveBanks,
   );
-  if (!folderId) {
-    return undefined;
+
+  if (folderId) {
+    const replies = await loadFolderReplies(client, folderId);
+    const fromPager = matchReplyByScriptKey(replies, options.scriptKey);
+    if (fromPager?.text?.trim()) {
+      return fromPager.text;
+    }
+    console.warn(
+      `CM script pager miss key=${options.scriptKey} folder=${folderId.slice(0, 8)} replies=${replies.length}`,
+    );
   }
 
-  const replies = await loadFolderReplies(client, folderId);
-  const fromPager = matchReplyByScriptKey(replies, options.scriptKey);
-  return fromPager?.text;
+  const local = loadLocalCmScript(options.scriptKey);
+  if (local?.trim()) {
+    console.log(`CM script local fallback key=${options.scriptKey}`);
+    return local;
+  }
+
+  return undefined;
 }
 
 export async function resolveTemplateText(
@@ -124,12 +145,14 @@ export async function resolveTemplateText(
 
 async function loadFolderReplies(client: PagerClient, folderId: string): Promise<PagerSavedReply[]> {
   const cached = replyCache.get(folderId);
-  if (cached) {
+  if (cached?.length) {
     return cached;
   }
 
   const replies = await client.getSavedReplies(folderId);
-  replyCache.set(folderId, replies);
+  if (replies.length) {
+    replyCache.set(folderId, replies);
+  }
   return replies;
 }
 
@@ -143,6 +166,14 @@ function matchReplyByScriptKey(
     return byName[byName.length - 1];
   }
 
+  const primary = scriptSnippet(scriptKey).trim().toLowerCase();
+  if (primary) {
+    const byPrimary = replies.filter((reply) => normalizeNeedle(reply.text).includes(primary));
+    if (byPrimary.length) {
+      return byPrimary[byPrimary.length - 1];
+    }
+  }
+
   const needles = scriptSearchNeedles(scriptKey);
   let lastHit: PagerSavedReply | undefined;
   for (const reply of replies) {
@@ -153,7 +184,7 @@ function matchReplyByScriptKey(
       if (!normalized) {
         continue;
       }
-      if (name.includes(normalized) || body.includes(normalized) || normalized.includes(body.slice(0, 48))) {
+      if (name.includes(normalized) || body.includes(normalized)) {
         lastHit = reply;
         break;
       }

@@ -463,29 +463,34 @@ export class PagerClient {
   }
 
   async getSavedReplies(folderId: string): Promise<PagerSavedReply[]> {
+    const orgId = await this.ensureOrgId().catch(() => "");
     const payload = await this.request<unknown>("/api/reply", {
       method: "GET",
-      params: { folderId },
+      params: orgId ? { folderId, orgId } : { folderId },
     });
-    if (!Array.isArray(payload)) {
-      return [];
-    }
 
     const replies: PagerSavedReply[] = [];
-    for (const item of payload) {
+    for (const [index, item] of extractPayloadArray(payload).entries()) {
       if (!item || typeof item !== "object") {
         continue;
       }
       const record = item as Record<string, unknown>;
-      const id = firstString(record.id, record._id, record.replyId);
-      const text = firstString(record.text, record.body, record.message);
-      if (!id || !text) {
+      const text = firstString(
+        record.text,
+        record.body,
+        record.message,
+        record.content,
+        record.replyText,
+      );
+      if (!text) {
         continue;
       }
+      const id =
+        firstString(record.id, record._id, record.replyId) ?? `${folderId}:${index}`;
       replies.push({
         id,
         text,
-        name: firstString(record.name, record.title),
+        name: firstString(record.name, record.title, record.label),
       });
     }
     return replies;
@@ -1470,7 +1475,7 @@ function isOrgIdError(error: unknown): boolean {
 }
 
 function normalizeReplyFolders(payload: unknown): PagerTemplateBank[] {
-  const items = Array.isArray(payload) ? payload : [];
+  const items = extractPayloadArray(payload);
   const folders: PagerTemplateBank[] = [];
 
   for (const item of items) {
