@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import pg from "pg";
 import type { Stage } from "./config.js";
 import type { AppEnv } from "./env.js";
+import type { StatusFolderState } from "./status-folders.js";
 
 export type PendingAction =
   | "await_pager_email"
@@ -57,6 +58,7 @@ export type ChatState = {
   pagerAccount?: PagerAccountState;
   channels?: Record<string, ChannelRuntimeState>;
   conversations?: Record<string, ConversationRuntimeState>;
+  statusFolders?: StatusFolderState[];
   updatedAt: string;
 };
 

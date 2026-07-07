@@ -23,6 +23,10 @@ import type {
   StateStore,
 } from "./state-store.js";
 import { resolveTemplateText } from "./template-resolver.js";
+import {
+  conversationAllowedInFolders,
+  getEnabledFolderIds,
+} from "./status-folders.js";
 import type { TelegramApi } from "./telegram-api.js";
 
 type WorkerDeps = {
@@ -75,6 +79,12 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
+  const enabledFolderIds = getEnabledFolderIds(freshState);
+  if (enabledFolderIds && enabledFolderIds.size === 0) {
+    console.log(`Pager worker: chat ${freshState.chatId} — no status folders enabled`);
+    return;
+  }
+
   const client = new PagerClient({
     baseUrl: deps.env.PAGER_BASE_URL,
     cookieHeader: freshState.pagerAccount!.cookies!,
@@ -119,6 +129,11 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
 
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
     if (!runtime) {
+      skipped += 1;
+      continue;
+    }
+
+    if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
       skipped += 1;
       continue;
     }

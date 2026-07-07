@@ -14,9 +14,15 @@ import { classifyProofFromImage } from "./proof-classifier.js";
 import { clearTemplateReplyCache } from "./template-resolver.js";
 import { createStateStore, type ChatState, type StateStore } from "./state-store.js";
 import {
+  buildStatusFolderList,
+  setAllStatusFolders,
+  toggleStatusFolder,
+} from "./status-folders.js";
+import {
   TelegramApi,
   buildChannelKeyboard,
   buildCountryKeyboard,
+  buildFoldersKeyboard,
   buildMainMenuKeyboard,
   buildPagerAccountKeyboard,
   buildTemplateKeyboard,
@@ -243,6 +249,33 @@ async function handleCallback(
     return;
   }
 
+  if (kind === "folders") {
+    await telegram.answerCallbackQuery(callbackId);
+
+    if (value === "refresh") {
+      const nextState = (await syncStatusFolders(chatId, state)) ?? state;
+      await showFoldersMenu(chatId, nextState, messageId);
+      return;
+    }
+
+    if (value === "all_on" || value === "all_off") {
+      const folders = setAllStatusFolders(state.statusFolders ?? [], value === "all_on");
+      const nextState = (await stateStore.patch(chatId, { statusFolders: folders })) ?? state;
+      await showFoldersMenu(chatId, nextState, messageId);
+      return;
+    }
+    return;
+  }
+
+  if (kind === "folder_toggle" && value) {
+    const index = Number(value);
+    const folders = toggleStatusFolder(state.statusFolders ?? [], index);
+    const nextState = (await stateStore.patch(chatId, { statusFolders: folders })) ?? state;
+    await telegram.answerCallbackQuery(callbackId);
+    await showFoldersMenu(chatId, nextState, messageId);
+    return;
+  }
+
   if (kind === "menu") {
     await telegram.answerCallbackQuery(callbackId);
 
@@ -258,6 +291,12 @@ async function handleCallback(
 
     if (value === "channels") {
       await showChannelsMenu(chatId, state);
+      return;
+    }
+
+    if (value === "folders") {
+      const nextState = (await syncStatusFolders(chatId, state)) ?? state;
+      await showFoldersMenu(chatId, nextState);
       return;
     }
 
@@ -648,7 +687,7 @@ function buildChannelRuntimeMap(
 
 async function showChannelsMenu(chatId: number, state: ChatState, messageId?: number) {
   const text =
-    "Слева 🟢/🔴 — вкл/выкл (по умолчанию все выкл), по центру страна, справа папка шаблонов.";
+    "Слева 🟢/🔴 — вкл/выкл канал, по центру страна, справа — папка шаблонов (saved replies). Статусные папки чатов — в меню «Папки».";
   const keyboard = buildChannelKeyboard(getSelectableChannels(state));
 
   if (!messageId) {
@@ -657,6 +696,57 @@ async function showChannelsMenu(chatId: number, state: ChatState, messageId?: nu
   }
 
   await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function showFoldersMenu(chatId: number, state: ChatState, messageId?: number) {
+  const folders = state.statusFolders ?? [];
+  if (!folders.length) {
+    await telegram.sendMessage(
+      chatId,
+      "Папки не загружены. Подключи Pager аккаунт и нажми «Обновить папки».",
+      buildMainMenuKeyboard(),
+    );
+    return;
+  }
+
+  const enabled = folders.filter((folder) => folder.enabled).length;
+  const text = [
+    "Папки Pager — откуда бот берёт чаты для автоответа:",
+    "✅ включена | ⬜ выключена",
+    "",
+    `Включено: ${enabled} из ${folders.length}`,
+    "«Всі» — все чаты. «Без статусу» — только новые без статуса.",
+    "Для чатов в «Думають», «В процесі», «рега» — включи эти папки или «Всі».",
+  ].join("\n");
+  const keyboard = buildFoldersKeyboard(folders);
+
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function syncStatusFolders(
+  chatId: number,
+  state: ChatState,
+): Promise<ChatState | undefined> {
+  const cookies = state.pagerAccount?.cookies;
+  if (!cookies) {
+    return undefined;
+  }
+
+  try {
+    const client = buildPagerClient(cookies, state.pagerAccount?.organizationId);
+    await client.warmSession();
+    const statuses = await client.listStatuses();
+    const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
+    return stateStore.patch(chatId, { statusFolders });
+  } catch (error) {
+    console.error("syncStatusFolders failed:", error);
+    return undefined;
+  }
 }
 
 async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatState | undefined> {
@@ -676,6 +766,9 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
       session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
     );
     const mergedChannels = { ...defaults, ...(state.channels ?? {}) };
+    const client = buildPagerClient(cookies, state.pagerAccount?.organizationId);
+    const statuses = await client.listStatuses().catch(() => []);
+    const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
 
     return await stateStore.patch(chatId, {
       pagerAccount: {
@@ -694,6 +787,7 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
         })),
       },
       channels: mergedChannels,
+      statusFolders,
     });
   } catch (error) {
     console.error("refreshPagerData failed:", error);
@@ -796,6 +890,9 @@ async function handlePendingInput(
         login.cookieHeader,
         login.organizationId,
       ).validateSession();
+      const statusClient = buildPagerClient(login.cookieHeader, login.organizationId);
+      const statuses = await statusClient.listStatuses().catch(() => []);
+      const statusFolders = buildStatusFolderList(statuses);
 
       await stateStore.patch(chatId, {
         pendingAction: undefined,
@@ -822,6 +919,7 @@ async function handlePendingInput(
           session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
           session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
         ),
+        statusFolders,
         draftPagerEmail: undefined,
       });
 
@@ -833,6 +931,7 @@ async function handlePendingInput(
           `Организация: ${session.organizationName ?? session.organizationId ?? "unknown"}`,
           `Каналов найдено: ${session.channelCount}`,
           `Банков шаблонов: ${session.templateBanks.length}`,
+          `Папки чатов: ${statusFolders.length} (по умолчанию включено «Всі»)`,
         ].join("\n"),
         buildPagerAccountKeyboard(true),
       );
@@ -853,6 +952,9 @@ async function handlePendingInput(
   if (state.pendingAction === "await_pager_cookies") {
     try {
       const session = await buildPagerClient(text.trim()).validateSession();
+      const statusClient = buildPagerClient(text.trim(), session.organizationId);
+      const statuses = await statusClient.listStatuses().catch(() => []);
+      const statusFolders = buildStatusFolderList(statuses);
       await stateStore.patch(chatId, {
         pendingAction: undefined,
         pagerAccount: {
@@ -876,6 +978,7 @@ async function handlePendingInput(
           session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
           session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
         ),
+        statusFolders,
         draftPagerEmail: undefined,
       });
       await telegram.sendMessage(
@@ -885,6 +988,7 @@ async function handlePendingInput(
           `Организация: ${session.organizationName ?? session.organizationId ?? "unknown"}`,
           `Каналов найдено: ${session.channelCount}`,
           `Банков шаблонов: ${session.templateBanks.length}`,
+          `Папки чатов: ${statusFolders.length} (по умолчанию включено «Всі»)`,
           "Теперь кнопка `Каналы` будет показывать живые каналы аккаунта.",
         ].join("\n"),
         buildPagerAccountKeyboard(true),
@@ -965,6 +1069,7 @@ async function sendStatus(chatId: number, state: ChatState) {
       `Template bank: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
       `Pager account: ${state.pagerAccount ? "saved" : "not connected"}`,
       `Live channels: ${state.pagerAccount?.liveChannels?.length ?? 0}`,
+      `Status folders enabled: ${state.statusFolders?.filter((folder) => folder.enabled).length ?? "all (not configured)"}`,
       `Pending action: ${state.pendingAction ?? "none"}`,
     ].join("\n"),
     buildMainMenuKeyboard(),

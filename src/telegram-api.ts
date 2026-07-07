@@ -224,6 +224,30 @@ export function buildTemplateKeyboard(
   };
 }
 
+export function buildFoldersKeyboard(
+  folders: Array<{ name: string; enabled: boolean }>,
+): ReplyMarkup {
+  const rows = folders.map((folder, index) => [
+    {
+      text: `${folder.enabled ? "✅" : "⬜"} ${folder.name}`,
+      callback_data: `folder_toggle:${index}`,
+    },
+  ]);
+
+  const allEnabled = folders.length > 0 && folders.every((folder) => folder.enabled);
+  rows.push([
+    {
+      text: allEnabled ? "✅ Все вкл." : "📂 Включить все",
+      callback_data: "folders:all_on",
+    },
+    { text: "⬜ Снять все", callback_data: "folders:all_off" },
+  ]);
+  rows.push([{ text: "🔄 Обновить папки", callback_data: "folders:refresh" }]);
+  rows.push([{ text: "« Назад", callback_data: "menu:main" }]);
+
+  return { inline_keyboard: rows };
+}
+
 export function buildMainMenuKeyboard(): ReplyMarkup {
   return {
     inline_keyboard: [
@@ -232,9 +256,10 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
         { text: "Каналы", callback_data: "menu:channels" },
       ],
       [
+        { text: "Папки", callback_data: "menu:folders" },
         { text: "Статус", callback_data: "menu:status" },
-        { text: "Сброс", callback_data: "menu:reset" },
       ],
+      [{ text: "Сброс", callback_data: "menu:reset" }],
     ],
   };
 }

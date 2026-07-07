@@ -35,6 +35,11 @@ export type PagerConversation = {
   client?: { psid?: string; PSID?: string };
 };
 
+export type PagerStatus = {
+  id: string;
+  name: string;
+};
+
 export type PagerMessage = {
   id: string;
   text?: string;
@@ -137,6 +142,32 @@ export class PagerClient {
     );
 
     return withCounts.sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async listStatuses(): Promise<PagerStatus[]> {
+    const orgId = await this.ensureOrgId();
+    const payload = await this.request<unknown>("/api/status", {
+      method: "GET",
+      params: { orgId },
+    });
+    if (!Array.isArray(payload)) {
+      return [];
+    }
+
+    const statuses: PagerStatus[] = [];
+    for (const item of payload) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      const record = item as Record<string, unknown>;
+      const id = firstString(record.id, record.statusId, record._id);
+      const name = firstString(record.name, record.title, record.label);
+      if (!id || !name) {
+        continue;
+      }
+      statuses.push({ id, name });
+    }
+    return statuses.sort((left, right) => left.name.localeCompare(right.name));
   }
 
   async getSavedReplies(folderId: string): Promise<PagerSavedReply[]> {
