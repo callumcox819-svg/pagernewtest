@@ -13,8 +13,9 @@ export type CmIntent =
 const FR_POSITIVE =
   /\b(oui|ok|d'accord|dac|dacc|bien|super|parfait|merci|yes|yeah|yep)\b/i;
 const FR_INTERESTED =
-  /\b(je veux|interesse|intéressé|comment|explique|details|détails|investir|gagner)\b/i;
-const FR_DECLINED = /\b(pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b/i;
+  /\b(je veux|interesse|intéressé|m'intéresse|ca m'intéresse|ça m'intéresse|comment|explique|details|détails|investir|gagner)\b/i;
+const FR_DECLINED =
+  /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b/i;
 const FR_REG_DONE =
   /(déjà|deja).{0,24}(inscription|inscrit|enregistr)|compte.{0,16}(ouvert|créé|cree)|j[' ]?ai (fini|créé|cree).{0,16}(inscription|compte)/i;
 const FR_REG_PENDING =
@@ -34,6 +35,9 @@ export function classifyCmIntent(
 
   if (FR_DECLINED.test(t) || /nigerian|scam|arnaque|escroc/i.test(t)) {
     return "declined";
+  }
+  if (isAgeAnswer(t) && step >= 1 && step < 5) {
+    return "positive";
   }
   if (isDepositTierChoice(t)) {
     return "ready";
@@ -62,7 +66,10 @@ export function classifyCmIntent(
   if (FR_INTERESTED.test(t)) {
     return "interested";
   }
-  if (FR_POSITIVE.test(t) && t.split(/\s+/).length <= 5) {
+  if (/\boui\b/i.test(t) && step < 4) {
+    return "positive";
+  }
+  if (FR_POSITIVE.test(t) && t.split(/\s+/).length <= 8) {
     return "positive";
   }
   if (/\?/.test(t) || /\b(comment|pourquoi|combien|quoi|what|how)\b/i.test(t)) {
@@ -106,6 +113,13 @@ export function isAgeAnswer(text: string): boolean {
   if (/\b\d{1,2}\s*ans\b/i.test(t)) {
     return true;
   }
+  if (/\d{1,2}ans\b/i.test(t)) {
+    const match = t.match(/(\d{1,2})ans/i);
+    if (match) {
+      const age = Number(match[1]);
+      return age >= 15 && age <= 99;
+    }
+  }
   return false;
 }
 
@@ -140,6 +154,9 @@ export function isFunnelPositiveReaction(text: string, funnelStep: number): bool
     return true;
   }
   if (/^(oui|ok|yes|d'accord)\.?$/i.test(t)) {
+    return true;
+  }
+  if (/\boui\b/i.test(t) && t.split(/\s+/).length <= 12) {
     return true;
   }
   return false;

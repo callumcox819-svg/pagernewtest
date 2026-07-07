@@ -73,6 +73,11 @@ export function cmScriptSentInHistory(outgoingTexts: string[], scriptKey: string
   return scriptSearchNeedles(scriptKey).some((needle) => scriptSentInHistory(outgoingTexts, needle));
 }
 
+function ageQuestionSentInHistory(outgoingTexts: string[]): boolean {
+  const blob = outgoingTexts.join("\n").toLowerCase();
+  return blob.includes("quel âge") || blob.includes("quel age") || blob.includes("age avez-vous");
+}
+
 export function scriptSentInHistory(outgoingTexts: string[], snippet: string): boolean {
   const needle = snippet.trim().toLowerCase();
   if (!needle) {
@@ -213,10 +218,14 @@ export function resolveCmFunnelScripts(
 
   const introSent = cmScriptSentInHistory(out, "01_intro");
   const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
-  const ageSent = cmScriptSentInHistory(out, "02_age");
+  const ageSent = cmScriptSentInHistory(out, "02_age") || ageQuestionSentInHistory(out);
   const stepsSent = cmScriptSentInHistory(out, "03_steps");
   const tierSent = cmScriptSentInHistory(out, "04_tier");
   const linkSent = regLinkSentInHistory(out);
+
+  if (isAgeAnswer(t) && !stepsSent && effectiveStep < 5 && !linkSent) {
+    return ["03_steps"];
+  }
 
   if (linkSent) {
     if ((options?.hasImage || isRegistrationConfirmed(t)) && !depositSentInHistory(out)) {
@@ -247,15 +256,18 @@ export function resolveCmFunnelScripts(
     return ["01_intro_2"];
   }
 
-  if (!ageSent && effectiveStep < 5) {
-    if (positive || wantsDetailsAfterIntro(t)) {
+  if (!ageSent && effectiveStep < 5 && intro2Sent) {
+    if (positive || wantsDetailsAfterIntro(t) || /\boui\b/i.test(t)) {
+      return ["02_age"];
+    }
+    if (effectiveStep >= 1 && intent === "unknown" && t.length > 3) {
       return ["02_age"];
     }
     return [];
   }
 
   if (!stepsSent && effectiveStep < 5) {
-    if (isAgeAnswer(t) || positive) {
+    if (isAgeAnswer(t) || positive || ageSent) {
       return ["03_steps"];
     }
     return [];
