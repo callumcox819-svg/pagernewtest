@@ -9,13 +9,14 @@ It already includes:
 - per-channel country selection
 - per-channel template bank selection
 - Telegram long polling bot
-- local chat state storage for testing
+- local chat state storage for testing (JSON file or PostgreSQL)
 - OCR-based screenshot classification
 - proof-driven transitions based on screenshots and customer confirmations
 - Telegram handoff after deposit confirmation
 - live Pager account validation through imported cookies
 - live channel loading from the connected Pager session
 - live template-bank discovery from the connected Pager session
+- **Pager auto-reply worker** — polls enabled channels every `pollIntervalSeconds`, takes chats, sends saved-reply presets
 
 ## Core flow
 
@@ -63,6 +64,7 @@ TELEGRAM_BOT_NAME=Pager Test Bot
 PAGER_BASE_URL=https://www.pager.co.ua
 BOT_CONFIG_PATH=config/bot.config.yaml
 BOT_STATE_PATH=data/chat-state.json
+DATABASE_URL=
 OCR_ENABLED=true
 OCR_LANG=eng
 POLL_INTERVAL_MS=2000
@@ -71,9 +73,18 @@ POLL_INTERVAL_MS=2000
 Notes:
 
 - `TELEGRAM_BOT_TOKEN` is required
+- `DATABASE_URL` — if set, chat state is stored in PostgreSQL (survives Railway redeploys); if omitted, falls back to `BOT_STATE_PATH`
 - `OCR_LANG=eng` is the safest starting point
 - if you want to experiment with Arabic/French OCR later, you can try values like `eng+ara+fra`
-- local chat state is stored in `data/chat-state.json`
+- local chat state is stored in `data/chat-state.json` when `DATABASE_URL` is not set
+
+## Railway deployment
+
+1. Add a **PostgreSQL** service in the Railway project.
+2. Link `DATABASE_URL` from Postgres to the bot service (Railway usually does this automatically).
+3. Redeploy — login, channel toggles, and template selections will persist across redeploys.
+
+The bot creates the `bot_chat_states` table automatically on startup.
 
 ## Telegram commands
 
@@ -81,6 +92,22 @@ Notes:
 - `/channels` - choose the channel/playbook to test
 - `/status` - show current chat state
 - `/reset` - reset the local state for this Telegram chat
+
+## Pager auto-reply
+
+After login and channel setup:
+
+1. Open `Каналы`, enable the channel (🟢), pick country and template folder.
+2. The background worker polls Pager every `pollIntervalSeconds` (default 20s).
+3. For each **incoming** chat in enabled channels it:
+   - takes the chat (assigns operator)
+   - reads the latest customer message (text or screenshot)
+   - picks the next preset via playbook rules
+   - resolves text from the **Pager saved-reply folder** (YAML fallback)
+   - sends via SPA POST + take-chat flow (same as the old Python bot)
+4. You get a Telegram notification for each successful reply.
+
+Per-conversation stage is stored in the database (`conversations` map inside chat state).
 
 ## Pager account status
 
@@ -114,8 +141,11 @@ Current OCR logic uses text found in the screenshot plus Telegram caption text i
 - `src/config.ts` - strict config schema with `zod`
 - `src/decision-engine.ts` - next-action logic for text and screenshot proofs
 - `src/proof-classifier.ts` - OCR-based proof detection
+- `src/pager-client.ts` - Pager API (channels, conversations, messages, send)
+- `src/pager-worker.ts` - background Pager polling and auto-reply
+- `src/template-resolver.ts` - map playbook roles to Pager saved replies
 - `src/telegram-api.ts` - raw Telegram Bot API wrapper
-- `src/state-store.ts` - local per-chat testing state
+- `src/state-store.ts` - per-chat state (JSON file or PostgreSQL)
 - `src/index.ts` - bot runtime
 
 ## Run
@@ -129,7 +159,7 @@ npm run dev
 
 ## Next implementation steps
 
-1. connect real Pager API polling for conversations and messages
-2. inspect real Pager image attachments instead of Telegram-only screenshots
-3. wire status changes back to Pager API using real status IDs
-4. send actual Pager saved replies by folder/reply id instead of only selecting the bank name
+1. folder/status filtering (Без статусу, funnel folders) like the old bot
+2. wire status changes back to Pager API using real status IDs
+3. smarter preset matching by script order / UI snippets
+4. reduce operator Telegram noise (optional silent mode)

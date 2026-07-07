@@ -24,6 +24,7 @@
   "dependencies": {
     "dotenv": "^17.4.2",
     "fetch-cookie": "^3.2.0",
+    "pg": "^8.22.0",
     "set-cookie-parser": "^3.1.1",
     "tesseract.js": "^7.0.0",
     "tough-cookie": "^6.0.1",
@@ -32,6 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
+    "@types/pg": "^8.20.0",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   }

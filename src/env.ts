@@ -7,6 +7,9 @@ const envSchema = z.object({
   PAGER_BASE_URL: z.string().url().default("https://www.pager.co.ua"),
   BOT_CONFIG_PATH: z.string().default("config/bot.config.yaml"),
   BOT_STATE_PATH: z.string().default("data/chat-state.json"),
+  DATABASE_URL: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : value), z.string().min(1))
+    .optional(),
   OCR_LANG: z.string().default("eng"),
   OCR_ENABLED: z
     .string()

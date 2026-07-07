@@ -9,8 +9,10 @@ import { ClerkPasswordAuthClient } from "./clerk-auth.js";
 import { decideNextAction } from "./decision-engine.js";
 import { loadEnv } from "./env.js";
 import { PagerClient } from "./pager-client.js";
+import { runPagerWorker } from "./pager-worker.js";
 import { classifyProofFromImage } from "./proof-classifier.js";
-import { StateStore, type ChatState } from "./state-store.js";
+import { clearTemplateReplyCache } from "./template-resolver.js";
+import { createStateStore, type ChatState, type StateStore } from "./state-store.js";
 import {
   TelegramApi,
   buildChannelKeyboard,
@@ -30,11 +32,20 @@ const COUNTRY_FOLDER_HINTS: Record<"ZM" | "CM" | "EG", string[]> = {
 
 const env = loadEnv();
 const config = loadConfig(resolve(process.cwd(), env.BOT_CONFIG_PATH));
-const stateStore = new StateStore(resolve(process.cwd(), env.BOT_STATE_PATH));
+let stateStore: StateStore;
 const telegram = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
 
 async function main() {
+  stateStore = await createStateStore(env);
   console.log(`Starting ${env.TELEGRAM_BOT_NAME}...`);
+
+  await Promise.all([
+    runTelegramBot(),
+    runPagerWorker({ env, config, stateStore, telegram }),
+  ]);
+}
+
+async function runTelegramBot(): Promise<never> {
   let offset: number | undefined;
 
   while (true) {
@@ -75,7 +86,7 @@ async function handleCallback(
     return;
   }
 
-  const state = getOrCreateState(chatId);
+  const state = await getOrCreateState(chatId);
   const [kind, value, extra] = data.split(":");
 
   if (kind === "channels") {
@@ -97,7 +108,7 @@ async function handleCallback(
 
     const runtime = getChannelRuntime(state, channel.id, channel.country);
     const nextEnabled = !runtime.enabled;
-    stateStore.patch(chatId, {
+    await stateStore.patch(chatId, {
       channels: {
         ...(state.channels ?? {}),
         [channel.id]: {
@@ -106,7 +117,7 @@ async function handleCallback(
         },
       },
     });
-    const nextState = stateStore.get(chatId) ?? state;
+    const nextState = await stateStore.get(chatId) ?? state;
     await telegram.answerCallbackQuery(callbackId, nextEnabled ? "🟢 Включено" : "🔴 Выключено");
     if (messageId) {
       await telegram.editMessageReplyMarkup(
@@ -146,7 +157,7 @@ async function handleCallback(
     const country = extra as "ZM" | "CM" | "EG";
     const runtime = getChannelRuntime(state, channel.id, country);
     const bank = pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), country);
-    stateStore.patch(chatId, {
+    await stateStore.patch(chatId, {
       channels: {
         ...(state.channels ?? {}),
         [channel.id]: {
@@ -157,7 +168,7 @@ async function handleCallback(
         },
       },
     });
-    const nextState = stateStore.get(chatId) ?? state;
+    const nextState = await stateStore.get(chatId) ?? state;
     await telegram.answerCallbackQuery(callbackId, `Страна: ${country}`);
     await showChannelsMenu(chatId, nextState, messageId);
     return;
@@ -201,7 +212,7 @@ async function handleCallback(
     }
 
     const runtime = getChannelRuntime(state, channel.id, channel.country);
-    stateStore.patch(chatId, {
+    await stateStore.patch(chatId, {
       channels: {
         ...(state.channels ?? {}),
         [channel.id]: {
@@ -211,7 +222,7 @@ async function handleCallback(
         },
       },
     });
-    const nextState = stateStore.get(chatId) ?? state;
+    const nextState = await stateStore.get(chatId) ?? state;
     await telegram.answerCallbackQuery(callbackId, `Папка: ${bank.name}`);
     await showChannelsMenu(chatId, nextState, messageId);
     return;
@@ -241,8 +252,8 @@ async function handleCallback(
     }
 
     if (value === "reset") {
-      stateStore.delete(chatId);
-      const nextState = getOrCreateState(chatId);
+      await stateStore.delete(chatId);
+      const nextState = await getOrCreateState(chatId);
       await telegram.sendMessage(
         chatId,
         `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
@@ -256,7 +267,7 @@ async function handleCallback(
     await telegram.answerCallbackQuery(callbackId);
 
     if (value === "login_password") {
-      stateStore.patch(chatId, {
+      await stateStore.patch(chatId, {
         pendingAction: "await_pager_email",
         draftPagerEmail: undefined,
       });
@@ -268,7 +279,7 @@ async function handleCallback(
     }
 
     if (value === "import_cookies") {
-      stateStore.patch(chatId, {
+      await stateStore.patch(chatId, {
         pendingAction: "await_pager_cookies",
         draftPagerEmail: undefined,
       });
@@ -280,7 +291,7 @@ async function handleCallback(
     }
 
     if (value === "disconnect") {
-      stateStore.patch(chatId, {
+      await stateStore.patch(chatId, {
         pagerAccount: undefined,
         pendingAction: undefined,
         draftPagerEmail: undefined,
@@ -305,7 +316,7 @@ async function handleCallback(
 
 async function handleMessage(message: TelegramMessage) {
   const chatId = message.chat.id;
-  const state = getOrCreateState(chatId);
+  const state = await getOrCreateState(chatId);
 
   if (message.text?.startsWith("/")) {
     await handleCommand(chatId, message.text, state);
@@ -360,7 +371,7 @@ async function handleMessage(message: TelegramMessage) {
       return;
     }
 
-    stateStore.patch(chatId, { currentStage: decision.nextStage });
+    await stateStore.patch(chatId, { currentStage: decision.nextStage });
     await telegram.sendMessage(
       chatId,
       [
@@ -393,7 +404,7 @@ async function handleMessage(message: TelegramMessage) {
     return;
   }
 
-  stateStore.patch(chatId, { currentStage: decision.nextStage });
+  await stateStore.patch(chatId, { currentStage: decision.nextStage });
   await telegram.sendMessage(
     chatId,
     `Rule matched.\nNext stage: ${decision.nextStage}\nReason: ${decision.reason}`,
@@ -419,8 +430,8 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
   }
 
   if (command === "/reset") {
-    stateStore.delete(chatId);
-    const nextState = getOrCreateState(chatId);
+    await stateStore.delete(chatId);
+    const nextState = await getOrCreateState(chatId);
     await telegram.sendMessage(
       chatId,
       `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
@@ -446,14 +457,14 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
   );
 }
 
-function getOrCreateState(chatId: number): ChatState {
-  const existing = stateStore.get(chatId);
+async function getOrCreateState(chatId: number): Promise<ChatState> {
+  const existing = await stateStore.get(chatId);
   if (existing) {
     return existing;
   }
 
   const channel = getDefaultEnabledChannel(config);
-  return stateStore.upsert({
+  return await stateStore.upsert({
     chatId,
     channelId: channel.id,
     currentStage: "new_lead",
@@ -640,6 +651,7 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
   }
 
   try {
+    clearTemplateReplyCache();
     const session = await buildPagerClient(
       cookies,
       state.pagerAccount?.organizationId,
@@ -650,7 +662,7 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
     );
     const mergedChannels = { ...defaults, ...(state.channels ?? {}) };
 
-    return stateStore.patch(chatId, {
+    return await stateStore.patch(chatId, {
       pagerAccount: {
         ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
         organizationId: session.organizationId,
@@ -753,7 +765,7 @@ async function handlePendingInput(
   text: string,
 ): Promise<boolean> {
   if (state.pendingAction === "await_pager_email") {
-    stateStore.patch(chatId, {
+    await stateStore.patch(chatId, {
       draftPagerEmail: text.trim(),
       pendingAction: "await_pager_password",
     });
@@ -772,7 +784,7 @@ async function handlePendingInput(
       const cookieHeader = buildCookieHeaderFromJwt(jwt);
       const session = await buildPagerClient(cookieHeader).validateSession();
 
-      stateStore.patch(chatId, {
+      await stateStore.patch(chatId, {
         pendingAction: undefined,
         pagerAccount: {
           authMode: "credentials",
@@ -812,7 +824,7 @@ async function handlePendingInput(
         buildPagerAccountKeyboard(true),
       );
     } catch (error) {
-      stateStore.patch(chatId, {
+      await stateStore.patch(chatId, {
         pendingAction: undefined,
         draftPagerEmail: undefined,
       });
@@ -828,7 +840,7 @@ async function handlePendingInput(
   if (state.pendingAction === "await_pager_cookies") {
     try {
       const session = await buildPagerClient(text.trim()).validateSession();
-      stateStore.patch(chatId, {
+      await stateStore.patch(chatId, {
         pendingAction: undefined,
         pagerAccount: {
           authMode: "cookies",
@@ -865,7 +877,7 @@ async function handlePendingInput(
         buildPagerAccountKeyboard(true),
       );
     } catch (error) {
-      stateStore.patch(chatId, {
+      await stateStore.patch(chatId, {
         pendingAction: undefined,
         draftPagerEmail: undefined,
       });

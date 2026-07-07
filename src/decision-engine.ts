@@ -4,6 +4,7 @@ import {
   type PlaybookConfig,
   type ProofKind,
   type Stage,
+  type TemplateRole,
   getPlaybook,
   getTemplateBank,
 } from "./config.js";
@@ -17,6 +18,7 @@ export type ConversationEvent = {
 
 export type DecisionResult = {
   nextStage: Stage;
+  templateRole?: TemplateRole;
   templateToSend?: string;
   reason: string;
 };
@@ -38,6 +40,7 @@ export function decideNextAction(
     if (proofRule) {
       return {
         nextStage: proofRule.nextStage,
+        templateRole: proofRule.nextTemplateRole,
         templateToSend: proofRule.nextTemplateRole
           ? templateBank.roles[proofRule.nextTemplateRole]
           : undefined,
@@ -57,6 +60,7 @@ export function decideNextAction(
   if (noMoneyHit) {
     return {
       nextStage: "no_money",
+      templateRole: "no_money",
       templateToSend: templateBank.roles.no_money,
       reason: "Detected no-money objection",
     };
@@ -69,6 +73,7 @@ export function decideNextAction(
     if (matched) {
       return {
         nextStage: rule.nextStage,
+        templateRole: rule.nextTemplateRole,
         templateToSend: rule.nextTemplateRole
           ? templateBank.roles[rule.nextTemplateRole]
           : undefined,
@@ -80,8 +85,18 @@ export function decideNextAction(
   if (event.currentStage === "registered") {
     return {
       nextStage: "deposit_pending",
+      templateRole: "deposit",
       templateToSend: templateBank.roles.deposit,
       reason: "Registered stage defaulted to deposit instructions",
+    };
+  }
+
+  if (event.currentStage === "new_lead") {
+    return {
+      nextStage: "engaged",
+      templateRole: "intro",
+      templateToSend: templateBank.roles.intro,
+      reason: "New lead — send intro preset",
     };
   }
 
