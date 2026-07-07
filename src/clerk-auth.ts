@@ -1,5 +1,6 @@
 type ClerkClientContext = {
   authorizationToken: string;
+  cookieHeader?: string;
 };
 
 type ClerkSignInResponse = {
@@ -68,13 +69,7 @@ export class ClerkPasswordAuthClient {
     const response = await fetch(
       `https://${this.options.frontendApi}/v1/client?${this.queryString}`,
     );
-
-    const authorizationToken = response.headers.get("authorization");
-    if (!authorizationToken) {
-      throw new Error("Clerk client authorization token was not returned.");
-    }
-
-    return { authorizationToken };
+    return this.buildClientContext(response);
   }
 
   private async createSignInAttempt(
@@ -85,15 +80,14 @@ export class ClerkPasswordAuthClient {
       `https://${this.options.frontendApi}/v1/client/sign_ins?${this.queryString}`,
       {
         method: "POST",
-        headers: {
-          authorization: client.authorizationToken,
-          "content-type": "application/x-www-form-urlencoded",
-        },
+        headers: this.buildHeaders(client),
         body: new URLSearchParams({
           identifier: email,
         }),
       },
     );
+
+    this.refreshClientContext(client, response);
 
     return (await response.json()) as ClerkSignInResponse;
   }
@@ -107,16 +101,15 @@ export class ClerkPasswordAuthClient {
       `https://${this.options.frontendApi}/v1/client/sign_ins/${signInId}/attempt_first_factor?${this.queryString}`,
       {
         method: "POST",
-        headers: {
-          authorization: client.authorizationToken,
-          "content-type": "application/x-www-form-urlencoded",
-        },
+        headers: this.buildHeaders(client),
         body: new URLSearchParams({
           strategy: "password",
           password,
         }),
       },
     );
+
+    this.refreshClientContext(client, response);
 
     return (await response.json()) as ClerkSignInResponse;
   }
@@ -129,13 +122,12 @@ export class ClerkPasswordAuthClient {
       `https://${this.options.frontendApi}/v1/client/sessions/${sessionId}/tokens?${this.queryString}`,
       {
         method: "POST",
-        headers: {
-          authorization: client.authorizationToken,
-          "content-type": "application/x-www-form-urlencoded",
-        },
+        headers: this.buildHeaders(client),
         body: "",
       },
     );
+
+    this.refreshClientContext(client, response);
 
     const payload = (await response.json()) as
       | {
@@ -170,5 +162,52 @@ export class ClerkPasswordAuthClient {
     }
 
     throw new Error("Clerk session token response did not contain a JWT.");
+  }
+
+  private buildHeaders(client: ClerkClientContext): Record<string, string> {
+    return {
+      authorization: client.authorizationToken,
+      "content-type": "application/x-www-form-urlencoded",
+      ...(client.cookieHeader ? { cookie: client.cookieHeader } : {}),
+    };
+  }
+
+  private buildClientContext(response: Response): ClerkClientContext {
+    const authorizationToken = response.headers.get("authorization");
+    if (!authorizationToken) {
+      throw new Error("Clerk client authorization token was not returned.");
+    }
+
+    return {
+      authorizationToken,
+      cookieHeader: this.extractCookieHeader(response),
+    };
+  }
+
+  private refreshClientContext(client: ClerkClientContext, response: Response) {
+    const authorizationToken = response.headers.get("authorization");
+    if (authorizationToken) {
+      client.authorizationToken = authorizationToken;
+    }
+
+    const cookieHeader = this.extractCookieHeader(response);
+    if (cookieHeader) {
+      client.cookieHeader = client.cookieHeader
+        ? `${client.cookieHeader}; ${cookieHeader}`
+        : cookieHeader;
+    }
+  }
+
+  private extractCookieHeader(response: Response): string | undefined {
+    const setCookies = response.headers.getSetCookie?.() ?? [];
+    const cookiePairs = setCookies
+      .map((item) => item.split(";")[0]?.trim())
+      .filter((item): item is string => Boolean(item));
+
+    if (cookiePairs.length === 0) {
+      return undefined;
+    }
+
+    return cookiePairs.join("; ");
   }
 }
