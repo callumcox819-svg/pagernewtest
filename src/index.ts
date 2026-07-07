@@ -89,7 +89,7 @@ async function handleCallback(
   }
 
   if (kind === "channel_toggle" && value) {
-    const channel = resolveChannelForState(state, value);
+    const channel = getChannelByIndex(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
@@ -119,32 +119,37 @@ async function handleCallback(
   }
 
   if (kind === "channel_country" && value) {
-    const channel = resolveChannelForState(state, value);
+    const channel = getChannelByIndex(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
     }
 
     await telegram.answerCallbackQuery(callbackId);
-    if (messageId) {
-      await telegram.editMessageText(
-        chatId,
-        messageId,
-        `Выбери страну для ${channel.name}:`,
-        buildCountryKeyboard(channel.id),
-      );
-    }
+    await safeEditMenu(
+      chatId,
+      messageId,
+      `Выбери страну для ${channel.name}:`,
+      buildCountryKeyboard(Number(value)),
+      callbackId,
+    );
     return;
   }
 
   if (kind === "country_pick" && value && extra) {
+    const channel = getChannelByIndex(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Channel not found");
+      return;
+    }
+
     const country = extra as "ZM" | "CM" | "EG";
-    const runtime = getChannelRuntime(state, value, country);
+    const runtime = getChannelRuntime(state, channel.id, country);
     const bank = pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), country);
     stateStore.patch(chatId, {
       channels: {
         ...(state.channels ?? {}),
-        [value]: {
+        [channel.id]: {
           ...runtime,
           country,
           templateBank: bank?.name ?? runtime.templateBank,
@@ -159,7 +164,7 @@ async function handleCallback(
   }
 
   if (kind === "channel_bank" && value) {
-    const channel = resolveChannelForState(state, value);
+    const channel = getChannelByIndex(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
@@ -172,25 +177,24 @@ async function handleCallback(
     }
 
     await telegram.answerCallbackQuery(callbackId);
-    if (messageId) {
-      await telegram.editMessageText(
-        chatId,
-        messageId,
-        `Выбери папку шаблонов для ${channel.name}:`,
-        buildTemplateKeyboard(channel.id, banks),
-      );
-    }
+    await safeEditMenu(
+      chatId,
+      messageId,
+      `Выбери папку шаблонов для ${channel.name}:`,
+      buildTemplateKeyboard(Number(value), banks),
+      callbackId,
+    );
     return;
   }
 
   if (kind === "template_pick" && value && extra) {
-    const channel = resolveChannelForState(state, value);
+    const channel = getChannelByIndex(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
     }
 
-    const bank = getLiveTemplateBanks(state).find((item) => item.id === extra);
+    const bank = getLiveTemplateBanks(state)[Number(extra)];
     if (!bank) {
       await telegram.answerCallbackQuery(callbackId, "Папка не найдена");
       return;
@@ -487,6 +491,41 @@ function getEffectiveChannel(state: ChatState) {
   };
 }
 
+function getChannelByIndex(state: ChatState, indexRaw: string) {
+  const index = Number(indexRaw);
+  if (!Number.isInteger(index) || index < 0) {
+    return undefined;
+  }
+
+  const row = getSelectableChannels(state)[index];
+  if (!row) {
+    return undefined;
+  }
+
+  return resolveChannelForState(state, row.id);
+}
+
+async function safeEditMenu(
+  chatId: number,
+  messageId: number | undefined,
+  text: string,
+  keyboard: ReturnType<typeof buildChannelKeyboard>,
+  callbackId: string,
+) {
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+
+  try {
+    await telegram.editMessageText(chatId, messageId, text, keyboard);
+  } catch (error) {
+    console.error("Failed to edit Telegram menu:", error);
+    await telegram.answerCallbackQuery(callbackId, "Открываю меню заново");
+    await telegram.sendMessage(chatId, text, keyboard);
+  }
+}
+
 function getSelectableChannels(state: ChatState) {
   const liveChannels = state.pagerAccount?.liveChannels ?? [];
   if (liveChannels.length > 0) {
@@ -579,17 +618,7 @@ async function showChannelsMenu(chatId: number, state: ChatState, messageId?: nu
   const text =
     "Слева 🟢/🔴 — вкл/выкл (по умолчанию все выкл), по центру страна, справа папка шаблонов.";
   const keyboard = buildChannelKeyboard(getSelectableChannels(state));
-
-  if (messageId) {
-    try {
-      await telegram.editMessageText(chatId, messageId, text, keyboard);
-      return;
-    } catch {
-      // fall through to a fresh message
-    }
-  }
-
-  await telegram.sendMessage(chatId, text, keyboard);
+  await safeEditMenu(chatId, messageId, text, keyboard, "");
 }
 
 async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatState | undefined> {

@@ -168,18 +168,18 @@ export function buildChannelKeyboard(
 ): ReplyMarkup {
   return {
     inline_keyboard: [
-      ...channels.map((channel) => [
+      ...channels.map((channel, index) => [
         {
           text: `${channel.enabled ? "🟢" : "🔴"} ${channel.name}`,
-          callback_data: `channel_toggle:${channel.id}`,
+          callback_data: `channel_toggle:${index}`,
         },
         {
           text: COUNTRY_LABELS[channel.country] ?? channel.country,
-          callback_data: `channel_country:${channel.id}`,
+          callback_data: `channel_country:${index}`,
         },
         {
           text: truncateLabel(channel.templateBank ?? "Шаблоны"),
-          callback_data: `channel_bank:${channel.id}`,
+          callback_data: `channel_bank:${index}`,
         },
       ]),
       [{ text: "🔄 Обновить каналы", callback_data: "channels:refresh" }],
@@ -187,15 +187,15 @@ export function buildChannelKeyboard(
   };
 }
 
-export function buildCountryKeyboard(channelId: string): ReplyMarkup {
+export function buildCountryKeyboard(channelIndex: number): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        { text: "🇿🇲 Замбия", callback_data: `country_pick:${channelId}:ZM` },
-        { text: "🇪🇬 Египет", callback_data: `country_pick:${channelId}:EG` },
+        { text: "🇿🇲 Замбия", callback_data: `country_pick:${channelIndex}:ZM` },
+        { text: "🇪🇬 Египет", callback_data: `country_pick:${channelIndex}:EG` },
       ],
       [
-        { text: "🇨🇲 Камерун", callback_data: `country_pick:${channelId}:CM` },
+        { text: "🇨🇲 Камерун", callback_data: `country_pick:${channelIndex}:CM` },
         { text: "« Назад", callback_data: "channels:back" },
       ],
     ],
@@ -203,13 +203,13 @@ export function buildCountryKeyboard(channelId: string): ReplyMarkup {
 }
 
 export function buildTemplateKeyboard(
-  channelId: string,
+  channelIndex: number,
   templateBanks: Array<{ id: string; name: string }>,
 ): ReplyMarkup {
-  const rows = templateBanks.map((bank) => [
+  const rows = templateBanks.map((bank, folderIndex) => [
     {
       text: bank.name,
-      callback_data: `template_pick:${channelId}:${bank.id}`,
+      callback_data: `template_pick:${channelIndex}:${folderIndex}`,
     },
   ]);
 
