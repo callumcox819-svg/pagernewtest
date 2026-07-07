@@ -2,7 +2,6 @@ import makeFetchCookie from "fetch-cookie";
 import { CookieJar } from "tough-cookie";
 
 type ClerkClientContext = {
-  authorizationToken: string;
   fetchWithCookies: typeof fetch;
   jar: CookieJar;
 };
@@ -176,7 +175,6 @@ export class ClerkPasswordAuthClient {
   private buildHeaders(client: ClerkClientContext): Record<string, string> {
     return {
       ...this.baseHeaders(),
-      authorization: client.authorizationToken,
       "content-type": "application/x-www-form-urlencoded",
     };
   }
@@ -186,24 +184,13 @@ export class ClerkPasswordAuthClient {
     fetchWithCookies: typeof fetch,
     jar: CookieJar,
   ): ClerkClientContext {
-    const authorizationToken = response.headers.get("authorization");
-    if (!authorizationToken) {
-      throw new Error("Clerk client authorization token was not returned.");
-    }
-
     return {
-      authorizationToken,
       fetchWithCookies,
       jar,
     };
   }
 
-  private refreshClientContext(client: ClerkClientContext, response: Response) {
-    const authorizationToken = response.headers.get("authorization");
-    if (authorizationToken) {
-      client.authorizationToken = authorizationToken;
-    }
-  }
+  private refreshClientContext(_client: ClerkClientContext, _response: Response) {}
 
   private extractSessionJwt(payload: ClerkClientPayload): string {
     const sessions = payload.response?.sessions ?? [];
