@@ -31,6 +31,7 @@ export type ChannelRuntimeState = {
   enabled: boolean;
   country: "ZM" | "CM" | "EG";
   templateBank?: string;
+  templateBankId?: string;
 };
 
 export type ChatState = {

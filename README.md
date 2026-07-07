@@ -37,6 +37,7 @@ You can already test the logic through Telegram without Pager API:
 - start the bot with your Telegram token
 - choose a channel/playbook with `/channels`
 - toggle channel on/off, switch country, and pick a bank directly in the channel row
+- green/red channel toggles with in-place menu updates (no duplicate menus)
 - send text messages to trigger text rules
 - send screenshots to trigger OCR proof classification
 - inspect the current test state with `/status`
@@ -87,7 +88,7 @@ At the moment:
 
 - `cookies` auth is live and validated against real Pager API
 - `email + password` auth is live and validated against real Pager API
-- the bot now probes several likely Pager saved-reply endpoints and uses real folder names when the account returns them
+- the bot loads saved-reply folders from Pager `/api/reply/folder` and replies from `/api/reply`
 - if a specific account does not expose those endpoints in the current session, the bot falls back to country defaults from config
 
 ## Screenshot logic

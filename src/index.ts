@@ -14,12 +14,19 @@ import { StateStore, type ChatState } from "./state-store.js";
 import {
   TelegramApi,
   buildChannelKeyboard,
+  buildCountryKeyboard,
   buildMainMenuKeyboard,
   buildPagerAccountKeyboard,
   buildTemplateKeyboard,
   type TelegramMessage,
   type TelegramUpdate,
 } from "./telegram-api.js";
+
+const COUNTRY_FOLDER_HINTS: Record<"ZM" | "CM" | "EG", string[]> = {
+  ZM: ["замб", "zamb", "zambia"],
+  EG: ["егип", "egypt", "hapka"],
+  CM: ["камер", "cameroon"],
+};
 
 const env = loadEnv();
 const config = loadConfig(resolve(process.cwd(), env.BOT_CONFIG_PATH));
@@ -47,7 +54,8 @@ async function main() {
 async function handleUpdate(update: TelegramUpdate) {
   if (update.callback_query?.message?.chat.id) {
     const chatId = update.callback_query.message.chat.id;
-    await handleCallback(chatId, update.callback_query.id, update.callback_query.data);
+    const messageId = update.callback_query.message.message_id;
+    await handleCallback(chatId, update.callback_query.id, update.callback_query.data, messageId);
     return;
   }
 
@@ -60,6 +68,7 @@ async function handleCallback(
   chatId: number,
   callbackId: string,
   data?: string,
+  messageId?: number,
 ) {
   if (!data) {
     await telegram.answerCallbackQuery(callbackId, "No callback data");
@@ -69,6 +78,16 @@ async function handleCallback(
   const state = getOrCreateState(chatId);
   const [kind, value, extra] = data.split(":");
 
+  if (kind === "channels") {
+    await telegram.answerCallbackQuery(callbackId);
+    if (value === "back" || value === "refresh") {
+      const nextState =
+        value === "refresh" ? (await refreshPagerData(chatId, state)) ?? state : state;
+      await showChannelsMenu(chatId, nextState, messageId);
+      return;
+    }
+  }
+
   if (kind === "channel_toggle" && value) {
     const channel = resolveChannelForState(state, value);
     if (!channel) {
@@ -76,25 +95,26 @@ async function handleCallback(
       return;
     }
 
-    const nextEnabled = !getChannelEnabled(state, channel.id);
+    const runtime = getChannelRuntime(state, channel.id, channel.country);
+    const nextEnabled = !runtime.enabled;
     stateStore.patch(chatId, {
       channels: {
         ...(state.channels ?? {}),
         [channel.id]: {
+          ...runtime,
           enabled: nextEnabled,
-          country: getChannelCountry(state, channel.id, channel.country),
-          templateBank:
-            state.channels?.[channel.id]?.templateBank ??
-            `${getChannelCountry(state, channel.id, channel.country).toLowerCase()}-default`,
         },
       },
     });
-    await telegram.answerCallbackQuery(callbackId, nextEnabled ? "Включено" : "Выключено");
-    await telegram.sendMessage(
-      chatId,
-      "Обновил канал.",
-      buildChannelKeyboard(getSelectableChannels(stateStore.get(chatId) ?? state)),
-    );
+    const nextState = stateStore.get(chatId) ?? state;
+    await telegram.answerCallbackQuery(callbackId, nextEnabled ? "🟢 Включено" : "🔴 Выключено");
+    if (messageId) {
+      await telegram.editMessageReplyMarkup(
+        chatId,
+        messageId,
+        buildChannelKeyboard(getSelectableChannels(nextState)),
+      );
+    }
     return;
   }
 
@@ -105,26 +125,36 @@ async function handleCallback(
       return;
     }
 
-    const current = getChannelCountry(state, channel.id, channel.country);
-    const next =
-      current === "ZM" ? "EG" : current === "EG" ? "CM" : "ZM";
+    await telegram.answerCallbackQuery(callbackId);
+    if (messageId) {
+      await telegram.editMessageText(
+        chatId,
+        messageId,
+        `Выбери страну для ${channel.name}:`,
+        buildCountryKeyboard(channel.id),
+      );
+    }
+    return;
+  }
+
+  if (kind === "country_pick" && value && extra) {
+    const country = extra as "ZM" | "CM" | "EG";
+    const runtime = getChannelRuntime(state, value, country);
+    const bank = pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), country);
     stateStore.patch(chatId, {
       channels: {
         ...(state.channels ?? {}),
-        [channel.id]: {
-          enabled: getChannelEnabled(state, channel.id),
-          country: next,
-          templateBank:
-            pickTemplateBankForCountry(state, next) ?? `${next.toLowerCase()}-default`,
+        [value]: {
+          ...runtime,
+          country,
+          templateBank: bank?.name ?? runtime.templateBank,
+          templateBankId: bank?.id ?? runtime.templateBankId,
         },
       },
     });
-    await telegram.answerCallbackQuery(callbackId, `Страна: ${next}`);
-    await telegram.sendMessage(
-      chatId,
-      "Обновил страну канала.",
-      buildChannelKeyboard(getSelectableChannels(stateStore.get(chatId) ?? state)),
-    );
+    const nextState = stateStore.get(chatId) ?? state;
+    await telegram.answerCallbackQuery(callbackId, `Страна: ${country}`);
+    await showChannelsMenu(chatId, nextState, messageId);
     return;
   }
 
@@ -135,38 +165,51 @@ async function handleCallback(
       return;
     }
 
-    await telegram.answerCallbackQuery(callbackId, "Выбирай шаблоны");
-    await telegram.sendMessage(
-      chatId,
-      `Выбери банк шаблонов для ${channel.name}:`,
-      buildTemplateKeyboard(channel.id, getTemplateOptionsForState(state)),
-    );
+    const banks = getLiveTemplateBanks(state);
+    if (!banks.length) {
+      await telegram.answerCallbackQuery(callbackId, "Папки не загружены — нажми Обновить");
+      return;
+    }
+
+    await telegram.answerCallbackQuery(callbackId);
+    if (messageId) {
+      await telegram.editMessageText(
+        chatId,
+        messageId,
+        `Выбери папку шаблонов для ${channel.name}:`,
+        buildTemplateKeyboard(channel.id, banks),
+      );
+    }
     return;
   }
 
-  if (kind === "template" && value && extra) {
+  if (kind === "template_pick" && value && extra) {
     const channel = resolveChannelForState(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
     }
 
+    const bank = getLiveTemplateBanks(state).find((item) => item.id === extra);
+    if (!bank) {
+      await telegram.answerCallbackQuery(callbackId, "Папка не найдена");
+      return;
+    }
+
+    const runtime = getChannelRuntime(state, channel.id, channel.country);
     stateStore.patch(chatId, {
       channels: {
         ...(state.channels ?? {}),
         [channel.id]: {
-          enabled: getChannelEnabled(state, channel.id),
-          country: getChannelCountry(state, channel.id, channel.country),
-          templateBank: extra,
+          ...runtime,
+          templateBank: bank.name,
+          templateBankId: bank.id,
         },
       },
     });
-    await telegram.answerCallbackQuery(callbackId, "Банк обновлён");
-    await telegram.sendMessage(
-      chatId,
-      `Для канала ${channel.name} выбран банк: ${extra}`,
-      buildChannelKeyboard(getSelectableChannels(stateStore.get(chatId) ?? state)),
-    );
+    const nextState = stateStore.get(chatId) ?? state;
+    await telegram.answerCallbackQuery(callbackId, `Папка: ${bank.name}`);
+    await showChannelsMenu(chatId, nextState, messageId);
     return;
   }
 
@@ -184,11 +227,7 @@ async function handleCallback(
     }
 
     if (value === "channels") {
-      await telegram.sendMessage(
-        chatId,
-        "Слева — вкл/выкл, справа — страна канала.",
-        buildChannelKeyboard(getSelectableChannels(state)),
-      );
+      await showChannelsMenu(chatId, state);
       return;
     }
 
@@ -371,11 +410,7 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
   }
 
   if (command === "/channels") {
-    await telegram.sendMessage(
-      chatId,
-      "Слева — вкл/выкл, справа — страна канала.",
-      buildChannelKeyboard(getSelectableChannels(state)),
-    );
+    await showChannelsMenu(chatId, state);
     return;
   }
 
@@ -456,45 +491,145 @@ function getSelectableChannels(state: ChatState) {
   const liveChannels = state.pagerAccount?.liveChannels ?? [];
   if (liveChannels.length > 0) {
     return liveChannels.map((channel) => {
-      const mapped = getChannelConfig(config, channel.id);
+      const fallbackCountry = inferCountryFromName(channel.name);
+      const runtime = getChannelRuntime(state, channel.id, fallbackCountry);
       return {
         id: channel.id,
         name: channel.name,
-        country: getChannelCountry(
-          state,
-          channel.id,
-          mapped?.country ?? inferCountryFromName(channel.name),
-        ),
-        enabled: getChannelEnabled(state, channel.id),
-        templateBank:
-          state.channels?.[channel.id]?.templateBank ??
-          pickTemplateBankForCountry(
-            state,
-            mapped?.country ?? inferCountryFromName(channel.name),
-          ),
+        country: runtime.country,
+        enabled: runtime.enabled,
+        templateBank: runtime.templateBank ?? "Шаблоны",
       };
     });
   }
 
-  return config.channels.map((channel) => ({
-    id: channel.id,
-    name: channel.name,
-    country: getChannelCountry(state, channel.id, channel.country),
-    enabled: getChannelEnabled(state, channel.id),
-    templateBank:
-      state.channels?.[channel.id]?.templateBank ??
-      pickTemplateBankForCountry(state, channel.country),
-  }));
+  return config.channels.map((channel) => {
+    const runtime = getChannelRuntime(state, channel.id, channel.country);
+    return {
+      id: channel.id,
+      name: channel.name,
+      country: runtime.country,
+      enabled: runtime.enabled,
+      templateBank: runtime.templateBank ?? `${channel.country.toLowerCase()}-default`,
+    };
+  });
 }
 
-function getTemplateOptionsForState(state: ChatState): string[] {
-  const liveBanks =
-    state.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).filter(Boolean) ?? [];
-  if (liveBanks.length > 0) {
-    return liveBanks;
+function getLiveTemplateBanks(state: ChatState) {
+  return state.pagerAccount?.liveTemplateBanks ?? [];
+}
+
+function getChannelRuntime(
+  state: ChatState,
+  channelId: string,
+  fallbackCountry: "ZM" | "CM" | "EG",
+) {
+  const existing = state.channels?.[channelId];
+  if (existing) {
+    return existing;
   }
 
-  return config.templateBanks.map((bank) => bank.name);
+  const bank = pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), fallbackCountry);
+  return {
+    enabled: true,
+    country: fallbackCountry,
+    templateBank: bank?.name,
+    templateBankId: bank?.id,
+  };
+}
+
+function pickTemplateBankFromLiveBanks(
+  banks: Array<{ id: string; name: string }>,
+  country: "ZM" | "CM" | "EG",
+) {
+  if (!banks.length) {
+    return undefined;
+  }
+
+  const hints = COUNTRY_FOLDER_HINTS[country];
+  const matched = banks.find((bank) => {
+    const normalized = bank.name.toLowerCase();
+    return hints.some((hint) => normalized.includes(hint));
+  });
+  return matched ?? banks[0];
+}
+
+function buildChannelRuntimeMap(
+  channels: Array<{ id: string; name: string }>,
+  templateBanks: Array<{ id: string; name: string }>,
+) {
+  return Object.fromEntries(
+    channels.map((channel) => {
+      const country = inferCountryFromName(channel.name);
+      const bank = pickTemplateBankFromLiveBanks(templateBanks, country);
+      return [
+        channel.id,
+        {
+          enabled: true,
+          country,
+          templateBank: bank?.name,
+          templateBankId: bank?.id,
+        },
+      ];
+    }),
+  );
+}
+
+async function showChannelsMenu(chatId: number, state: ChatState, messageId?: number) {
+  const text = "Слева 🟢/🔴 — вкл/выкл, по центру страна, справа папка шаблонов.";
+  const keyboard = buildChannelKeyboard(getSelectableChannels(state));
+
+  if (messageId) {
+    try {
+      await telegram.editMessageText(chatId, messageId, text, keyboard);
+      return;
+    } catch {
+      // fall through to a fresh message
+    }
+  }
+
+  await telegram.sendMessage(chatId, text, keyboard);
+}
+
+async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatState | undefined> {
+  const cookies = state.pagerAccount?.cookies;
+  if (!cookies) {
+    return state;
+  }
+
+  try {
+    const session = await buildPagerClient(
+      cookies,
+      state.pagerAccount?.organizationId,
+    ).validateSession();
+    const defaults = buildChannelRuntimeMap(
+      session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
+      session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
+    );
+    const mergedChannels = { ...defaults, ...(state.channels ?? {}) };
+
+    return stateStore.patch(chatId, {
+      pagerAccount: {
+        ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
+        organizationId: session.organizationId,
+        organizationName: session.organizationName,
+        liveChannels: session.channels.map((channel) => ({
+          id: channel.id,
+          name: channel.name,
+          channelSource: channel.channelSource,
+        })),
+        liveTemplateBanks: session.templateBanks.map((bank) => ({
+          id: bank.id,
+          name: bank.name,
+          replyCount: bank.replyCount,
+        })),
+      },
+      channels: mergedChannels,
+    });
+  } catch (error) {
+    console.error("refreshPagerData failed:", error);
+    return state;
+  }
 }
 
 function resolveChannelForState(state: ChatState, channelId: string) {
@@ -516,7 +651,8 @@ function resolveChannelForState(state: ChatState, channelId: string) {
     country: getChannelCountry(state, live.id, country),
     templateBank:
       state.channels?.[live.id]?.templateBank ??
-      `${getChannelCountry(state, live.id, country).toLowerCase()}-default`,
+      pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), country)?.name ??
+      "Шаблоны",
     statusMap: getDefaultEnabledChannel(config).statusMap,
     isLive: true,
   };
@@ -534,26 +670,6 @@ function getChannelCountry(
   return state.channels?.[channelId]?.country ?? fallback;
 }
 
-function pickTemplateBankForCountry(
-  state: ChatState,
-  country: "ZM" | "CM" | "EG",
-): string | undefined {
-  return pickTemplateBankFromList(getTemplateOptionsForState(state), country);
-}
-
-function pickTemplateBankFromList(
-  templateBanks: string[],
-  country: "ZM" | "CM" | "EG",
-): string | undefined {
-  const normalizedCountry = country.toLowerCase();
-  const exact = templateBanks.find((name) => name.toLowerCase().includes(normalizedCountry));
-  if (exact) {
-    return exact;
-  }
-
-  return templateBanks[0];
-}
-
 function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
   const normalized = name.toLowerCase();
   if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {
@@ -565,10 +681,12 @@ function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
   return "ZM";
 }
 
-function buildPagerClient(cookieHeader: string) {
+function buildPagerClient(cookieHeader: string, orgId?: string) {
   return new PagerClient({
     baseUrl: env.PAGER_BASE_URL,
     cookieHeader,
+    orgId,
+    locale: "uk",
   });
 }
 
@@ -633,20 +751,9 @@ async function handlePendingInput(
           })),
           connectedAt: new Date().toISOString(),
         },
-        channels: Object.fromEntries(
-          session.channels.map((channel) => {
-            const country = inferCountryFromName(channel.name);
-            return [
-              channel.id,
-              {
-                enabled: true,
-                country,
-                templateBank:
-                  pickTemplateBankFromList(session.templateBanks.map((bank) => bank.name), country) ??
-                  `${country.toLowerCase()}-default`,
-              },
-            ];
-          }),
+        channels: buildChannelRuntimeMap(
+          session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
+          session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
         ),
         draftPagerEmail: undefined,
       });
@@ -698,20 +805,9 @@ async function handlePendingInput(
           })),
           connectedAt: new Date().toISOString(),
         },
-        channels: Object.fromEntries(
-          session.channels.map((channel) => {
-            const country = inferCountryFromName(channel.name);
-            return [
-              channel.id,
-              {
-                enabled: true,
-                country,
-                templateBank:
-                  pickTemplateBankFromList(session.templateBanks.map((bank) => bank.name), country) ??
-                  `${country.toLowerCase()}-default`,
-              },
-            ];
-          }),
+        channels: buildChannelRuntimeMap(
+          session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
+          session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
         ),
         draftPagerEmail: undefined,
       });

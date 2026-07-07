@@ -66,9 +66,36 @@ export class TelegramApi {
     chatId: number,
     text: string,
     replyMarkup?: ReplyMarkup,
-  ): Promise<void> {
-    await this.request("sendMessage", {
+  ): Promise<number | undefined> {
+    const result = await this.request<{ message_id: number }>("sendMessage", {
       chat_id: chatId,
+      text,
+      reply_markup: replyMarkup,
+    });
+    return result.message_id;
+  }
+
+  async editMessageReplyMarkup(
+    chatId: number,
+    messageId: number,
+    replyMarkup: ReplyMarkup,
+  ): Promise<void> {
+    await this.request("editMessageReplyMarkup", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: replyMarkup,
+    });
+  }
+
+  async editMessageText(
+    chatId: number,
+    messageId: number,
+    text: string,
+    replyMarkup?: ReplyMarkup,
+  ): Promise<void> {
+    await this.request("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
       text,
       reply_markup: replyMarkup,
     });
@@ -117,6 +144,19 @@ export class TelegramApi {
   }
 }
 
+const COUNTRY_LABELS: Record<string, string> = {
+  ZM: "🇿🇲 ZM",
+  EG: "🇪🇬 EG",
+  CM: "🇨🇲 CM",
+};
+
+function truncateLabel(value: string, max = 14): string {
+  if (value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, max - 1)}…`;
+}
+
 export function buildChannelKeyboard(
   channels: Array<{
     id: string;
@@ -127,41 +167,56 @@ export function buildChannelKeyboard(
   }>,
 ): ReplyMarkup {
   return {
-    inline_keyboard: channels.flatMap((channel) => [
-      [
+    inline_keyboard: [
+      ...channels.map((channel) => [
         {
-          text: `${channel.enabled ? "ON" : "OFF"} | ${channel.name}`,
+          text: `${channel.enabled ? "🟢" : "🔴"} ${channel.name}`,
           callback_data: `channel_toggle:${channel.id}`,
         },
         {
-          text: channel.country,
+          text: COUNTRY_LABELS[channel.country] ?? channel.country,
           callback_data: `channel_country:${channel.id}`,
         },
         {
-          text: channel.templateBank ?? "Replies",
+          text: truncateLabel(channel.templateBank ?? "Шаблоны"),
           callback_data: `channel_bank:${channel.id}`,
         },
+      ]),
+      [{ text: "🔄 Обновить каналы", callback_data: "channels:refresh" }],
+    ],
+  };
+}
+
+export function buildCountryKeyboard(channelId: string): ReplyMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: "🇿🇲 Замбия", callback_data: `country_pick:${channelId}:ZM` },
+        { text: "🇪🇬 Египет", callback_data: `country_pick:${channelId}:EG` },
       ],
-    ]),
+      [
+        { text: "🇨🇲 Камерун", callback_data: `country_pick:${channelId}:CM` },
+        { text: "« Назад", callback_data: "channels:back" },
+      ],
+    ],
   };
 }
 
 export function buildTemplateKeyboard(
   channelId: string,
-  templateNames: string[],
+  templateBanks: Array<{ id: string; name: string }>,
 ): ReplyMarkup {
-  return {
-    inline_keyboard: templateNames.map((name) => [
-      { text: name, callback_data: `template:${channelId}:${name}` },
-    ]),
-  };
-}
+  const rows = templateBanks.map((bank) => [
+    {
+      text: bank.name,
+      callback_data: `template_pick:${channelId}:${bank.id}`,
+    },
+  ]);
 
-export function buildStageKeyboard(stages: string[]): ReplyMarkup {
+  rows.push([{ text: "« Назад", callback_data: "channels:back" }]);
+
   return {
-    inline_keyboard: stages.map((stage) => [
-      { text: stage, callback_data: `stage:${stage}` },
-    ]),
+    inline_keyboard: rows,
   };
 }
 
