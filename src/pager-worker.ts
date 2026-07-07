@@ -496,7 +496,7 @@ async function ensureStatusFolders(deps: WorkerDeps, state: ChatState): Promise<
       locale: "uk",
     });
     await client.warmSession();
-    const statuses = await client.listStatuses().catch(() => []);
+    const statuses = await client.loadAllStatuses().catch(() => []);
     const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
     return deps.stateStore.patch(state.chatId, { statusFolders });
   } catch (error) {

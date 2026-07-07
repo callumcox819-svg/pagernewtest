@@ -727,11 +727,17 @@ async function showFoldersMenu(chatId: number, state: ChatState, messageId?: num
 
   const folders = currentState.statusFolders ?? [];
   const enabled = folders.filter((folder) => folder.enabled).length;
+  const apiFolderCount = folders.filter(
+    (folder) => folder.id !== "" && folder.id !== "*",
+  ).length;
   const text = [
     "Папки Pager — откуда бот берёт чаты для автоответа:",
     "✅ включена | ⬜ выключена",
     "",
     `Включено: ${enabled} из ${folders.length}`,
+    apiFolderCount
+      ? `Загружено из Pager: ${apiFolderCount} папок`
+      : "⚠️ Список из Pager пуст — нажми «Обновить папки» или перелогинься.",
     "«Всі» — все чаты. «Без статусу» — только новые без статуса.",
     "Для чатов в «Думають», «В процесі», «рега» — включи эти папки или «Всі».",
   ].join("\n");
@@ -760,7 +766,7 @@ async function syncStatusFolders(
 
     let statuses: Array<{ id: string; name: string }> = [];
     try {
-      statuses = await client.listStatuses();
+      statuses = await client.loadAllStatuses();
     } catch (error) {
       console.warn("listStatuses failed, refreshing session:", error);
       const session = await client.validateSession();
@@ -774,7 +780,7 @@ async function syncStatusFolders(
       if (patchedAccount?.pagerAccount) {
         state = patchedAccount;
       }
-      statuses = await client.listStatuses().catch(() => []);
+      statuses = await client.loadAllStatuses().catch(() => []);
     }
 
     const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
@@ -809,7 +815,7 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
     );
     const mergedChannels = { ...defaults, ...(state.channels ?? {}) };
     const client = buildPagerClient(cookies, state.pagerAccount?.organizationId);
-    const statuses = await client.listStatuses().catch(() => []);
+    const statuses = await client.loadAllStatuses().catch(() => []);
     const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
 
     return await stateStore.patch(chatId, {
@@ -933,7 +939,7 @@ async function handlePendingInput(
         login.organizationId,
       ).validateSession();
       const statusClient = buildPagerClient(login.cookieHeader, login.organizationId);
-      const statuses = await statusClient.listStatuses().catch(() => []);
+      const statuses = await statusClient.loadAllStatuses().catch(() => []);
       const statusFolders = buildStatusFolderList(statuses);
 
       await stateStore.patch(chatId, {
@@ -995,7 +1001,7 @@ async function handlePendingInput(
     try {
       const session = await buildPagerClient(text.trim()).validateSession();
       const statusClient = buildPagerClient(text.trim(), session.organizationId);
-      const statuses = await statusClient.listStatuses().catch(() => []);
+      const statuses = await statusClient.loadAllStatuses().catch(() => []);
       const statusFolders = buildStatusFolderList(statuses);
       await stateStore.patch(chatId, {
         pendingAction: undefined,

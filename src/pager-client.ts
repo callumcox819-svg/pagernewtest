@@ -145,29 +145,73 @@ export class PagerClient {
   }
 
   async listStatuses(): Promise<PagerStatus[]> {
+    return this.loadAllStatuses();
+  }
+
+  async loadAllStatuses(): Promise<PagerStatus[]> {
     const orgId = await this.ensureOrgId();
-    const payload = await this.request<unknown>("/api/status", {
-      method: "GET",
-      params: { orgId },
-    });
-    if (!Array.isArray(payload)) {
-      return [];
+    const merged = new Map<string, string>();
+
+    const addStatuses = (items: PagerStatus[]) => {
+      for (const item of items) {
+        if (item.id && item.name) {
+          merged.set(item.id, item.name);
+        }
+      }
+    };
+
+    for (const path of ["/api/status", "/api/statuses"]) {
+      try {
+        const payload = await this.request<unknown>(path, {
+          method: "GET",
+          params: { orgId },
+        });
+        addStatuses(parseStatusItems(extractPayloadArray(payload)));
+      } catch (error) {
+        console.warn(`Pager ${path} failed:`, formatError(error));
+      }
     }
 
-    const statuses: PagerStatus[] = [];
-    for (const item of payload) {
-      if (!item || typeof item !== "object") {
-        continue;
-      }
-      const record = item as Record<string, unknown>;
-      const id = firstString(record.id, record.statusId, record._id);
-      const name = firstString(record.name, record.title, record.label);
-      if (!id || !name) {
-        continue;
-      }
-      statuses.push({ id, name });
+    if (merged.size < 3) {
+      addStatuses(await this.discoverStatusesFromConversations());
     }
-    return statuses.sort((left, right) => left.name.localeCompare(right.name));
+
+    if (merged.size < 3) {
+      const html = await this.fetchChatsHtml();
+      addStatuses(discoverStatusesFromHtml(html));
+    }
+
+    const statuses = [...merged.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+
+    console.log(`Pager statuses loaded: ${statuses.length} (orgId=${orgId.slice(0, 12)}…)`);
+    return statuses;
+  }
+
+  private async discoverStatusesFromConversations(maxPages = 15): Promise<PagerStatus[]> {
+    const seen = new Map<string, string>();
+
+    for (let page = 1; page <= maxPages; page += 1) {
+      const batch = await this.listConversations({ page, pageSize: 100 });
+      if (!batch.length) {
+        break;
+      }
+
+      for (const conv of batch) {
+        const statusId = (conv.statusId || conv.status?.id || "").trim();
+        const statusName = (conv.status?.name || "").trim();
+        if (statusId && statusName) {
+          seen.set(statusId, statusName);
+        }
+      }
+
+      if (batch.length < 100) {
+        break;
+      }
+    }
+
+    return [...seen.entries()].map(([id, name]) => ({ id, name }));
   }
 
   async getSavedReplies(folderId: string): Promise<PagerSavedReply[]> {
@@ -974,6 +1018,111 @@ function firstString(...values: unknown[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function extractPayloadArray(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+
+  const record = payload as Record<string, unknown>;
+  for (const key of ["data", "items", "statuses", "results", "list"]) {
+    const nested = record[key];
+    if (Array.isArray(nested)) {
+      return nested;
+    }
+  }
+  return [];
+}
+
+function parseStatusItems(items: unknown[]): PagerStatus[] {
+  const statuses: PagerStatus[] = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const record = item as Record<string, unknown>;
+    const nestedStatus =
+      record.status && typeof record.status === "object"
+        ? (record.status as Record<string, unknown>)
+        : undefined;
+    const id = firstString(record.id, record.statusId, record._id, nestedStatus?.id);
+    const name = firstString(
+      record.name,
+      record.title,
+      record.label,
+      record.statusName,
+      nestedStatus?.name,
+    );
+    if (!id || !name || id.startsWith("user_") || id.startsWith("org_")) {
+      continue;
+    }
+    statuses.push({ id, name });
+  }
+
+  return statuses;
+}
+
+function discoverStatusesFromHtml(html: string): PagerStatus[] {
+  if (!html) {
+    return [];
+  }
+
+  const nextData = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+  if (nextData?.[1]) {
+    try {
+      const found = new Map<string, string>();
+      collectStatusesFromPayload(JSON.parse(nextData[1]), found);
+      if (found.size) {
+        return [...found.entries()].map(([id, name]) => ({ id, name }));
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  const found = new Map<string, string>();
+  const namePattern = /"name"\s*:\s*"([^"]{2,80})"/g;
+  const idPattern = /"(?:id|statusId)"\s*:\s*"([0-9a-f-]{8,})"/gi;
+  const names = [...html.matchAll(namePattern)].map((match) => match[1]);
+  const ids = [...html.matchAll(idPattern)].map((match) => match[1]);
+  for (let index = 0; index < Math.min(names.length, ids.length); index += 1) {
+    found.set(ids[index], names[index]);
+  }
+
+  return [...found.entries()].map(([id, name]) => ({ id, name }));
+}
+
+function collectStatusesFromPayload(data: unknown, found: Map<string, string>): void {
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      collectStatusesFromPayload(item, found);
+    }
+    return;
+  }
+
+  if (!data || typeof data !== "object") {
+    return;
+  }
+
+  const record = data as Record<string, unknown>;
+  const id = firstString(record.id, record.statusId);
+  const name = firstString(record.name, record.title, record.label);
+  if (id && name && !id.startsWith("user_") && !id.startsWith("org_") && name.length <= 80) {
+    found.set(id, name);
+  }
+
+  for (const key of Object.keys(record)) {
+    const value = record[key];
+    if (value && typeof value === "object") {
+      collectStatusesFromPayload(value, found);
+    }
+  }
 }
 
 function extractUserId(data: unknown): string {
