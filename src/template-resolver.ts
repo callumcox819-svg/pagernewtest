@@ -1,5 +1,6 @@
 import type { BotConfig, CountryCode, TemplateRole } from "./config.js";
 import { getTemplateBank } from "./config.js";
+import { CM_SCRIPT_SNIPPETS } from "./cm-script-engine.js";
 import type { PagerClient, PagerSavedReply } from "./pager-client.js";
 
 const replyCache = new Map<string, PagerSavedReply[]>();
@@ -37,6 +38,22 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
   },
 };
 
+export async function resolveScriptTextByKey(
+  client: PagerClient,
+  folderId: string | undefined,
+  scriptKey: string,
+): Promise<string | undefined> {
+  const snippet = CM_SCRIPT_SNIPPETS[scriptKey];
+  if (folderId) {
+    const replies = await loadFolderReplies(client, folderId);
+    const fromPager = matchReplyByScriptKey(replies, scriptKey, snippet);
+    if (fromPager?.text) {
+      return fromPager.text;
+    }
+  }
+  return undefined;
+}
+
 export async function resolveTemplateText(
   config: BotConfig,
   client: PagerClient,
@@ -68,6 +85,26 @@ async function loadFolderReplies(client: PagerClient, folderId: string): Promise
   const replies = await client.getSavedReplies(folderId);
   replyCache.set(folderId, replies);
   return replies;
+}
+
+function matchReplyByScriptKey(
+  replies: PagerSavedReply[],
+  scriptKey: string,
+  snippet?: string,
+): PagerSavedReply | undefined {
+  const keyNeedle = scriptKey.toLowerCase();
+  const matchedByName = replies.find((reply) => (reply.name ?? "").toLowerCase().includes(keyNeedle));
+  if (matchedByName) {
+    return matchedByName;
+  }
+  if (!snippet) {
+    return undefined;
+  }
+  const needle = snippet.trim().toLowerCase();
+  return replies.find((reply) => {
+    const body = normalizeNeedle(reply.text);
+    return body.includes(needle) || needle.includes(body.slice(0, 40));
+  });
 }
 
 function matchReplyByRole(

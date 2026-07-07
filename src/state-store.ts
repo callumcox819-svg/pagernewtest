@@ -47,6 +47,7 @@ export type ConversationRuntimeState = {
   lastCustomerMessageAt?: string;
   lastReplyAt?: string;
   lastReplyRole?: string;
+  funnelStep?: number;
   sendFailures?: number;
 };
 

@@ -9,6 +9,15 @@ import {
   resolveYamlTemplateBankName,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
+import {
+  classifyCmMessage,
+  collectOutgoingTexts,
+  funnelStepFromScriptGaps,
+  inferStepFromThread,
+  regLinkSentInHistory,
+  regSendTriggersInProgress,
+  resolveCmFunnelScripts,
+} from "./cm-script-engine.js";
 import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
@@ -27,9 +36,10 @@ import type {
   ConversationRuntimeState,
   StateStore,
 } from "./state-store.js";
-import { resolveTemplateText } from "./template-resolver.js";
+import { resolveScriptTextByKey, resolveTemplateText } from "./template-resolver.js";
 import {
   countApiStatusFolders,
+  isNoStatusConversation,
   mergeStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
@@ -220,6 +230,174 @@ async function processConversation(
   conv: PagerConversation,
   runtime: EnabledChannel,
 ): Promise<boolean> {
+  const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
+  if (channel.country === "CM") {
+    return processCmConversation(deps, state, client, conv, runtime, channel);
+  }
+  return processGenericConversation(deps, state, client, conv, runtime, channel);
+}
+
+async function processCmConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
+  const convId = conv.id;
+  if (!isIncomingDirection(conv.lastMessageDirection)) {
+    return false;
+  }
+
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  if (!messages.length) {
+    return false;
+  }
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const latest = sorted[0];
+  if (!isIncomingDirection(latest.messageDirection)) {
+    return false;
+  }
+
+  const lastIncoming = latest;
+  const lastIncomingAt = lastIncoming.createdAt ?? "";
+  const outgoingTexts = collectOutgoingTexts(messages);
+
+  if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
+    return false;
+  }
+
+  if (hasDeliveredReplyAfter(sorted, lastIncomingAt)) {
+    if (convState.lastCustomerMessageId !== lastIncoming.id) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+      });
+    }
+    return false;
+  }
+
+  const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
+  const statusName = (conv.status?.name ?? "").toLowerCase();
+  const inProgressStatus =
+    !isNoStatusConversation(conv) &&
+    (/процес|process|registered|рега/i.test(statusName) || regLinkSentInHistory(outgoingTexts));
+  if (
+    inProgressStatus &&
+    Number.isFinite(incomingAgeMs) &&
+    incomingAgeMs > 2 * 60 * 60 * 1000 &&
+    outgoingTexts.length >= 2
+  ) {
+    return false;
+  }
+
+  const threadStep = inferStepFromThread(messages);
+  const gapStep = funnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
+  const latestCustomerText = (lastIncoming.text || "").trim();
+  const imageUrl = extractImageUrl(lastIncoming);
+  const intent = classifyCmMessage(latestCustomerText, {
+    hasImage: Boolean(imageUrl),
+    funnelStep: effectiveStep,
+  });
+
+  const scriptKeys = resolveCmFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    { hasImage: Boolean(imageUrl) },
+  );
+
+  if (!scriptKeys.length) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} CM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+    );
+    return false;
+  }
+
+  console.log(
+    `Pager worker: CM ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+  );
+
+  let sentAny = false;
+  for (const scriptKey of scriptKeys) {
+    const replyText = await resolveScriptTextByKey(
+      client,
+      runtime.runtime.templateBankId,
+      scriptKey,
+    );
+    if (!replyText?.trim()) {
+      console.warn(`CM script missing in Pager folder: ${scriptKey}`);
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText.trim(), {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      const failures = (convState.sendFailures ?? 0) + 1;
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: failures,
+      });
+      console.error(`Pager worker: CM send failed ${convId.slice(0, 8)} key=${scriptKey}`);
+      return sentAny;
+    }
+    sentAny = true;
+    await sleep(500);
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  if (regSendTriggersInProgress(scriptKeys)) {
+    const statusId = findInProgressStatusId(currentState);
+    const operatorId = await client.probeOperatorUserId();
+    if (statusId && operatorId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(`Pager worker: CM ${convId.slice(0, 8)} status -> in progress`);
+      } catch (error) {
+        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
+    funnelStep: Math.max(effectiveStep, scriptKeys.includes("09_deposit") ? 6 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: scriptKeys[scriptKeys.length - 1],
+    sendFailures: 0,
+  });
+
+  return true;
+}
+
+async function processGenericConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
   const convId = conv.id;
 
   if (!isIncomingDirection(conv.lastMessageDirection)) {
@@ -264,7 +442,6 @@ async function processConversation(
     return false;
   }
 
-  const channel = buildRuntimeChannelConfig(deps.config, currentState, runtime);
   const playbook = getPlaybook(deps.config, channel.country);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const imageUrl = extractImageUrl(lastIncoming);
@@ -343,6 +520,16 @@ async function processConversation(
   });
 
   return true;
+}
+
+function findInProgressStatusId(state: ChatState): string | undefined {
+  for (const folder of state.statusFolders ?? []) {
+    const name = folder.name.toLowerCase();
+    if (/в процес|процес|process/i.test(name)) {
+      return folder.id;
+    }
+  }
+  return undefined;
 }
 
 type EnabledChannel = {

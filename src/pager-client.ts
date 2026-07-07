@@ -1052,6 +1052,16 @@ export class PagerClient {
     return result;
   }
 
+  async patchConversationStatus(convId: string, statusId: string, userId: string): Promise<void> {
+    const orgId = await this.ensureOrgId();
+    await this.request(`/api/conversation/${convId}`, {
+      method: "PATCH",
+      params: { userId, orgId },
+      body: { statusId },
+      referer: this.chatReferer(convId),
+    });
+  }
+
   private async markConversationRead(convId: string, userId: string): Promise<void> {
     const orgId = await this.ensureOrgId();
     await this.request(`/api/conversation/${convId}`, {
