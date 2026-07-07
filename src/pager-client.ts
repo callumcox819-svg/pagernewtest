@@ -88,6 +88,23 @@ export class PagerClient {
     this.orgSlug = options.orgSlug ?? "";
   }
 
+  async bootstrapSession(): Promise<{
+    organizationId: string;
+    organizationSlug: string;
+    organizationName?: string;
+  }> {
+    await this.warmSession();
+    await this.discoverOrgSlug();
+    const organizationId = await this.ensureOrgId();
+    const organization = await this.getOrganization().catch(() => undefined);
+
+    return {
+      organizationId,
+      organizationSlug: this.orgSlug || organization?.slug || "",
+      organizationName: organization?.name,
+    };
+  }
+
   async getChannels(): Promise<PagerChannel[]> {
     const orgId = await this.ensureOrgId();
     const params = orgId ? { orgId } : undefined;
@@ -169,7 +186,7 @@ export class PagerClient {
       statusParams.userId = userId;
     }
 
-    for (const path of ["/api/status", "/api/statuses"]) {
+    for (const path of ["/api/status"]) {
       try {
         const payload = await this.request<unknown>(path, {
           method: "GET",

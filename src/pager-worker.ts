@@ -57,7 +57,7 @@ export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
 
 async function processPagerAccounts(deps: WorkerDeps): Promise<void> {
   const states = await deps.stateStore.listAll();
-  const connected = states.filter((state) => state.pagerAccount?.cookies);
+  const connected = states.filter((state) => state.pagerAccount?.cookies?.trim());
 
   if (!connected.length) {
     console.log("Pager worker: no connected Pager accounts in state store");
@@ -71,16 +71,51 @@ async function processPagerAccounts(deps: WorkerDeps): Promise<void> {
 
 async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promise<void> {
   let freshState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const cookies = freshState.pagerAccount?.cookies?.trim();
+  if (!cookies) {
+    return;
+  }
 
-  if (!freshState.statusFolders?.length && freshState.pagerAccount?.cookies) {
-    freshState = (await ensureStatusFolders(deps, freshState)) ?? freshState;
+  const client = new PagerClient({
+    baseUrl: deps.env.PAGER_BASE_URL,
+    cookieHeader: cookies,
+    orgId: freshState.pagerAccount?.organizationId,
+    orgSlug:
+      freshState.pagerAccount?.organizationSlug ??
+      freshState.pagerAccount?.organizationName?.toLowerCase(),
+    locale: "uk",
+  });
+
+  try {
+    const session = await client.bootstrapSession();
+    freshState =
+      (await deps.stateStore.patch(freshState.chatId, {
+        pagerAccount: {
+          ...(freshState.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
+          organizationId: session.organizationId,
+          organizationSlug: session.organizationSlug || freshState.pagerAccount?.organizationSlug,
+          organizationName: session.organizationName ?? freshState.pagerAccount?.organizationName,
+        },
+      })) ?? freshState;
+  } catch (error) {
+    console.error(
+      `Pager session bootstrap failed for chat ${freshState.chatId}:`,
+      formatError(error),
+    );
+    return;
+  }
+
+  if (!freshState.statusFolders?.length) {
+    freshState = (await ensureStatusFolders(deps, freshState, client)) ?? freshState;
   }
 
   const enabledChannels = getEnabledChannels(freshState);
 
   if (!enabledChannels.length) {
+    const liveCount = freshState.pagerAccount?.liveChannels?.length ?? 0;
+    const enabledCount = Object.values(freshState.channels ?? {}).filter((item) => item.enabled).length;
     console.log(
-      `Pager worker: chat ${freshState.chatId} — Pager connected but no enabled channels`,
+      `Pager worker: chat ${freshState.chatId} — no enabled channels (live=${liveCount}, enabledInState=${enabledCount})`,
     );
     return;
   }
@@ -91,22 +126,11 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
-  const client = new PagerClient({
-    baseUrl: deps.env.PAGER_BASE_URL,
-    cookieHeader: freshState.pagerAccount!.cookies!,
-    orgId: freshState.pagerAccount?.organizationId,
-    orgSlug:
-      freshState.pagerAccount?.organizationSlug ??
-      freshState.pagerAccount?.organizationName?.toLowerCase(),
-    locale: "uk",
-  });
-
   const channelIds = enabledChannels.map((item) => item.channelId);
   const channelNames = enabledChannels.map((item) => item.channelName).join(", ");
 
   let conversations: PagerConversation[] = [];
   try {
-    await client.warmSession();
     conversations = await client.collectConversationsForChannels(channelIds);
   } catch (error) {
     console.error(`Pager poll failed for chat ${freshState.chatId}:`, formatError(error));
@@ -485,26 +509,40 @@ function formatError(error: unknown): string {
   return String(error);
 }
 
-async function ensureStatusFolders(deps: WorkerDeps, state: ChatState): Promise<ChatState | undefined> {
-  const cookies = state.pagerAccount?.cookies;
+async function ensureStatusFolders(
+  deps: WorkerDeps,
+  state: ChatState,
+  client?: PagerClient,
+): Promise<ChatState | undefined> {
+  const cookies = state.pagerAccount?.cookies?.trim();
   if (!cookies) {
     return undefined;
   }
 
   try {
-    const client = new PagerClient({
-      baseUrl: deps.env.PAGER_BASE_URL,
-      cookieHeader: cookies,
-      orgId: state.pagerAccount?.organizationId,
-      orgSlug:
-        state.pagerAccount?.organizationSlug ??
-        state.pagerAccount?.organizationName?.toLowerCase(),
-      locale: "uk",
-    });
-    await client.warmSession();
-    const statuses = await client.loadAllStatuses().catch(() => []);
+    const pagerClient =
+      client ??
+      new PagerClient({
+        baseUrl: deps.env.PAGER_BASE_URL,
+        cookieHeader: cookies,
+        orgId: state.pagerAccount?.organizationId,
+        orgSlug:
+          state.pagerAccount?.organizationSlug ??
+          state.pagerAccount?.organizationName?.toLowerCase(),
+        locale: "uk",
+      });
+    const session = await pagerClient.bootstrapSession();
+    const statuses = await pagerClient.loadAllStatuses().catch(() => []);
     const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
-    return deps.stateStore.patch(state.chatId, { statusFolders });
+    return deps.stateStore.patch(state.chatId, {
+      statusFolders,
+      pagerAccount: {
+        ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
+        organizationId: session.organizationId,
+        organizationSlug: session.organizationSlug || state.pagerAccount?.organizationSlug,
+        organizationName: session.organizationName ?? state.pagerAccount?.organizationName,
+      },
+    });
   } catch (error) {
     console.error(`ensureStatusFolders failed for chat ${state.chatId}:`, formatError(error));
     const statusFolders = buildStatusFolderList([], state.statusFolders);

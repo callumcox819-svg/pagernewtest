@@ -766,30 +766,27 @@ async function syncStatusFolders(
       state.pagerAccount?.organizationId,
       resolvePagerOrgSlug(state),
     );
-    await client.warmSession();
+    const session = await client.bootstrapSession();
 
     let statuses: Array<{ id: string; name: string }> = [];
     try {
       statuses = await client.loadAllStatuses();
     } catch (error) {
-      console.warn("listStatuses failed, refreshing session:", error);
-      const session = await client.validateSession();
-      const patchedAccount = await stateStore.patch(chatId, {
-        pagerAccount: {
-          ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
-          organizationId: session.organizationId ?? state.pagerAccount?.organizationId,
-          organizationName: session.organizationName ?? state.pagerAccount?.organizationName,
-          organizationSlug: session.organizationSlug ?? state.pagerAccount?.organizationSlug,
-        },
-      });
-      if (patchedAccount?.pagerAccount) {
-        state = patchedAccount;
-      }
+      console.warn("listStatuses failed, retrying after session refresh:", error);
+      await client.bootstrapSession();
       statuses = await client.loadAllStatuses().catch(() => []);
     }
 
     const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
-    const patched = await stateStore.patch(chatId, { statusFolders });
+    const patched = await stateStore.patch(chatId, {
+      statusFolders,
+      pagerAccount: {
+        ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
+        organizationId: session.organizationId,
+        organizationSlug: session.organizationSlug || state.pagerAccount?.organizationSlug,
+        organizationName: session.organizationName ?? state.pagerAccount?.organizationName,
+      },
+    });
     const apiCount = statusFolders.filter(
       (folder) => folder.id !== "" && folder.id !== "*",
     ).length;
