@@ -23,8 +23,10 @@
   "homepage": "https://github.com/callumcox819-svg/pagernewtest#readme",
   "dependencies": {
     "dotenv": "^17.4.2",
+    "fetch-cookie": "^3.2.0",
     "set-cookie-parser": "^3.1.1",
     "tesseract.js": "^7.0.0",
+    "tough-cookie": "^6.0.1",
     "yaml": "^2.8.1",
     "zod": "^4.1.5"
   },

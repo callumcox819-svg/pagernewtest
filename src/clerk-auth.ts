@@ -1,6 +1,10 @@
+import makeFetchCookie from "fetch-cookie";
+import { CookieJar } from "tough-cookie";
+
 type ClerkClientContext = {
   authorizationToken: string;
-  cookieHeader?: string;
+  fetchWithCookies: typeof fetch;
+  jar: CookieJar;
 };
 
 type ClerkClientPayload = {
@@ -93,13 +97,15 @@ export class ClerkPasswordAuthClient {
 
   private async createClient(): Promise<ClerkClientContext> {
     const headers = this.baseHeaders();
+    const jar = new CookieJar();
+    const fetchWithCookies = makeFetchCookie(fetch, jar);
 
-    await fetch(`${this.pagerBaseUrl}/sign-in`, {
+    await fetchWithCookies(`${this.pagerBaseUrl}/sign-in`, {
       method: "GET",
       headers,
     });
 
-    const response = await fetch(`https://${this.options.frontendApi}/v1/client?${this.queryString}`, {
+    const response = await fetchWithCookies(`https://${this.options.frontendApi}/v1/client?${this.queryString}`, {
       method: "POST",
       headers: {
         ...headers,
@@ -107,14 +113,14 @@ export class ClerkPasswordAuthClient {
       },
       body: JSON.stringify({}),
     });
-    return this.buildClientContext(response);
+    return this.buildClientContext(response, fetchWithCookies, jar);
   }
 
   private async createSignInAttempt(
     client: ClerkClientContext,
     email: string,
   ): Promise<ClerkSignInResponse> {
-    const response = await fetch(
+    const response = await client.fetchWithCookies(
       `https://${this.options.frontendApi}/v1/client/sign_ins?${this.queryString}`,
       {
         method: "POST",
@@ -135,7 +141,7 @@ export class ClerkPasswordAuthClient {
     signInId: string,
     password: string,
   ): Promise<ClerkSignInResponse> {
-    const response = await fetch(
+    const response = await client.fetchWithCookies(
       `https://${this.options.frontendApi}/v1/client/sign_ins/${signInId}/attempt_first_factor?${this.queryString}`,
       {
         method: "POST",
@@ -155,7 +161,7 @@ export class ClerkPasswordAuthClient {
   private async fetchClientState(
     client: ClerkClientContext,
   ): Promise<ClerkClientPayload> {
-    const response = await fetch(
+    const response = await client.fetchWithCookies(
       `https://${this.options.frontendApi}/v1/client?${this.queryString}`,
       {
         method: "GET",
@@ -172,11 +178,14 @@ export class ClerkPasswordAuthClient {
       ...this.baseHeaders(),
       authorization: client.authorizationToken,
       "content-type": "application/x-www-form-urlencoded",
-      ...(client.cookieHeader ? { cookie: client.cookieHeader } : {}),
     };
   }
 
-  private buildClientContext(response: Response): ClerkClientContext {
+  private buildClientContext(
+    response: Response,
+    fetchWithCookies: typeof fetch,
+    jar: CookieJar,
+  ): ClerkClientContext {
     const authorizationToken = response.headers.get("authorization");
     if (!authorizationToken) {
       throw new Error("Clerk client authorization token was not returned.");
@@ -184,7 +193,8 @@ export class ClerkPasswordAuthClient {
 
     return {
       authorizationToken,
-      cookieHeader: this.extractCookieHeader(response),
+      fetchWithCookies,
+      jar,
     };
   }
 
@@ -193,26 +203,6 @@ export class ClerkPasswordAuthClient {
     if (authorizationToken) {
       client.authorizationToken = authorizationToken;
     }
-
-    const cookieHeader = this.extractCookieHeader(response);
-    if (cookieHeader) {
-      client.cookieHeader = client.cookieHeader
-        ? `${client.cookieHeader}; ${cookieHeader}`
-        : cookieHeader;
-    }
-  }
-
-  private extractCookieHeader(response: Response): string | undefined {
-    const setCookies = response.headers.getSetCookie?.() ?? [];
-    const cookiePairs = setCookies
-      .map((item) => item.split(";")[0]?.trim())
-      .filter((item): item is string => Boolean(item));
-
-    if (cookiePairs.length === 0) {
-      return undefined;
-    }
-
-    return cookiePairs.join("; ");
   }
 
   private extractSessionJwt(payload: ClerkClientPayload): string {
