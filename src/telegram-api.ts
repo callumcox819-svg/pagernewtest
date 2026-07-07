@@ -145,3 +145,40 @@ export function buildStageKeyboard(stages: string[]): ReplyMarkup {
     ]),
   };
 }
+
+export function buildMainMenuKeyboard(): ReplyMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Pager аккаунт", callback_data: "menu:pager_account" },
+        { text: "Каналы", callback_data: "menu:channels" },
+      ],
+      [
+        { text: "Выбор шаблонов", callback_data: "menu:templates" },
+        { text: "Статус", callback_data: "menu:status" },
+      ],
+      [
+        { text: "Этапы", callback_data: "menu:stages" },
+        { text: "Сброс", callback_data: "menu:reset" },
+      ],
+    ],
+  };
+}
+
+export function buildPagerAccountKeyboard(isConnected: boolean): ReplyMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Email + пароль", callback_data: "pager:login_password" },
+        { text: "Импорт cookies", callback_data: "pager:import_cookies" },
+      ],
+      [
+        {
+          text: isConnected ? "Отключить" : "Очистить",
+          callback_data: "pager:disconnect",
+        },
+      ],
+      [{ text: "Назад", callback_data: "menu:main" }],
+    ],
+  };
+}

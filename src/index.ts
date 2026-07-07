@@ -13,6 +13,8 @@ import { StateStore, type ChatState } from "./state-store.js";
 import {
   TelegramApi,
   buildChannelKeyboard,
+  buildMainMenuKeyboard,
+  buildPagerAccountKeyboard,
   buildStageKeyboard,
   buildTemplateKeyboard,
   type TelegramMessage,
@@ -82,6 +84,7 @@ async function handleCallback(
     await telegram.sendMessage(
       chatId,
       `Selected channel: ${channel.name}\nCountry: ${channel.country}\nTemplate bank: ${channel.templateBank}`,
+      buildMainMenuKeyboard(),
     );
     return;
   }
@@ -89,14 +92,127 @@ async function handleCallback(
   if (kind === "template" && value) {
     stateStore.patch(chatId, { templateBankOverride: value });
     await telegram.answerCallbackQuery(callbackId, `Template bank: ${value}`);
-    await telegram.sendMessage(chatId, `Template bank override set to: ${value}`);
+    await telegram.sendMessage(
+      chatId,
+      `Template bank override set to: ${value}`,
+      buildMainMenuKeyboard(),
+    );
     return;
   }
 
   if (kind === "stage" && value) {
     stateStore.patch(chatId, { currentStage: value as ChatState["currentStage"] });
     await telegram.answerCallbackQuery(callbackId, `Stage: ${value}`);
-    await telegram.sendMessage(chatId, `Current stage manually set to: ${value}`);
+    await telegram.sendMessage(
+      chatId,
+      `Current stage manually set to: ${value}`,
+      buildMainMenuKeyboard(),
+    );
+    return;
+  }
+
+  if (kind === "menu") {
+    await telegram.answerCallbackQuery(callbackId);
+
+    if (value === "main") {
+      await sendMainMenu(chatId, state);
+      return;
+    }
+
+    if (value === "pager_account") {
+      await sendPagerAccountMenu(chatId, state);
+      return;
+    }
+
+    if (value === "channels") {
+      await telegram.sendMessage(
+        chatId,
+        "Choose the channel to test:",
+        buildChannelKeyboard(config.channels),
+      );
+      return;
+    }
+
+    if (value === "templates") {
+      await telegram.sendMessage(
+        chatId,
+        "Choose the template bank override:",
+        buildTemplateKeyboard(config.templateBanks.map((bank) => bank.name)),
+      );
+      return;
+    }
+
+    if (value === "stages") {
+      await telegram.sendMessage(
+        chatId,
+        "Choose the current stage:",
+        buildStageKeyboard([...STAGES]),
+      );
+      return;
+    }
+
+    if (value === "status") {
+      await sendStatus(chatId, state);
+      return;
+    }
+
+    if (value === "reset") {
+      stateStore.delete(chatId);
+      const nextState = getOrCreateState(chatId);
+      await telegram.sendMessage(
+        chatId,
+        `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
+        buildMainMenuKeyboard(),
+      );
+      return;
+    }
+  }
+
+  if (kind === "pager") {
+    await telegram.answerCallbackQuery(callbackId);
+
+    if (value === "login_password") {
+      stateStore.patch(chatId, {
+        pendingAction: "await_pager_email",
+        draftPagerEmail: undefined,
+      });
+      await telegram.sendMessage(
+        chatId,
+        "Введи email от Pager аккаунта следующим сообщением.",
+      );
+      return;
+    }
+
+    if (value === "import_cookies") {
+      stateStore.patch(chatId, {
+        pendingAction: "await_pager_cookies",
+        draftPagerEmail: undefined,
+      });
+      await telegram.sendMessage(
+        chatId,
+        "Отправь cookies одной строкой следующим сообщением.",
+      );
+      return;
+    }
+
+    if (value === "disconnect") {
+      stateStore.patch(chatId, {
+        pagerAccount: undefined,
+        pendingAction: undefined,
+        draftPagerEmail: undefined,
+      });
+      await telegram.sendMessage(
+        chatId,
+        "Pager аккаунт очищен из локального состояния бота.",
+        buildPagerAccountKeyboard(false),
+      );
+      return;
+    }
+
+    if (value === "back") {
+      await sendMainMenu(chatId, state);
+      return;
+    }
     return;
   }
 
@@ -110,6 +226,13 @@ async function handleMessage(message: TelegramMessage) {
   if (message.text?.startsWith("/")) {
     await handleCommand(chatId, message.text, state);
     return;
+  }
+
+  if (message.text && state.pendingAction) {
+    const handled = await handlePendingInput(chatId, state, message.text);
+    if (handled) {
+      return;
+    }
   }
 
   const effectiveChannel = getEffectiveChannel(state);
@@ -148,6 +271,7 @@ async function handleMessage(message: TelegramMessage) {
           `Reason: ${classification.reason}`,
           "No next action matched. Use /status or /stages if you want to adjust the flow manually.",
         ].join("\n"),
+        buildMainMenuKeyboard(),
       );
       return;
     }
@@ -161,6 +285,7 @@ async function handleMessage(message: TelegramMessage) {
         `Next stage: ${decision.nextStage}`,
         `Decision reason: ${decision.reason}`,
       ].join("\n"),
+      buildMainMenuKeyboard(),
     );
 
     if (decision.templateToSend) {
@@ -179,6 +304,7 @@ async function handleMessage(message: TelegramMessage) {
     await telegram.sendMessage(
       chatId,
       "No rule matched this message yet. Use /status, /channels, /templates, or send a clearer text or screenshot.",
+      buildMainMenuKeyboard(),
     );
     return;
   }
@@ -187,6 +313,7 @@ async function handleMessage(message: TelegramMessage) {
   await telegram.sendMessage(
     chatId,
     `Rule matched.\nNext stage: ${decision.nextStage}\nReason: ${decision.reason}`,
+    buildMainMenuKeyboard(),
   );
   if (decision.templateToSend) {
     await telegram.sendMessage(chatId, decision.templateToSend);
@@ -198,14 +325,7 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
   const effectiveChannel = getEffectiveChannel(state);
 
   if (command === "/start") {
-    await telegram.sendMessage(
-      chatId,
-      [
-        "Pager test bot is running.",
-        "Use /channels to choose a channel, /templates to override template bank, /stages to set a stage, /status to inspect current state.",
-        "Then send text or a screenshot to test the flow.",
-      ].join("\n"),
-    );
+    await sendMainMenu(chatId, state);
     return;
   }
 
@@ -242,26 +362,25 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
     await telegram.sendMessage(
       chatId,
       `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
+      buildMainMenuKeyboard(),
     );
     return;
   }
 
   if (command === "/status") {
-    await telegram.sendMessage(
-      chatId,
-      [
-        `Channel: ${effectiveChannel.name}`,
-        `Country: ${effectiveChannel.country}`,
-        `Stage: ${state.currentStage}`,
-        `Template bank: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
-      ].join("\n"),
-    );
+    await sendStatus(chatId, state);
+    return;
+  }
+
+  if (command === "/account") {
+    await sendPagerAccountMenu(chatId, state);
     return;
   }
 
   await telegram.sendMessage(
     chatId,
-    "Unknown command. Available: /start, /channels, /templates, /stages, /status, /reset",
+    "Unknown command. Available: /start, /account, /channels, /templates, /stages, /status, /reset",
+    buildMainMenuKeyboard(),
   );
 }
 
@@ -298,6 +417,134 @@ function getEffectiveChannel(state: ChatState) {
 
 function sleep(ms: number) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+async function handlePendingInput(
+  chatId: number,
+  state: ChatState,
+  text: string,
+): Promise<boolean> {
+  if (state.pendingAction === "await_pager_email") {
+    stateStore.patch(chatId, {
+      draftPagerEmail: text.trim(),
+      pendingAction: "await_pager_password",
+    });
+    await telegram.sendMessage(chatId, "Теперь отправь пароль от Pager аккаунта.");
+    return true;
+  }
+
+  if (state.pendingAction === "await_pager_password") {
+    const nextState = stateStore.patch(chatId, {
+      pendingAction: undefined,
+      pagerAccount: {
+        authMode: "credentials",
+        email: state.draftPagerEmail,
+        password: text.trim(),
+        connectedAt: new Date().toISOString(),
+      },
+      draftPagerEmail: undefined,
+    });
+
+    await telegram.sendMessage(
+      chatId,
+      [
+        "Pager аккаунт сохранен.",
+        `Email: ${maskEmail(nextState?.pagerAccount?.email)}`,
+        "Режим: email + пароль",
+      ].join("\n"),
+      buildPagerAccountKeyboard(true),
+    );
+    return true;
+  }
+
+  if (state.pendingAction === "await_pager_cookies") {
+    stateStore.patch(chatId, {
+      pendingAction: undefined,
+      pagerAccount: {
+        authMode: "cookies",
+        cookies: text.trim(),
+        connectedAt: new Date().toISOString(),
+      },
+      draftPagerEmail: undefined,
+    });
+    await telegram.sendMessage(
+      chatId,
+      "Cookies сохранены в локальном состоянии бота.",
+      buildPagerAccountKeyboard(true),
+    );
+    return true;
+  }
+
+  return false;
+}
+
+async function sendMainMenu(chatId: number, state: ChatState) {
+  const effectiveChannel = getEffectiveChannel(state);
+  await telegram.sendMessage(
+    chatId,
+    [
+      "Pager test bot is running.",
+      `Канал: ${effectiveChannel.name} | ${effectiveChannel.country}`,
+      `Шаблоны: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
+      `Этап: ${state.currentStage}`,
+      "Выбери нужное действие кнопками ниже.",
+    ].join("\n"),
+    buildMainMenuKeyboard(),
+  );
+}
+
+async function sendPagerAccountMenu(chatId: number, state: ChatState) {
+  const account = state.pagerAccount;
+  const lines = account
+    ? [
+        "Pager аккаунт подключён",
+        `Режим: ${account.authMode === "credentials" ? "email + пароль" : "cookies"}`,
+        account.email ? `Email: ${maskEmail(account.email)}` : undefined,
+        `Подключен: ${new Date(account.connectedAt).toLocaleString("ru-RU")}`,
+      ].filter(Boolean)
+    : [
+        "Pager аккаунт не подключён",
+        "Можно войти через email + пароль или сохранить cookies.",
+      ];
+
+  await telegram.sendMessage(
+    chatId,
+    lines.join("\n"),
+    buildPagerAccountKeyboard(Boolean(account)),
+  );
+}
+
+async function sendStatus(chatId: number, state: ChatState) {
+  const effectiveChannel = getEffectiveChannel(state);
+  await telegram.sendMessage(
+    chatId,
+    [
+      `Channel: ${effectiveChannel.name}`,
+      `Country: ${effectiveChannel.country}`,
+      `Stage: ${state.currentStage}`,
+      `Template bank: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
+      `Pager account: ${state.pagerAccount ? "saved" : "not connected"}`,
+      `Pending action: ${state.pendingAction ?? "none"}`,
+    ].join("\n"),
+    buildMainMenuKeyboard(),
+  );
+}
+
+function maskEmail(email?: string): string {
+  if (!email) {
+    return "unknown";
+  }
+
+  const [name, domain] = email.split("@");
+  if (!domain) {
+    return email;
+  }
+
+  if (name.length <= 2) {
+    return `${name[0] ?? "*"}*@${domain}`;
+  }
+
+  return `${name.slice(0, 2)}***@${domain}`;
 }
 
 main().catch((error) => {

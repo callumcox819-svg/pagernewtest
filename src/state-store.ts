@@ -2,11 +2,27 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Stage } from "./config.js";
 
+export type PendingAction =
+  | "await_pager_email"
+  | "await_pager_password"
+  | "await_pager_cookies";
+
+export type PagerAccountState = {
+  authMode: "credentials" | "cookies";
+  email?: string;
+  password?: string;
+  cookies?: string;
+  connectedAt: string;
+};
+
 export type ChatState = {
   chatId: number;
   channelId: string;
   currentStage: Stage;
   templateBankOverride?: string;
+  pendingAction?: PendingAction;
+  draftPagerEmail?: string;
+  pagerAccount?: PagerAccountState;
   updatedAt: string;
 };
 
