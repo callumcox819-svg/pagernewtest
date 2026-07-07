@@ -163,10 +163,26 @@ export function getConfigEnabledChannelIds(config: BotConfig): string[] {
   return config.channels.filter((channel) => channel.enabled).map((channel) => channel.id);
 }
 
+export function isChannelConfigured(config: BotConfig, channelId: string): boolean {
+  return Boolean(getChannelConfig(config, channelId));
+}
+
+export function statusMapForCountry(config: BotConfig, country: CountryCode): ChannelConfig["statusMap"] {
+  const channel = config.channels.find((item) => item.country === country);
+  if (channel) {
+    return channel.statusMap;
+  }
+  const fallback = config.channels[0];
+  if (!fallback) {
+    throw new Error("No channels found in config");
+  }
+  return fallback.statusMap;
+}
+
 export function getDefaultEnabledChannel(config: BotConfig): ChannelConfig {
-  const channel = config.channels.find((item) => item.enabled);
+  const channel = config.channels.find((item) => item.enabled) ?? config.channels[0];
   if (!channel) {
-    throw new Error("No enabled channels found in config");
+    throw new Error("No channels found in config");
   }
   return channel;
 }

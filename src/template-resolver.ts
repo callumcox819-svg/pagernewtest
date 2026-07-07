@@ -1,11 +1,17 @@
 import type { BotConfig, CountryCode, TemplateRole } from "./config.js";
 import { getTemplateBank } from "./config.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
+import { loadLocalZmScript } from "./zm-local-scripts.js";
 import {
   CM_FOLDER_NAME_HINTS,
-  scriptSearchNeedles,
-  scriptSnippet,
+  scriptSearchNeedles as cmScriptSearchNeedles,
+  scriptSnippet as cmScriptSnippet,
 } from "./cm-script-engine.js";
+import {
+  ZM_FOLDER_NAME_HINTS,
+  scriptSearchNeedles as zmScriptSearchNeedles,
+  scriptSnippet as zmScriptSnippet,
+} from "./zm-script-engine.js";
 import type { PagerClient, PagerSavedReply } from "./pager-client.js";
 
 const replyCache = new Map<string, PagerSavedReply[]>();
@@ -43,8 +49,9 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
   },
 };
 
-export async function resolveCmTemplateFolderId(
+async function resolveTemplateFolderId(
   client: PagerClient,
+  hints: string[],
   preferredId?: string,
   liveBanks?: Array<{ id: string; name: string }>,
 ): Promise<string | undefined> {
@@ -57,7 +64,7 @@ export async function resolveCmTemplateFolderId(
 
   for (const bank of liveBanks ?? []) {
     const normalized = bank.name.toLowerCase();
-    if (CM_FOLDER_NAME_HINTS.some((hint) => normalized.includes(hint))) {
+    if (hints.some((hint) => normalized.includes(hint))) {
       const replies = await loadFolderReplies(client, bank.id).catch(() => []);
       if (replies.length) {
         return bank.id;
@@ -68,7 +75,7 @@ export async function resolveCmTemplateFolderId(
   const banks = await client.getTemplateBanks().catch(() => []);
   for (const bank of banks) {
     const normalized = bank.name.toLowerCase();
-    if (!CM_FOLDER_NAME_HINTS.some((hint) => normalized.includes(hint))) {
+    if (!hints.some((hint) => normalized.includes(hint))) {
       continue;
     }
     const replies = await loadFolderReplies(client, bank.id).catch(() => []);
@@ -79,12 +86,28 @@ export async function resolveCmTemplateFolderId(
 
   for (const bank of liveBanks ?? []) {
     const normalized = bank.name.toLowerCase();
-    if (CM_FOLDER_NAME_HINTS.some((hint) => normalized.includes(hint))) {
+    if (hints.some((hint) => normalized.includes(hint))) {
       return bank.id;
     }
   }
 
   return undefined;
+}
+
+export async function resolveCmTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, CM_FOLDER_NAME_HINTS, preferredId, liveBanks);
+}
+
+export async function resolveZmTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, ZM_FOLDER_NAME_HINTS, preferredId, liveBanks);
 }
 
 export async function resolveScriptTextByKey(
@@ -93,28 +116,29 @@ export async function resolveScriptTextByKey(
     folderId?: string;
     liveBanks?: Array<{ id: string; name: string }>;
     scriptKey: string;
+    country?: CountryCode;
   },
 ): Promise<string | undefined> {
-  const folderId = await resolveCmTemplateFolderId(
-    client,
-    options.folderId,
-    options.liveBanks,
-  );
+  const country = options.country ?? "CM";
+  const folderId =
+    country === "ZM"
+      ? await resolveZmTemplateFolderId(client, options.folderId, options.liveBanks)
+      : await resolveCmTemplateFolderId(client, options.folderId, options.liveBanks);
 
   if (folderId) {
     const replies = await loadFolderReplies(client, folderId);
-    const fromPager = matchReplyByScriptKey(replies, options.scriptKey);
+    const fromPager = matchReplyByScriptKey(replies, options.scriptKey, country);
     if (fromPager?.text?.trim()) {
       return fromPager.text;
     }
     console.warn(
-      `CM script pager miss key=${options.scriptKey} folder=${folderId.slice(0, 8)} replies=${replies.length}`,
+      `${country} script pager miss key=${options.scriptKey} folder=${folderId.slice(0, 8)} replies=${replies.length}`,
     );
   }
 
-  const local = loadLocalCmScript(options.scriptKey);
+  const local = country === "ZM" ? loadLocalZmScript(options.scriptKey) : loadLocalCmScript(options.scriptKey);
   if (local?.trim()) {
-    console.log(`CM script local fallback key=${options.scriptKey}`);
+    console.log(`${country} script local fallback key=${options.scriptKey}`);
     return local;
   }
 
@@ -159,6 +183,7 @@ async function loadFolderReplies(client: PagerClient, folderId: string): Promise
 function matchReplyByScriptKey(
   replies: PagerSavedReply[],
   scriptKey: string,
+  country: CountryCode,
 ): PagerSavedReply | undefined {
   const keyNeedle = scriptKey.toLowerCase();
   const byName = replies.filter((reply) => (reply.name ?? "").toLowerCase().includes(keyNeedle));
@@ -166,7 +191,9 @@ function matchReplyByScriptKey(
     return byName[byName.length - 1];
   }
 
-  const primary = scriptSnippet(scriptKey).trim().toLowerCase();
+  const snippetForCountry = country === "ZM" ? zmScriptSnippet : cmScriptSnippet;
+  const needlesForCountry = country === "ZM" ? zmScriptSearchNeedles : cmScriptSearchNeedles;
+  const primary = snippetForCountry(scriptKey).trim().toLowerCase();
   if (primary) {
     const byPrimary = replies.filter((reply) => normalizeNeedle(reply.text).includes(primary));
     if (byPrimary.length) {
@@ -174,7 +201,7 @@ function matchReplyByScriptKey(
     }
   }
 
-  const needles = scriptSearchNeedles(scriptKey);
+  const needles = needlesForCountry(scriptKey);
   let lastHit: PagerSavedReply | undefined;
   for (const reply of replies) {
     const name = (reply.name ?? "").toLowerCase();

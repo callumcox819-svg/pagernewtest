@@ -7,7 +7,7 @@ bot:
 channels:
   - id: "5a70fbee-3dfc-4299-b3fd-7f9f18db5bfe"
     name: "Brice Moukoko"
-    enabled: true
+    enabled: false
     country: "CM"
     templateBank: "cm-default"
     statusMap:
@@ -39,22 +39,39 @@ channels:
       dormant: "игнор"
       not_ready: "не готов"
 
-  - id: "2f6c9056-0e32-416a-9bbe-2322311fbe33"
-    name: "Moses Zulu"
+  - id: "74b62a8f-f270-4ff2-8795-8bd78192d712"
+    name: "Kelvin Phiri"
     enabled: false
     country: "ZM"
     templateBank: "zm-default"
     statusMap:
-      new_lead: "raw-new-lead"
-      engaged: "raw-engaged"
-      registered: "raw-registered"
-      deposit_pending: "raw-deposit-pending"
-      waiting_id: "raw-waiting-id"
-      post_deposit: "raw-post-deposit"
-      completed: "raw-completed"
-      no_money: "raw-no-money"
-      dormant: "raw-dormant"
-      not_ready: "raw-not-ready"
+      new_lead: "Без статусу"
+      engaged: "Без статусу"
+      registered: "В процесі реєстрації"
+      deposit_pending: "В процесі реєстрації"
+      waiting_id: "Чекаю ID"
+      post_deposit: "Завершено"
+      completed: "Завершено"
+      no_money: "Немає грошей"
+      dormant: "Скасовано"
+      not_ready: "Немає грошей"
+
+  - id: "234c685f-a8c1-4a9a-b1d2-999b3235c285"
+    name: "tehsup-test-channel"
+    enabled: false
+    country: "ZM"
+    templateBank: "zm-default"
+    statusMap:
+      new_lead: "Без статусу"
+      engaged: "Без статусу"
+      registered: "В процесі реєстрації"
+      deposit_pending: "В процесі реєстрації"
+      waiting_id: "Чекаю ID"
+      post_deposit: "Завершено"
+      completed: "Завершено"
+      no_money: "Немає грошей"
+      dormant: "Скасовано"
+      not_ready: "Немає грошей"
 
 templateBanks:
   - name: "eg-default"

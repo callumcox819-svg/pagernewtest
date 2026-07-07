@@ -4,9 +4,10 @@ import {
   type Stage,
   getChannelConfig,
   getConfigEnabledChannelIds,
-  getDefaultEnabledChannel,
+  isChannelConfigured,
   getPlaybook,
   resolveYamlTemplateBankName,
+  statusMapForCountry,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
 import {
@@ -17,14 +18,23 @@ import {
 import { ocrLangForCountry } from "./ocr-lang.js";
 import {
   classifyCmMessage,
-  collectOutgoingTexts,
-  funnelStepFromScriptGaps,
-  inferStepFromThread,
-  regLinkSentInHistory,
-  regSendTriggersInProgress,
+  collectOutgoingTexts as collectCmOutgoingTexts,
+  funnelStepFromScriptGaps as cmFunnelStepFromScriptGaps,
+  inferStepFromThread as cmInferStepFromThread,
+  regLinkSentInHistory as cmRegLinkSentInHistory,
+  regSendTriggersInProgress as cmRegSendTriggersInProgress,
   resolveCmFunnelScripts,
   tierSentInHistory,
 } from "./cm-script-engine.js";
+import {
+  classifyZmMessage,
+  collectOutgoingTexts as collectZmOutgoingTexts,
+  funnelStepFromScriptGaps as zmFunnelStepFromScriptGaps,
+  inferStepFromThread as zmInferStepFromThread,
+  regLinkSentInHistory as zmRegLinkSentInHistory,
+  regSendTriggersInProgress as zmRegSendTriggersInProgress,
+  resolveZmFunnelScripts,
+} from "./zm-script-engine.js";
 import { isDepositTierChoice, isRegistrationConfirmed } from "./cm-intent.js";
 import type { AppEnv } from "./env.js";
 import {
@@ -44,7 +54,7 @@ import type {
   ConversationRuntimeState,
   StateStore,
 } from "./state-store.js";
-import { resolveCmTemplateFolderId, resolveScriptTextByKey, resolveTemplateText } from "./template-resolver.js";
+import { resolveCmTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import {
   countApiStatusFolders,
   isNoStatusConversation,
@@ -243,6 +253,9 @@ async function processConversation(
   if (channel.country === "CM") {
     return processCmConversation(deps, state, client, conv, runtime, channel);
   }
+  if (channel.country === "ZM") {
+    return processZmConversation(deps, state, client, conv, runtime, channel);
+  }
   return processGenericConversation(deps, state, client, conv, runtime, channel);
 }
 
@@ -280,11 +293,11 @@ async function processCmConversation(
 
   const lastIncoming = latest;
   const lastIncomingAt = lastIncoming.createdAt ?? "";
-  const outgoingTexts = collectOutgoingTexts(messages);
+  const outgoingTexts = collectCmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const awaitingRegAfterTierChoice =
     tierSentInHistory(outgoingTexts) &&
-    !regLinkSentInHistory(outgoingTexts) &&
+    !cmRegLinkSentInHistory(outgoingTexts) &&
     isDepositTierChoice(latestCustomerText);
 
   if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
@@ -309,7 +322,7 @@ async function processCmConversation(
   const statusName = (conv.status?.name ?? "").toLowerCase();
   const inProgressStatus =
     !isNoStatusConversation(conv) &&
-    (/процес|process|registered|рега/i.test(statusName) || regLinkSentInHistory(outgoingTexts));
+    (/процес|process|registered|рега/i.test(statusName) || cmRegLinkSentInHistory(outgoingTexts));
   if (
     inProgressStatus &&
     Number.isFinite(incomingAgeMs) &&
@@ -319,8 +332,8 @@ async function processCmConversation(
     return false;
   }
 
-  const threadStep = inferStepFromThread(messages);
-  const gapStep = funnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const threadStep = cmInferStepFromThread(messages);
+  const gapStep = cmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
   const imageUrl = extractImageUrl(lastIncoming);
   const playbook = getPlaybook(deps.config, channel.country);
@@ -397,6 +410,7 @@ async function processCmConversation(
       folderId,
       liveBanks: currentState.pagerAccount?.liveTemplateBanks,
       scriptKey,
+      country: "CM",
     });
     if (!replyText?.trim()) {
       if (scriptKey === "01_intro_2") {
@@ -441,7 +455,7 @@ async function processCmConversation(
     return false;
   }
 
-  if (regSendTriggersInProgress(scriptKeys)) {
+  if (cmRegSendTriggersInProgress(scriptKeys)) {
     const statusId = findInProgressStatusId(currentState);
     const operatorId = await client.probeOperatorUserId();
     if (statusId && operatorId) {
@@ -459,6 +473,218 @@ async function processCmConversation(
     channelId: runtime.channelId,
     currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
     funnelStep: Math.max(effectiveStep, scriptKeys.includes("09_deposit") ? 6 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: scriptKeys[scriptKeys.length - 1],
+    sendFailures: 0,
+  });
+
+  return true;
+}
+
+async function processZmConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
+  const convId = conv.id;
+  if (!isIncomingDirection(conv.lastMessageDirection)) {
+    return false;
+  }
+
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  if (!messages.length) {
+    return false;
+  }
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const latest = sorted[0];
+  if (!isIncomingDirection(latest.messageDirection)) {
+    return false;
+  }
+
+  const lastIncoming = latest;
+  const lastIncomingAt = lastIncoming.createdAt ?? "";
+  const outgoingTexts = collectZmOutgoingTexts(messages);
+  const latestCustomerText = (lastIncoming.text || "").trim();
+
+  if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
+    return false;
+  }
+
+  if (hasDeliveredReplyAfter(sorted, lastIncomingAt)) {
+    if (convState.lastCustomerMessageId !== lastIncoming.id) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+      });
+    }
+    return false;
+  }
+
+  const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
+  const statusName = (conv.status?.name ?? "").toLowerCase();
+  const inProgressStatus =
+    !isNoStatusConversation(conv) &&
+    (/процес|process|registered|рега/i.test(statusName) || zmRegLinkSentInHistory(outgoingTexts));
+  if (
+    inProgressStatus &&
+    Number.isFinite(incomingAgeMs) &&
+    incomingAgeMs > 2 * 60 * 60 * 1000 &&
+    outgoingTexts.length >= 2
+  ) {
+    return false;
+  }
+
+  const threadStep = zmInferStepFromThread(messages);
+  const gapStep = zmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
+  const imageUrl = extractImageUrl(lastIncoming);
+  const playbook = getPlaybook(deps.config, channel.country);
+
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
+  if (imageUrl) {
+    const imageHandled = await tryHandleCustomerImage(deps, {
+      state,
+      client,
+      conv,
+      runtime,
+      channel,
+      convState,
+      convId,
+      lastIncoming,
+      text: latestCustomerText,
+      imageUrl,
+      playbook,
+      outgoingTexts,
+    });
+    if (imageHandled) {
+      return true;
+    }
+  }
+
+  const intent = classifyZmMessage(latestCustomerText, {
+    hasImage: Boolean(imageUrl),
+    funnelStep: effectiveStep,
+  });
+
+  const scriptKeys = resolveZmFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    { hasImage: Boolean(imageUrl) },
+  );
+
+  if (!scriptKeys.length) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} ZM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+    );
+    return false;
+  }
+
+  console.log(
+    `Pager worker: ZM ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+  );
+
+  const folderId = await resolveZmTemplateFolderId(
+    client,
+    runtime.runtime.templateBankId,
+    currentState.pagerAccount?.liveTemplateBanks,
+  );
+
+  let sentAny = false;
+  for (const scriptKey of scriptKeys) {
+    const replyText = await resolveScriptTextByKey(client, {
+      folderId,
+      liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+      scriptKey,
+      country: "ZM",
+    });
+    if (!replyText?.trim()) {
+      if (scriptKey === "05_link" && sentAny) {
+        const fallbackLink = "https://tinyurl.com/ZAM577";
+        const sent = await client.sendMessageReliable(convId, fallbackLink, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          await sleep(500);
+        }
+        continue;
+      }
+      console.warn(
+        `ZM script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${scriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
+      );
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText.trim(), {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      const failures = (convState.sendFailures ?? 0) + 1;
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: failures,
+      });
+      console.error(`Pager worker: ZM send failed ${convId.slice(0, 8)} key=${scriptKey}`);
+      return sentAny;
+    }
+    sentAny = true;
+    await sleep(500);
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  if (zmRegSendTriggersInProgress(scriptKeys)) {
+    const statusId = findInProgressStatusId(currentState);
+    const operatorId = await client.probeOperatorUserId();
+    if (statusId && operatorId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(`Pager worker: ZM ${convId.slice(0, 8)} status -> in progress`);
+      } catch (error) {
+        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
+    funnelStep: Math.max(effectiveStep, scriptKeys.includes("06_deposit") ? 6 : effectiveStep),
     lastCustomerMessageId: lastIncoming.id,
     lastCustomerMessageAt: lastIncoming.createdAt,
     lastReplyAt: new Date().toISOString(),
@@ -633,10 +859,18 @@ type EnabledChannel = {
   runtime: ChannelRuntimeState;
 };
 
+function isChannelAllowed(config: BotConfig, state: ChatState, channelId: string): boolean {
+  if (isChannelConfigured(config, channelId)) {
+    return true;
+  }
+  return Boolean(state.channels?.[channelId]?.country);
+}
+
 function getEnabledChannels(config: BotConfig, state: ChatState): EnabledChannel[] {
-  const configAllowed = new Set(getConfigEnabledChannelIds(config));
   const enabledIds = new Set(
-    collectEnabledChannelIdsFromState(state).filter((channelId) => configAllowed.has(channelId)),
+    collectEnabledChannelIdsFromState(state).filter((channelId) =>
+      isChannelAllowed(config, state, channelId),
+    ),
   );
   const liveChannels = state.pagerAccount?.liveChannels ?? [];
   const enabled: EnabledChannel[] = [];
@@ -710,9 +944,8 @@ async function normalizeEnabledChannelsToConfig(
   deps: WorkerDeps,
   state: ChatState,
 ): Promise<ChatState | undefined> {
-  const allowed = new Set(getConfigEnabledChannelIds(deps.config));
   const current = collectEnabledChannelIdsFromState(state);
-  const filtered = current.filter((channelId) => allowed.has(channelId));
+  const filtered = current.filter((channelId) => isChannelAllowed(deps.config, state, channelId));
   if (filtered.length === current.length) {
     return state;
   }
@@ -886,7 +1119,6 @@ function buildRuntimeChannelConfig(
   runtime: EnabledChannel,
 ): ChannelConfig {
   const mapped = getChannelConfig(config, runtime.channelId);
-  const fallback = getDefaultEnabledChannel(config);
   const country = runtime.runtime.country;
   const templateBank = resolveYamlTemplateBankName(config, country, runtime.channelId);
 
@@ -896,7 +1128,7 @@ function buildRuntimeChannelConfig(
     enabled: true,
     country,
     templateBank,
-    statusMap: mapped?.statusMap ?? fallback.statusMap,
+    statusMap: mapped?.statusMap ?? statusMapForCountry(config, country),
   };
 }
 
@@ -1028,7 +1260,14 @@ async function tryHandleCustomerImage(
     proofKind = classifyProofFromText(ctx.playbook, ctx.text).proofKind;
   }
 
-  if (proofKind === "unclear_screenshot" && regLinkSentInHistory(ctx.outgoingTexts)) {
+  if (proofKind === "unclear_screenshot") {
+    const regLinkSent =
+      ctx.channel.country === "ZM"
+        ? zmRegLinkSentInHistory(ctx.outgoingTexts)
+        : cmRegLinkSentInHistory(ctx.outgoingTexts);
+    if (!regLinkSent) {
+      return false;
+    }
     const replyText = await resolveTemplateText(deps.config, ctx.client, {
       folderId: ctx.runtime.runtime.templateBankId,
       yamlBankName: ctx.channel.templateBank,

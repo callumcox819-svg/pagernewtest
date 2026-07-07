@@ -5,6 +5,7 @@ import {
   getDefaultEnabledChannel,
   getPlaybook,
   loadConfig,
+  statusMapForCountry,
 } from "./config.js";
 import { ClerkPasswordAuthClient, enrichPagerCookies, parseCookieHeader } from "./clerk-auth.js";
 import { decideNextAction } from "./decision-engine.js";
@@ -1105,16 +1106,17 @@ function resolveChannelForState(state: ChatState, channelId: string) {
   }
 
   const country = inferCountryFromName(live.name);
+  const resolvedCountry = getChannelCountry(state, live.id, country);
   return {
     id: live.id,
     name: live.name,
     enabled: getChannelEnabled(state, live.id),
-    country: getChannelCountry(state, live.id, country),
+    country: resolvedCountry,
     templateBank:
       state.channels?.[live.id]?.templateBank ??
       pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), country)?.name ??
       "Шаблоны",
-    statusMap: getDefaultEnabledChannel(config).statusMap,
+    statusMap: statusMapForCountry(config, resolvedCountry),
     isLive: true,
   };
 }
