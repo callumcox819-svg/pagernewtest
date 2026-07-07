@@ -65,6 +65,10 @@ export function getEnabledFolderIds(state: {
   return new Set(state.statusFolders.filter((folder) => folder.enabled).map((folder) => folder.id));
 }
 
+export function countApiStatusFolders(folders?: StatusFolderState[]): number {
+  return folders?.filter((folder) => folder.id !== "" && folder.id !== "*").length ?? 0;
+}
+
 export function mergeStatusFolderList(
   apiStatuses: Array<{ id: string; name: string }>,
   existing?: StatusFolderState[],

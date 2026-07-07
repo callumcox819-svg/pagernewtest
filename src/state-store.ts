@@ -62,6 +62,11 @@ export type ChatState = {
   channels?: Record<string, ChannelRuntimeState>;
   conversations?: Record<string, ConversationRuntimeState>;
   statusFolders?: StatusFolderState[];
+  /** Survives relogin/redeploy — source of truth for worker processing. */
+  operatorSettings?: {
+    enabledChannelIds: string[];
+    statusFolders?: StatusFolderState[];
+  };
   updatedAt: string;
 };
 
@@ -260,12 +265,21 @@ export function mergeChatState(
     ? { ...(current.pagerAccount ?? { authMode: "cookies", connectedAt: current.updatedAt }), ...patch.pagerAccount }
     : current.pagerAccount;
 
+  const nextOperatorSettings = patch.operatorSettings
+    ? { ...(current.operatorSettings ?? { enabledChannelIds: [] }), ...patch.operatorSettings }
+    : current.operatorSettings;
+
   let enabledChannelIds = patch.enabledChannelIds ?? current.enabledChannelIds;
+  if (!enabledChannelIds?.length && nextOperatorSettings?.enabledChannelIds?.length) {
+    enabledChannelIds = nextOperatorSettings.enabledChannelIds;
+  }
   if (!enabledChannelIds?.length && nextChannels) {
     enabledChannelIds = Object.entries(nextChannels)
       .filter(([, runtime]) => runtime.enabled)
       .map(([channelId]) => channelId);
   }
+
+  const statusFolders = patch.statusFolders ?? nextOperatorSettings?.statusFolders ?? current.statusFolders;
 
   return {
     ...current,
@@ -273,7 +287,9 @@ export function mergeChatState(
     channels: nextChannels,
     conversations: nextConversations,
     pagerAccount: nextPagerAccount,
+    operatorSettings: nextOperatorSettings,
     enabledChannelIds,
+    statusFolders,
     updatedAt: new Date().toISOString(),
   };
 }

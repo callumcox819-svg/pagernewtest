@@ -14,11 +14,16 @@ import { classifyProofFromImage } from "./proof-classifier.js";
 import { clearTemplateReplyCache } from "./template-resolver.js";
 import { createStateStore, type ChannelRuntimeState, type ChatState, type StateStore } from "./state-store.js";
 import {
-  buildStatusFolderList,
+  countApiStatusFolders,
   mergeStatusFolderList,
   setAllStatusFolders,
   toggleStatusFolder,
 } from "./status-folders.js";
+import {
+  buildPagerAccountPatch,
+  ensurePagerSession,
+  resolvePagerOrgSlug,
+} from "./pager-session.js";
 import {
   TelegramApi,
   buildChannelKeyboard,
@@ -46,11 +51,26 @@ const telegram = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
 async function main() {
   stateStore = await createStateStore(env);
   console.log(`Starting ${env.TELEGRAM_BOT_NAME}...`);
+  await warmupConnectedAccounts();
 
   await Promise.all([
     runTelegramBot(),
     runPagerWorker({ env, config, stateStore, telegram }),
   ]);
+}
+
+async function warmupConnectedAccounts(): Promise<void> {
+  const states = await stateStore.listAll();
+  for (const state of states) {
+    if (!state.pagerAccount?.cookies?.trim() && !(state.pagerAccount?.email && state.pagerAccount?.password)) {
+      continue;
+    }
+    try {
+      await ensurePagerSession({ env, stateStore }, state);
+    } catch (error) {
+      console.warn(`Startup session warmup failed for chat ${state.chatId}:`, formatError(error));
+    }
+  }
 }
 
 async function runTelegramBot(): Promise<never> {
@@ -288,8 +308,12 @@ async function handleCallback(
     }
 
     if (value === "all_on" || value === "all_off") {
-      const folders = setAllStatusFolders(state.statusFolders ?? [], value === "all_on");
-      const nextState = (await stateStore.patch(chatId, { statusFolders: folders })) ?? state;
+    const folders = setAllStatusFolders(state.statusFolders ?? [], value === "all_on");
+    const nextState =
+      (await stateStore.patch(chatId, {
+        statusFolders: folders,
+        operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
+      })) ?? state;
       await showFoldersMenu(chatId, nextState, messageId);
       return;
     }
@@ -299,7 +323,11 @@ async function handleCallback(
   if (kind === "folder_toggle" && value) {
     const index = Number(value);
     const folders = toggleStatusFolder(state.statusFolders ?? [], index);
-    const nextState = (await stateStore.patch(chatId, { statusFolders: folders })) ?? state;
+    const nextState =
+      (await stateStore.patch(chatId, {
+        statusFolders: folders,
+        operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
+      })) ?? state;
     await telegram.answerCallbackQuery(callbackId);
     await showFoldersMenu(chatId, nextState, messageId);
     return;
@@ -658,6 +686,9 @@ function isChannelEnabled(
   channelId: string,
   runtimeEnabled = false,
 ): boolean {
+  if (state.operatorSettings?.enabledChannelIds?.includes(channelId)) {
+    return true;
+  }
   if (state.enabledChannelIds?.includes(channelId)) {
     return true;
   }
@@ -665,7 +696,10 @@ function isChannelEnabled(
 }
 
 function collectEnabledChannelIds(state: ChatState): string[] {
-  const enabled = new Set(state.enabledChannelIds ?? []);
+  const enabled = new Set(state.operatorSettings?.enabledChannelIds ?? []);
+  for (const id of state.enabledChannelIds ?? []) {
+    enabled.add(id);
+  }
   for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
     if (runtime.enabled) {
       enabled.add(channelId);
@@ -700,6 +734,7 @@ async function setChannelEnabled(
         enabled,
       },
     },
+    operatorSettings: buildOperatorSettings(state, { enabledChannelIds: [...enabledIds] }),
   });
 }
 
@@ -723,7 +758,59 @@ async function setAllChannelsEnabled(
   return stateStore.patch(chatId, {
     enabledChannelIds: enabledIds,
     channels,
+    operatorSettings: buildOperatorSettings(state, { enabledChannelIds: enabledIds }),
   });
+}
+
+function buildOperatorSettings(
+  state: ChatState,
+  overrides: Partial<NonNullable<ChatState["operatorSettings"]>>,
+): NonNullable<ChatState["operatorSettings"]> {
+  return {
+    enabledChannelIds:
+      overrides.enabledChannelIds ??
+      state.operatorSettings?.enabledChannelIds ??
+      collectEnabledChannelIds(state),
+    statusFolders:
+      overrides.statusFolders ??
+      state.operatorSettings?.statusFolders ??
+      state.statusFolders,
+  };
+}
+
+function mergeChannelsOnLogin(
+  state: ChatState,
+  channels: Array<{ id: string; name: string }>,
+  templateBanks: Array<{ id: string; name: string }>,
+): { channels: Record<string, ChannelRuntimeState>; enabledChannelIds: string[] } {
+  const defaults = buildChannelRuntimeMap(channels, templateBanks);
+  const enabledIds = new Set(
+    state.operatorSettings?.enabledChannelIds?.length
+      ? state.operatorSettings.enabledChannelIds
+      : collectEnabledChannelIds(state),
+  );
+
+  const merged: Record<string, ChannelRuntimeState> = { ...defaults };
+  for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
+    if (merged[channelId]) {
+      merged[channelId] = { ...merged[channelId], ...runtime };
+    }
+  }
+
+  if (!enabledIds.size) {
+    for (const channel of channels) {
+      enabledIds.add(channel.id);
+      merged[channel.id] = { ...merged[channel.id], enabled: true };
+    }
+  } else {
+    for (const channelId of enabledIds) {
+      if (merged[channelId]) {
+        merged[channelId] = { ...merged[channelId], enabled: true };
+      }
+    }
+  }
+
+  return { channels: merged, enabledChannelIds: [...enabledIds] };
 }
 
 function getLiveTemplateBanks(state: ChatState) {
@@ -801,7 +888,7 @@ async function showChannelsMenu(chatId: number, state: ChatState, messageId?: nu
 
 async function showFoldersMenu(chatId: number, state: ChatState, messageId?: number) {
   let currentState = state;
-  if (!currentState.pagerAccount?.cookies) {
+  if (!currentState.pagerAccount?.cookies && !currentState.pagerAccount?.password) {
     await telegram.sendMessage(
       chatId,
       "Сначала подключи Pager аккаунт через «Pager аккаунт».",
@@ -810,20 +897,28 @@ async function showFoldersMenu(chatId: number, state: ChatState, messageId?: num
     return;
   }
 
-  if (!currentState.statusFolders?.length || countApiStatusFolders(currentState.statusFolders) === 0) {
+  const savedFolders =
+    currentState.operatorSettings?.statusFolders ?? currentState.statusFolders ?? [];
+
+  if (countApiStatusFolders(savedFolders) === 0) {
     const synced = await syncStatusFolders(chatId, currentState);
     currentState = synced.state ?? currentState;
-    if (!currentState.statusFolders?.length) {
+    if (countApiStatusFolders(currentState.statusFolders) === 0) {
       await telegram.sendMessage(
         chatId,
         [
           "Не удалось загрузить папки из Pager.",
-          synced.error ? `Причина: ${synced.error}` : "Попробуй обновить или перелогиниться.",
+          synced.error ? `Причина: ${synced.error}` : "Сессия обновляется автоматически, попробуй через минуту.",
         ].join("\n"),
         buildFoldersRetryKeyboard(),
       );
       return;
     }
+  } else {
+    currentState = {
+      ...currentState,
+      statusFolders: savedFolders,
+    };
   }
 
   const folders = currentState.statusFolders ?? [];
@@ -856,31 +951,30 @@ async function syncStatusFolders(
   chatId: number,
   state: ChatState,
 ): Promise<{ state?: ChatState; error?: string }> {
-  const cookies = state.pagerAccount?.cookies?.trim();
-  if (!cookies) {
-    return { error: "Pager аккаунт не подключён" };
-  }
-
-  const previousApiFolderCount = countApiStatusFolders(state.statusFolders);
+  const previousFolders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  const previousApiFolderCount = countApiStatusFolders(previousFolders);
 
   try {
-    const client = buildPagerClient(
-      cookies,
-      state.pagerAccount?.organizationId,
-      resolvePagerOrgSlug(state),
-    );
-    await client.prepareSession();
-    const session = await client.bootstrapSession();
+    const sessionResult = await ensurePagerSession({ env, stateStore }, state);
+    if (!sessionResult) {
+      return { state, error: "Pager сессия недоступна" };
+    }
 
+    const { client, state: sessionState } = sessionResult;
     const statuses = await client.loadAllStatuses();
-
-    const statusFolders = mergeStatusFolderList(statuses, state.statusFolders);
+    const statusFolders = mergeStatusFolderList(
+      statuses,
+      previousFolders,
+    );
     const apiCount = countApiStatusFolders(statusFolders);
     const patch: Partial<Omit<ChatState, "chatId">> = {
-      pagerAccount: buildPagerAccountPatch(state, {
-        ...session,
+      pagerAccount: buildPagerAccountPatch(sessionState, {
+        organizationId: sessionState.pagerAccount?.organizationId,
+        organizationSlug: sessionState.pagerAccount?.organizationSlug,
+        organizationName: sessionState.pagerAccount?.organizationName,
         cookieHeader: client.getCookieHeader(),
       }),
+      operatorSettings: buildOperatorSettings(sessionState, { statusFolders }),
     };
     if (apiCount > 0 || !previousApiFolderCount) {
       patch.statusFolders = statusFolders;
@@ -1029,39 +1123,6 @@ function buildPagerClient(cookieHeader: string, orgId?: string, orgSlug?: string
   });
 }
 
-function buildPagerAccountPatch(
-  state: ChatState,
-  session: {
-    organizationId?: string;
-    organizationSlug?: string;
-    organizationName?: string;
-    cookieHeader: string;
-  },
-): NonNullable<ChatState["pagerAccount"]> {
-  const base =
-    state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() };
-  return {
-    ...base,
-    cookies: enrichPagerCookies(session.cookieHeader, {
-      organizationId: session.organizationId ?? base.organizationId,
-    }),
-    organizationId: session.organizationId ?? base.organizationId,
-    organizationSlug: session.organizationSlug ?? base.organizationSlug,
-    organizationName: session.organizationName ?? base.organizationName,
-  };
-}
-
-function countApiStatusFolders(folders?: Array<{ id: string }>): number {
-  return folders?.filter((folder) => folder.id !== "" && folder.id !== "*").length ?? 0;
-}
-
-function resolvePagerOrgSlug(state: ChatState): string | undefined {
-  return (
-    state.pagerAccount?.organizationSlug ??
-    state.pagerAccount?.organizationName?.toLowerCase()
-  );
-}
-
 function buildClerkAuthClient() {
   return new ClerkPasswordAuthClient({
     frontendApi: "clerk.pager.co.ua",
@@ -1104,7 +1165,15 @@ async function handlePendingInput(
         session.organizationSlug,
       );
       const statuses = await statusClient.loadAllStatuses().catch(() => []);
-      const statusFolders = mergeStatusFolderList(statuses);
+      const statusFolders = mergeStatusFolderList(
+        statuses,
+        state.operatorSettings?.statusFolders ?? state.statusFolders,
+      );
+      const merged = mergeChannelsOnLogin(
+        state,
+        session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
+        session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
+      );
       const enrichedCookies = enrichPagerCookies(login.cookieHeader, {
         organizationId: session.organizationId ?? login.organizationId,
         pagerUserId: login.pagerUserId,
@@ -1130,13 +1199,15 @@ async function handlePendingInput(
             name: bank.name,
             replyCount: bank.replyCount,
           })),
-          connectedAt: new Date().toISOString(),
+          connectedAt: state.pagerAccount?.connectedAt ?? new Date().toISOString(),
         },
-        channels: buildChannelRuntimeMap(
-          session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
-          session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
-        ),
+        channels: merged.channels,
+        enabledChannelIds: merged.enabledChannelIds,
         statusFolders,
+        operatorSettings: buildOperatorSettings(state, {
+          enabledChannelIds: merged.enabledChannelIds,
+          statusFolders,
+        }),
         draftPagerEmail: undefined,
       });
 
@@ -1175,7 +1246,15 @@ async function handlePendingInput(
         session.organizationSlug,
       );
       const statuses = await statusClient.loadAllStatuses().catch(() => []);
-      const statusFolders = mergeStatusFolderList(statuses);
+      const statusFolders = mergeStatusFolderList(
+        statuses,
+        state.operatorSettings?.statusFolders ?? state.statusFolders,
+      );
+      const merged = mergeChannelsOnLogin(
+        state,
+        session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
+        session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
+      );
       const enrichedCookies = enrichPagerCookies(text.trim(), {
         organizationId: session.organizationId,
       });
@@ -1197,13 +1276,15 @@ async function handlePendingInput(
             name: bank.name,
             replyCount: bank.replyCount,
           })),
-          connectedAt: new Date().toISOString(),
+          connectedAt: state.pagerAccount?.connectedAt ?? new Date().toISOString(),
         },
-        channels: buildChannelRuntimeMap(
-          session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
-          session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
-        ),
+        channels: merged.channels,
+        enabledChannelIds: merged.enabledChannelIds,
         statusFolders,
+        operatorSettings: buildOperatorSettings(state, {
+          enabledChannelIds: merged.enabledChannelIds,
+          statusFolders,
+        }),
         draftPagerEmail: undefined,
       });
       await telegram.sendMessage(
