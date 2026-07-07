@@ -113,13 +113,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     freshState = (await ensureStatusFolders(deps, freshState, client)) ?? freshState;
   }
 
+  freshState = (await deps.stateStore.get(freshState.chatId)) ?? freshState;
   const enabledChannels = getEnabledChannels(freshState);
 
   if (!enabledChannels.length) {
     const liveCount = freshState.pagerAccount?.liveChannels?.length ?? 0;
-    const enabledCount = Object.values(freshState.channels ?? {}).filter((item) => item.enabled).length;
+    const enabledIds = collectEnabledChannelIdsFromState(freshState);
     console.log(
-      `Pager worker: chat ${freshState.chatId} — no enabled channels (live=${liveCount}, enabledInState=${enabledCount})`,
+      `Pager worker: chat ${freshState.chatId} — no enabled channels (live=${liveCount}, enabledIds=${enabledIds.length}). Open «Каналы» and tap 🟢 on a channel name.`,
     );
     return;
   }
@@ -355,15 +356,21 @@ type EnabledChannel = {
 };
 
 function getEnabledChannels(state: ChatState): EnabledChannel[] {
+  const enabledIds = new Set(collectEnabledChannelIdsFromState(state));
   const liveChannels = state.pagerAccount?.liveChannels ?? [];
   const enabled: EnabledChannel[] = [];
 
   if (liveChannels.length) {
     for (const channel of liveChannels) {
-      const runtime = state.channels?.[channel.id];
-      if (!runtime?.enabled) {
+      if (!enabledIds.has(channel.id)) {
         continue;
       }
+      const runtime =
+        state.channels?.[channel.id] ??
+        ({
+          enabled: true,
+          country: inferCountryFromChannelName(channel.name),
+        } satisfies ChannelRuntimeState);
       enabled.push({
         channelId: channel.id,
         channelName: channel.name,
@@ -373,8 +380,9 @@ function getEnabledChannels(state: ChatState): EnabledChannel[] {
     return enabled;
   }
 
-  for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
-    if (!runtime.enabled) {
+  for (const channelId of enabledIds) {
+    const runtime = state.channels?.[channelId];
+    if (!runtime) {
       continue;
     }
     enabled.push({
@@ -384,6 +392,27 @@ function getEnabledChannels(state: ChatState): EnabledChannel[] {
     });
   }
   return enabled;
+}
+
+function collectEnabledChannelIdsFromState(state: ChatState): string[] {
+  const enabled = new Set(state.enabledChannelIds ?? []);
+  for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
+    if (runtime.enabled) {
+      enabled.add(channelId);
+    }
+  }
+  return [...enabled];
+}
+
+function inferCountryFromChannelName(name: string): "ZM" | "CM" | "EG" {
+  const normalized = name.toLowerCase();
+  if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {
+    return "EG";
+  }
+  if (/moukoko|ndzi|ekambi|cameroon|cm|tchouameni/.test(normalized)) {
+    return "CM";
+  }
+  return "ZM";
 }
 
 function getConversationState(

@@ -12,7 +12,7 @@ import { PagerClient } from "./pager-client.js";
 import { runPagerWorker } from "./pager-worker.js";
 import { classifyProofFromImage } from "./proof-classifier.js";
 import { clearTemplateReplyCache } from "./template-resolver.js";
-import { createStateStore, type ChatState, type StateStore } from "./state-store.js";
+import { createStateStore, type ChannelRuntimeState, type ChatState, type StateStore } from "./state-store.js";
 import {
   buildStatusFolderList,
   mergeStatusFolderList,
@@ -113,40 +113,64 @@ async function handleCallback(
   const [kind, value, extra] = data.split(":");
 
   if (kind === "channels") {
-    await telegram.answerCallbackQuery(callbackId);
-    if (value === "back" || value === "refresh") {
-      const nextState =
-        value === "refresh" ? (await refreshPagerData(chatId, state)) ?? state : state;
-      await showChannelsMenu(chatId, nextState, messageId);
-      return;
+    if (value === "all_on" || value === "all_off") {
+      // handled below
+    } else {
+      await telegram.answerCallbackQuery(callbackId);
+      if (value === "back" || value === "refresh") {
+        const nextState =
+          value === "refresh" ? (await refreshPagerData(chatId, state)) ?? state : state;
+        await showChannelsMenu(chatId, nextState, messageId);
+        return;
+      }
     }
   }
 
   if (kind === "channel_toggle" && value) {
-    const channel = getChannelByIndex(state, value);
+    const latestState = (await stateStore.get(chatId)) ?? state;
+    const channel = getChannelByIndex(latestState, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
     }
 
-    const runtime = getChannelRuntime(state, channel.id, channel.country);
-    const nextEnabled = !runtime.enabled;
-    await stateStore.patch(chatId, {
-      channels: {
-        ...(state.channels ?? {}),
-        [channel.id]: {
-          ...runtime,
-          enabled: nextEnabled,
-        },
-      },
-    });
-    const nextState = await stateStore.get(chatId) ?? state;
+    const runtime = getChannelRuntime(latestState, channel.id, channel.country);
+    const nextEnabled = !isChannelEnabled(latestState, channel.id, runtime.enabled);
+    const nextState = await setChannelEnabled(chatId, latestState, channel.id, nextEnabled);
     await telegram.answerCallbackQuery(callbackId, nextEnabled ? "🟢 Включено" : "🔴 Выключено");
     if (messageId) {
       await telegram.editMessageReplyMarkup(
         chatId,
         messageId,
-        buildChannelKeyboard(getSelectableChannels(nextState)),
+        buildChannelKeyboard(getSelectableChannels(nextState ?? latestState)),
+      );
+    }
+    return;
+  }
+
+  if (kind === "channels" && value === "all_on") {
+    const latestState = (await stateStore.get(chatId)) ?? state;
+    const nextState = await setAllChannelsEnabled(chatId, latestState, true);
+    await telegram.answerCallbackQuery(callbackId, "Все каналы включены");
+    if (messageId) {
+      await telegram.editMessageReplyMarkup(
+        chatId,
+        messageId,
+        buildChannelKeyboard(getSelectableChannels(nextState ?? latestState)),
+      );
+    }
+    return;
+  }
+
+  if (kind === "channels" && value === "all_off") {
+    const latestState = (await stateStore.get(chatId)) ?? state;
+    const nextState = await setAllChannelsEnabled(chatId, latestState, false);
+    await telegram.answerCallbackQuery(callbackId, "Все каналы выключены");
+    if (messageId) {
+      await telegram.editMessageReplyMarkup(
+        chatId,
+        messageId,
+        buildChannelKeyboard(getSelectableChannels(nextState ?? latestState)),
       );
     }
     return;
@@ -611,7 +635,7 @@ function getSelectableChannels(state: ChatState) {
         id: channel.id,
         name: channel.name,
         country: runtime.country,
-        enabled: runtime.enabled,
+        enabled: isChannelEnabled(state, channel.id, runtime.enabled),
         templateBank: runtime.templateBank ?? "Шаблоны",
       };
     });
@@ -623,9 +647,82 @@ function getSelectableChannels(state: ChatState) {
       id: channel.id,
       name: channel.name,
       country: runtime.country,
-      enabled: runtime.enabled,
+      enabled: isChannelEnabled(state, channel.id, runtime.enabled),
       templateBank: runtime.templateBank ?? `${channel.country.toLowerCase()}-default`,
     };
+  });
+}
+
+function isChannelEnabled(
+  state: ChatState,
+  channelId: string,
+  runtimeEnabled = false,
+): boolean {
+  if (state.enabledChannelIds?.includes(channelId)) {
+    return true;
+  }
+  return runtimeEnabled;
+}
+
+function collectEnabledChannelIds(state: ChatState): string[] {
+  const enabled = new Set(state.enabledChannelIds ?? []);
+  for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
+    if (runtime.enabled) {
+      enabled.add(channelId);
+    }
+  }
+  return [...enabled];
+}
+
+async function setChannelEnabled(
+  chatId: number,
+  state: ChatState,
+  channelId: string,
+  enabled: boolean,
+): Promise<ChatState | undefined> {
+  const liveChannel = state.pagerAccount?.liveChannels?.find((channel) => channel.id === channelId);
+  const fallbackCountry = liveChannel
+    ? inferCountryFromName(liveChannel.name)
+    : (getChannelConfig(config, channelId)?.country ?? "ZM");
+  const runtime = getChannelRuntime(state, channelId, fallbackCountry);
+  const enabledIds = new Set(collectEnabledChannelIds(state));
+  if (enabled) {
+    enabledIds.add(channelId);
+  } else {
+    enabledIds.delete(channelId);
+  }
+
+  return stateStore.patch(chatId, {
+    enabledChannelIds: [...enabledIds],
+    channels: {
+      [channelId]: {
+        ...runtime,
+        enabled,
+      },
+    },
+  });
+}
+
+async function setAllChannelsEnabled(
+  chatId: number,
+  state: ChatState,
+  enabled: boolean,
+): Promise<ChatState | undefined> {
+  const selectable = getSelectableChannels(state);
+  const enabledIds = enabled ? selectable.map((channel) => channel.id) : [];
+  const channels: Record<string, ChannelRuntimeState> = { ...(state.channels ?? {}) };
+
+  for (const channel of selectable) {
+    const runtime = getChannelRuntime(state, channel.id, channel.country);
+    channels[channel.id] = {
+      ...runtime,
+      enabled,
+    };
+  }
+
+  return stateStore.patch(chatId, {
+    enabledChannelIds: enabledIds,
+    channels,
   });
 }
 
@@ -831,6 +928,10 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
       session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
     );
     const mergedChannels = { ...defaults, ...(state.channels ?? {}) };
+    const enabledChannelIds = collectEnabledChannelIds({
+      ...state,
+      channels: mergedChannels,
+    });
     const client = buildPagerClient(
       cookies,
       state.pagerAccount?.organizationId,
@@ -857,6 +958,7 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
         })),
       },
       channels: mergedChannels,
+      enabledChannelIds,
       statusFolders,
     });
   } catch (error) {
@@ -892,7 +994,8 @@ function resolveChannelForState(state: ChatState, channelId: string) {
 }
 
 function getChannelEnabled(state: ChatState, channelId: string): boolean {
-  return state.channels?.[channelId]?.enabled ?? false;
+  const runtime = state.channels?.[channelId];
+  return isChannelEnabled(state, channelId, runtime?.enabled ?? false);
 }
 
 function getChannelCountry(
@@ -1190,6 +1293,7 @@ async function sendStatus(chatId: number, state: ChatState) {
       `Stage: ${state.currentStage}`,
       `Template bank: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
       `Pager account: ${state.pagerAccount ? "saved" : "not connected"}`,
+      `Enabled channels: ${collectEnabledChannelIds(state).length}`,
       `Live channels: ${state.pagerAccount?.liveChannels?.length ?? 0}`,
       `Status folders enabled: ${state.statusFolders?.filter((folder) => folder.enabled).length ?? "all (not configured)"}`,
       `Pending action: ${state.pendingAction ?? "none"}`,

@@ -187,6 +187,10 @@ export function buildChannelKeyboard(
         },
       ]),
       [{ text: "🔄 Обновить каналы", callback_data: "channels:refresh" }],
+      [
+        { text: "🟢 Включить все", callback_data: "channels:all_on" },
+        { text: "🔴 Снять все", callback_data: "channels:all_off" },
+      ],
     ],
   };
 }

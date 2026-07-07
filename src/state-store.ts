@@ -57,6 +57,8 @@ export type ChatState = {
   pendingAction?: PendingAction;
   draftPagerEmail?: string;
   pagerAccount?: PagerAccountState;
+  /** Source of truth for which Pager channels the worker polls. */
+  enabledChannelIds?: string[];
   channels?: Record<string, ChannelRuntimeState>;
   conversations?: Record<string, ConversationRuntimeState>;
   statusFolders?: StatusFolderState[];
@@ -114,11 +116,7 @@ class FileStateStore implements StateStore {
       return undefined;
     }
 
-    const nextState: ChatState = {
-      ...current,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    };
+    const nextState = mergeChatState(current, patch);
     return this.upsert(nextState);
   }
 
@@ -197,11 +195,7 @@ class PostgresStateStore implements StateStore {
       return undefined;
     }
 
-    const nextState: ChatState = {
-      ...current,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    };
+    const nextState = mergeChatState(current, patch);
     return this.upsert(nextState);
   }
 
@@ -248,4 +242,38 @@ function shouldUseSsl(databaseUrl: string): boolean {
     normalized.includes("neon.tech") ||
     normalized.includes("supabase.co")
   );
+}
+
+export function mergeChatState(
+  current: ChatState,
+  patch: Partial<Omit<ChatState, "chatId">>,
+): ChatState {
+  const nextChannels = patch.channels
+    ? { ...(current.channels ?? {}), ...patch.channels }
+    : current.channels;
+
+  const nextConversations = patch.conversations
+    ? { ...(current.conversations ?? {}), ...patch.conversations }
+    : current.conversations;
+
+  const nextPagerAccount = patch.pagerAccount
+    ? { ...(current.pagerAccount ?? { authMode: "cookies", connectedAt: current.updatedAt }), ...patch.pagerAccount }
+    : current.pagerAccount;
+
+  let enabledChannelIds = patch.enabledChannelIds ?? current.enabledChannelIds;
+  if (!enabledChannelIds?.length && nextChannels) {
+    enabledChannelIds = Object.entries(nextChannels)
+      .filter(([, runtime]) => runtime.enabled)
+      .map(([channelId]) => channelId);
+  }
+
+  return {
+    ...current,
+    ...patch,
+    channels: nextChannels,
+    conversations: nextConversations,
+    pagerAccount: nextPagerAccount,
+    enabledChannelIds,
+    updatedAt: new Date().toISOString(),
+  };
 }
