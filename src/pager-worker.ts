@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   type BotConfig,
   type ChannelConfig,
@@ -35,6 +36,7 @@ import {
   regSendTriggersInProgress as zmRegSendTriggersInProgress,
   resolveZmFunnelScripts,
 } from "./zm-script-engine.js";
+import { resolveScriptAttachment } from "./zm-script-assets.js";
 import { isDepositTierChoice, isRegistrationConfirmed } from "./cm-intent.js";
 import type { AppEnv } from "./env.js";
 import {
@@ -665,6 +667,33 @@ async function processZmConversation(
       return sentAny;
     }
     sentAny = true;
+    if (scriptKey === "07_game_id") {
+      const attachment = resolveScriptAttachment("ZM", scriptKey);
+      if (attachment) {
+        try {
+          const imageSent = await client.sendImageReliable(
+            convId,
+            {
+              buffer: readFileSync(attachment.path),
+              mimeType: attachment.mimeType,
+              filename: attachment.filename,
+            },
+            {
+              channelId: runtime.channelId,
+              conv,
+            },
+          );
+          if (!imageSent) {
+            console.warn(`Pager worker: ZM image miss ${convId.slice(0, 8)} key=${scriptKey}`);
+          }
+        } catch (error) {
+          console.warn(
+            `Pager worker: ZM image failed ${convId.slice(0, 8)} key=${scriptKey}:`,
+            formatError(error),
+          );
+        }
+      }
+    }
     await sleep(500);
   }
 

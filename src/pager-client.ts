@@ -904,6 +904,7 @@ export class PagerClient {
       userId?: string;
       channelId?: string;
       conv?: PagerConversation;
+      attachments?: Array<{ type: string; payload: { url: string } }>;
     },
   ): Promise<boolean> {
     const prepared = await this.prepareOutbound(convId, options?.conv, options?.userId);
@@ -927,7 +928,13 @@ export class PagerClient {
     }
 
     const attempts: Array<() => Promise<Record<string, unknown>>> = [
-      () => this.sendMessageSpa(convId, text, { userId, channelId, conv }),
+      () =>
+        this.sendMessageSpa(convId, text, {
+          userId,
+          channelId,
+          conv,
+          attachments: options?.attachments,
+        }),
       () => this.postMessageMinimal(convId, text, userId, channelId),
     ];
 
@@ -943,6 +950,157 @@ export class PagerClient {
     }
 
     return this.waitMessageDelivered(convId, text, userId);
+  }
+
+  async sendImageReliable(
+    convId: string,
+    image: { buffer: Buffer; mimeType: string; filename: string },
+    options?: {
+      userId?: string;
+      channelId?: string;
+      conv?: PagerConversation;
+    },
+  ): Promise<boolean> {
+    const prepared = await this.prepareOutbound(convId, options?.conv, options?.userId);
+    const userId = prepared.userId;
+    let conv = prepared.conv;
+    let channelId = (options?.channelId || conv.channelId || conv.channel?.id || "").trim();
+
+    if (!channelId) {
+      const opened = await this.openConversation(convId);
+      if (opened) {
+        conv = { ...conv, ...opened };
+        channelId = (opened.channelId || opened.channel?.id || "").trim();
+      }
+    }
+
+    if (!channelId) {
+      console.warn(`Pager image send skipped ${convId.slice(0, 8)} — channelId missing`);
+      return false;
+    }
+
+    const uploadedUrl = await this.uploadOutboundImage(convId, image, {
+      userId,
+      channelId,
+      conv,
+    });
+    if (!uploadedUrl) {
+      return false;
+    }
+
+    if (uploadedUrl === "__sent__") {
+      return true;
+    }
+
+    return this.sendMessageReliable(convId, "", {
+      userId,
+      channelId,
+      conv,
+      attachments: [{ type: "image", payload: { url: uploadedUrl } }],
+    });
+  }
+
+  private async uploadOutboundImage(
+    convId: string,
+    image: { buffer: Buffer; mimeType: string; filename: string },
+    options: { userId: string; channelId: string; conv: PagerConversation },
+  ): Promise<string | undefined> {
+    const orgId = await this.ensureOrgId();
+    const referer = this.chatReferer(convId);
+    const blob = new Blob([Uint8Array.from(image.buffer)], { type: image.mimeType });
+    const uploadAttempts: Array<{ path: string; fields: Record<string, string | Blob> }> = [
+      { path: "/api/upload", fields: { file: blob, filename: image.filename } },
+      { path: "/api/file", fields: { file: blob, name: image.filename } },
+      {
+        path: "/api/message/upload",
+        fields: {
+          file: blob,
+          conversationId: convId,
+          channelId: options.channelId,
+        },
+      },
+      {
+        path: "/api/message",
+        fields: {
+          file: blob,
+          conversationId: convId,
+          channelId: options.channelId,
+          text: "",
+        },
+      },
+    ];
+
+    for (const attempt of uploadAttempts) {
+      try {
+        const payload = await this.postMultipart(attempt.path, {
+          orgId,
+          userId: options.userId,
+        }, attempt.fields, referer);
+        const url = extractUploadedUrl(payload);
+        if (url) {
+          console.log(
+            `Pager image uploaded conv=${convId.slice(0, 8)} via ${attempt.path} url=${url.slice(0, 48)}`,
+          );
+          return url;
+        }
+        if (payload && typeof payload === "object" && messageDelivered(payload as Record<string, unknown>)) {
+          console.log(`Pager image sent directly via ${attempt.path} conv=${convId.slice(0, 8)}`);
+          return "__sent__";
+        }
+      } catch (error) {
+        console.warn(`Pager image upload miss ${attempt.path}:`, formatError(error));
+      }
+    }
+
+    return undefined;
+  }
+
+  private async postMultipart(
+    path: string,
+    params: Record<string, string>,
+    fields: Record<string, string | Blob>,
+    referer?: string,
+  ): Promise<unknown> {
+    const url = new URL(path, this.options.baseUrl);
+    for (const [key, value] of Object.entries(params)) {
+      if (value) {
+        url.searchParams.set(key, value);
+      }
+    }
+
+    const form = new FormData();
+    for (const [key, value] of Object.entries(fields)) {
+      if (value instanceof Blob) {
+        const filename =
+          key === "file" && typeof fields.filename === "string" ? fields.filename : "upload.png";
+        form.append(key, value, filename);
+      } else {
+        form.append(key, value);
+      }
+    }
+
+    const headers = this.buildHeaders({ includeJsonContentType: false });
+    if (referer) {
+      headers.Referer = referer;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: form,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new PagerApiError(response.status, text);
+    }
+    if (!text.trim()) {
+      return {};
+    }
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return { raw: text };
+    }
   }
 
   async downloadAttachment(url: string): Promise<Buffer> {
@@ -989,7 +1147,12 @@ export class PagerClient {
   private async sendMessageSpa(
     convId: string,
     text: string,
-    options: { userId: string; channelId: string; conv: PagerConversation },
+    options: {
+      userId: string;
+      channelId: string;
+      conv: PagerConversation;
+      attachments?: Array<{ type: string; payload: { url: string } }>;
+    },
   ): Promise<Record<string, unknown>> {
     const orgId = await this.ensureOrgId();
     const referer = this.chatReferer(convId);
@@ -1025,6 +1188,9 @@ export class PagerClient {
       isDelivered: null,
       replyToMessageId: null,
     };
+    if (options.attachments?.length) {
+      payload.attachments = options.attachments;
+    }
 
     const params: Record<string, string> = { orgId };
     if (options.userId) {
@@ -1832,6 +1998,30 @@ function extractOrgSlugFromHtml(html: string): string {
     }
   }
   return "";
+}
+
+function extractUploadedUrl(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+
+  const record = payload as Record<string, unknown>;
+  for (const key of ["url", "fileUrl", "imageUrl", "secure_url", "publicUrl", "path"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.startsWith("http")) {
+      return value;
+    }
+  }
+
+  for (const key of ["data", "file", "result", "attachment", "upload"]) {
+    const nested = record[key];
+    const found = extractUploadedUrl(nested);
+    if (found) {
+      return found;
+    }
+  }
+
+  return undefined;
 }
 
 function messageDelivered(result: Record<string, unknown>): boolean {
