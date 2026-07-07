@@ -55,6 +55,14 @@ export function conversationAllowedInFolders(
   return specific.has(conversationFolderKey(conv));
 }
 
+export function hasEnabledStatusFolders(state: {
+  statusFolders?: StatusFolderState[];
+  operatorSettings?: { statusFolders?: StatusFolderState[] };
+}): boolean {
+  const folders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  return folders?.some((folder) => folder.enabled) ?? false;
+}
+
 export function getEnabledFolderIds(state: {
   statusFolders?: StatusFolderState[];
 }): Set<string> | null {

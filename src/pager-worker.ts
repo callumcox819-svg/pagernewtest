@@ -29,6 +29,7 @@ import {
   mergeStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
+  hasEnabledStatusFolders,
 } from "./status-folders.js";
 import type { TelegramApi } from "./telegram-api.js";
 
@@ -95,13 +96,24 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   freshState = hydrateOperatorState((await deps.stateStore.get(freshState.chatId)) ?? freshState);
+
+  if (
+    !collectEnabledChannelIdsFromState(freshState).length &&
+    hasEnabledStatusFolders(freshState)
+  ) {
+    freshState = (await autoEnableLiveChannels(deps, freshState)) ?? freshState;
+    freshState = hydrateOperatorState(freshState);
+    console.log(
+      `Pager worker: chat ${freshState.chatId} — auto-enabled ${freshState.enabledChannelIds?.length ?? 0} channels (folders are configured)`,
+    );
+  }
+
   const enabledChannels = getEnabledChannels(freshState);
 
   if (!enabledChannels.length) {
     const liveCount = freshState.pagerAccount?.liveChannels?.length ?? 0;
-    const enabledIds = collectEnabledChannelIdsFromState(freshState);
     console.log(
-      `Pager worker: chat ${freshState.chatId} — no enabled channels (live=${liveCount}, enabledIds=${enabledIds.length}). Open «Каналы» → «Включить все».`,
+      `Pager worker: chat ${freshState.chatId} — no enabled channels (live=${liveCount}). Enable a folder in «Папки» or channels in «Каналы».`,
     );
     return;
   }
@@ -110,6 +122,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   if (enabledFolderIds && enabledFolderIds.size === 0) {
     console.log(`Pager worker: chat ${freshState.chatId} — no status folders enabled`);
     return;
+  }
+
+  if (enabledFolderIds) {
+    const folderNames = (freshState.statusFolders ?? [])
+      .filter((folder) => folder.enabled)
+      .map((folder) => folder.name)
+      .join(", ");
+    console.log(`Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}]`);
   }
 
   const channelIds = enabledChannels.map((item) => item.channelId);
@@ -396,6 +416,38 @@ function hydrateOperatorState(state: ChatState): ChatState {
     enabledChannelIds,
     statusFolders,
   };
+}
+
+async function autoEnableLiveChannels(
+  deps: WorkerDeps,
+  state: ChatState,
+): Promise<ChatState | undefined> {
+  const live = state.pagerAccount?.liveChannels ?? [];
+  if (!live.length) {
+    return state;
+  }
+
+  const enabledChannelIds = live.map((channel) => channel.id);
+  const channels: Record<string, ChannelRuntimeState> = { ...(state.channels ?? {}) };
+  for (const channel of live) {
+    const existing = channels[channel.id];
+    channels[channel.id] = {
+      enabled: true,
+      country: existing?.country ?? inferCountryFromChannelName(channel.name),
+      templateBank: existing?.templateBank,
+      templateBankId: existing?.templateBankId,
+    };
+  }
+
+  const statusFolders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  return deps.stateStore.patch(state.chatId, {
+    enabledChannelIds,
+    channels,
+    operatorSettings: {
+      enabledChannelIds,
+      statusFolders,
+    },
+  });
 }
 
 function inferCountryFromChannelName(name: string): "ZM" | "CM" | "EG" {

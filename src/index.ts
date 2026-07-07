@@ -18,6 +18,7 @@ import {
   mergeStatusFolderList,
   setAllStatusFolders,
   toggleStatusFolder,
+  hasEnabledStatusFolders,
 } from "./status-folders.js";
 import {
   buildPagerAccountPatch,
@@ -30,6 +31,7 @@ import {
   buildCountryKeyboard,
   buildFoldersKeyboard,
   buildFoldersRetryKeyboard,
+  FOLDERS_PAGE_SIZE,
   buildMainMenuKeyboard,
   buildPagerAccountKeyboard,
   buildTemplateKeyboard,
@@ -298,6 +300,15 @@ async function handleCallback(
   if (kind === "folders") {
     await telegram.answerCallbackQuery(callbackId);
 
+    if (value === "page" && extra) {
+      await showFoldersMenu(chatId, state, messageId, Number(extra));
+      return;
+    }
+
+    if (value === "noop") {
+      return;
+    }
+
     if (value === "refresh") {
       const synced = await syncStatusFolders(chatId, state);
       if (synced.error) {
@@ -308,12 +319,15 @@ async function handleCallback(
     }
 
     if (value === "all_on" || value === "all_off") {
-    const folders = setAllStatusFolders(state.statusFolders ?? [], value === "all_on");
-    const nextState =
-      (await stateStore.patch(chatId, {
-        statusFolders: folders,
-        operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
-      })) ?? state;
+      const folders = setAllStatusFolders(state.statusFolders ?? [], value === "all_on");
+      let nextState =
+        (await stateStore.patch(chatId, {
+          statusFolders: folders,
+          operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
+        })) ?? state;
+      if (value === "all_on" && !collectEnabledChannelIds(nextState).length) {
+        nextState = (await setAllChannelsEnabled(chatId, nextState, true)) ?? nextState;
+      }
       await showFoldersMenu(chatId, nextState, messageId);
       return;
     }
@@ -323,13 +337,21 @@ async function handleCallback(
   if (kind === "folder_toggle" && value) {
     const index = Number(value);
     const folders = toggleStatusFolder(state.statusFolders ?? [], index);
-    const nextState =
+    let nextState =
       (await stateStore.patch(chatId, {
         statusFolders: folders,
         operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
       })) ?? state;
-    await telegram.answerCallbackQuery(callbackId);
-    await showFoldersMenu(chatId, nextState, messageId);
+    if (hasEnabledStatusFolders({ ...state, statusFolders: folders }) && !collectEnabledChannelIds(nextState).length) {
+      nextState = (await setAllChannelsEnabled(chatId, nextState, true)) ?? nextState;
+    }
+    const folder = folders[index];
+    await telegram.answerCallbackQuery(
+      callbackId,
+      folder?.enabled ? `✅ ${folder.name}` : `⬜ ${folder?.name ?? "папка"}`,
+    );
+    const page = Math.floor(index / FOLDERS_PAGE_SIZE);
+    await showFoldersMenu(chatId, nextState, messageId, page);
     return;
   }
 
@@ -886,7 +908,12 @@ async function showChannelsMenu(chatId: number, state: ChatState, messageId?: nu
   await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
-async function showFoldersMenu(chatId: number, state: ChatState, messageId?: number) {
+async function showFoldersMenu(
+  chatId: number,
+  state: ChatState,
+  messageId?: number,
+  page = 0,
+) {
   let currentState = state;
   if (!currentState.pagerAccount?.cookies && !currentState.pagerAccount?.password) {
     await telegram.sendMessage(
@@ -927,17 +954,18 @@ async function showFoldersMenu(chatId: number, state: ChatState, messageId?: num
     (folder) => folder.id !== "" && folder.id !== "*",
   ).length;
   const text = [
-    "Папки Pager — откуда бот берёт чаты для автоответа:",
+    "Папки Pager — откуда бот берёт чаты:",
     "✅ включена | ⬜ выключена",
     "",
-    `Включено: ${enabled} из ${folders.length}`,
+    `Включено папок: ${enabled} из ${folders.length}`,
     apiFolderCount
       ? `Загружено из Pager: ${apiFolderCount} папок`
       : "⚠️ Список из Pager пуст — нажми «Обновить папки».",
-    "«Всі» — все чаты. «Без статусу» — только новые без статуса.",
-    "Для чатов в «Думають», «В процесі», «рега» — включи эти папки или «Всі».",
+    "«Без статусу» — только новые чаты без статуса.",
+    "«Всі» — все чаты. Можно включить любую одну папку.",
+    "Каналы включаются автоматически при выборе папки.",
   ].join("\n");
-  const keyboard = buildFoldersKeyboard(folders);
+  const keyboard = buildFoldersKeyboard(folders, page);
 
   if (!messageId) {
     await telegram.sendMessage(chatId, text, keyboard);

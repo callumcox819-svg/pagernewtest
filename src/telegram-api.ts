@@ -228,15 +228,35 @@ export function buildTemplateKeyboard(
   };
 }
 
+export const FOLDERS_PAGE_SIZE = 12;
+
 export function buildFoldersKeyboard(
   folders: Array<{ name: string; enabled: boolean }>,
+  page = 0,
 ): ReplyMarkup {
-  const rows = folders.map((folder, index) => [
+  const totalPages = Math.max(1, Math.ceil(folders.length / FOLDERS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * FOLDERS_PAGE_SIZE;
+  const slice = folders.slice(start, start + FOLDERS_PAGE_SIZE);
+
+  const rows = slice.map((folder, offset) => [
     {
-      text: `${folder.enabled ? "✅" : "⬜"} ${folder.name}`,
-      callback_data: `folder_toggle:${index}`,
+      text: `${folder.enabled ? "✅" : "⬜"} ${truncateLabel(folder.name, 28)}`,
+      callback_data: `folder_toggle:${start + offset}`,
     },
   ]);
+
+  if (totalPages > 1) {
+    const nav: InlineKeyboardButton[] = [];
+    if (safePage > 0) {
+      nav.push({ text: "◀️", callback_data: `folders:page:${safePage - 1}` });
+    }
+    nav.push({ text: `${safePage + 1}/${totalPages}`, callback_data: "folders:noop" });
+    if (safePage < totalPages - 1) {
+      nav.push({ text: "▶️", callback_data: `folders:page:${safePage + 1}` });
+    }
+    rows.push(nav);
+  }
 
   const allEnabled = folders.length > 0 && folders.every((folder) => folder.enabled);
   rows.push([
