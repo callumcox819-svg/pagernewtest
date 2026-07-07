@@ -2,18 +2,22 @@ import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
-export const proofKindSchema = z.enum([
+export const PROOF_KINDS = [
   "registration_screenshot",
   "id_screenshot",
   "deposit_balance_screenshot",
   "unclear_screenshot",
-]);
+ ] as const;
+
+export const proofKindSchema = z.enum(PROOF_KINDS);
 
 export type ProofKind = z.infer<typeof proofKindSchema>;
 
-const countrySchema = z.enum(["ZM", "CM", "EG"]);
+export const COUNTRIES = ["ZM", "CM", "EG"] as const;
 
-const stageSchema = z.enum([
+const countrySchema = z.enum(COUNTRIES);
+
+export const STAGES = [
   "new_lead",
   "engaged",
   "registered",
@@ -24,12 +28,14 @@ const stageSchema = z.enum([
   "no_money",
   "dormant",
   "not_ready",
-]);
+ ] as const;
+
+const stageSchema = z.enum(STAGES);
 
 export type Stage = z.infer<typeof stageSchema>;
 export type CountryCode = z.infer<typeof countrySchema>;
 
-const templateRoleSchema = z.enum([
+export const TEMPLATE_ROLES = [
   "intro",
   "details",
   "registration",
@@ -39,7 +45,9 @@ const templateRoleSchema = z.enum([
   "telegram_handoff",
   "no_money",
   "reactivation",
-]);
+ ] as const;
+
+const templateRoleSchema = z.enum(TEMPLATE_ROLES);
 
 export type TemplateRole = z.infer<typeof templateRoleSchema>;
 
@@ -134,4 +142,12 @@ export function getTemplateBank(
     throw new Error(`Missing template bank ${templateBankName}`);
   }
   return bank;
+}
+
+export function getDefaultEnabledChannel(config: BotConfig): ChannelConfig {
+  const channel = config.channels.find((item) => item.enabled);
+  if (!channel) {
+    throw new Error("No enabled channels found in config");
+  }
+  return channel;
 }
