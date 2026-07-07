@@ -761,7 +761,11 @@ async function syncStatusFolders(
   }
 
   try {
-    const client = buildPagerClient(cookies, state.pagerAccount?.organizationId);
+    const client = buildPagerClient(
+      cookies,
+      state.pagerAccount?.organizationId,
+      resolvePagerOrgSlug(state),
+    );
     await client.warmSession();
 
     let statuses: Array<{ id: string; name: string }> = [];
@@ -775,6 +779,7 @@ async function syncStatusFolders(
           ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
           organizationId: session.organizationId ?? state.pagerAccount?.organizationId,
           organizationName: session.organizationName ?? state.pagerAccount?.organizationName,
+          organizationSlug: session.organizationSlug ?? state.pagerAccount?.organizationSlug,
         },
       });
       if (patchedAccount?.pagerAccount) {
@@ -785,6 +790,15 @@ async function syncStatusFolders(
 
     const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
     const patched = await stateStore.patch(chatId, { statusFolders });
+    const apiCount = statusFolders.filter(
+      (folder) => folder.id !== "" && folder.id !== "*",
+    ).length;
+    if (apiCount <= 0) {
+      return {
+        state: patched,
+        error: "Pager не отдал список папок. Нажми «Отключить» и войди заново через Email+пароль.",
+      };
+    }
     return { state: patched };
   } catch (error) {
     console.error("syncStatusFolders failed:", error);
@@ -808,13 +822,18 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
     const session = await buildPagerClient(
       cookies,
       state.pagerAccount?.organizationId,
+      resolvePagerOrgSlug(state),
     ).validateSession();
     const defaults = buildChannelRuntimeMap(
       session.channels.map((channel) => ({ id: channel.id, name: channel.name })),
       session.templateBanks.map((bank) => ({ id: bank.id, name: bank.name })),
     );
     const mergedChannels = { ...defaults, ...(state.channels ?? {}) };
-    const client = buildPagerClient(cookies, state.pagerAccount?.organizationId);
+    const client = buildPagerClient(
+      cookies,
+      state.pagerAccount?.organizationId,
+      resolvePagerOrgSlug(state),
+    );
     const statuses = await client.loadAllStatuses().catch(() => []);
     const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
 
@@ -823,6 +842,7 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
         ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
         organizationId: session.organizationId,
         organizationName: session.organizationName,
+        organizationSlug: session.organizationSlug,
         liveChannels: session.channels.map((channel) => ({
           id: channel.id,
           name: channel.name,
@@ -892,14 +912,22 @@ function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
   return "ZM";
 }
 
-function buildPagerClient(cookieHeader: string, orgId?: string) {
+function buildPagerClient(cookieHeader: string, orgId?: string, orgSlug?: string) {
   const cookies = parseCookieHeader(cookieHeader);
   return new PagerClient({
     baseUrl: env.PAGER_BASE_URL,
     cookieHeader,
     orgId: orgId || cookies._pager_org_id,
+    orgSlug: orgSlug || cookies._pager_org_slug,
     locale: "uk",
   });
+}
+
+function resolvePagerOrgSlug(state: ChatState): string | undefined {
+  return (
+    state.pagerAccount?.organizationSlug ??
+    state.pagerAccount?.organizationName?.toLowerCase()
+  );
 }
 
 function buildClerkAuthClient() {
@@ -938,7 +966,11 @@ async function handlePendingInput(
         login.cookieHeader,
         login.organizationId,
       ).validateSession();
-      const statusClient = buildPagerClient(login.cookieHeader, login.organizationId);
+      const statusClient = buildPagerClient(
+        login.cookieHeader,
+        session.organizationId ?? login.organizationId,
+        session.organizationSlug,
+      );
       const statuses = await statusClient.loadAllStatuses().catch(() => []);
       const statusFolders = buildStatusFolderList(statuses);
 
@@ -951,6 +983,7 @@ async function handlePendingInput(
           cookies: login.cookieHeader,
           organizationId: session.organizationId ?? login.organizationId,
           organizationName: session.organizationName,
+          organizationSlug: session.organizationSlug,
           liveChannels: session.channels.map((channel) => ({
             id: channel.id,
             name: channel.name,
@@ -1000,7 +1033,11 @@ async function handlePendingInput(
   if (state.pendingAction === "await_pager_cookies") {
     try {
       const session = await buildPagerClient(text.trim()).validateSession();
-      const statusClient = buildPagerClient(text.trim(), session.organizationId);
+      const statusClient = buildPagerClient(
+        text.trim(),
+        session.organizationId,
+        session.organizationSlug,
+      );
       const statuses = await statusClient.loadAllStatuses().catch(() => []);
       const statusFolders = buildStatusFolderList(statuses);
       await stateStore.patch(chatId, {
@@ -1010,6 +1047,7 @@ async function handlePendingInput(
           cookies: text.trim(),
           organizationId: session.organizationId,
           organizationName: session.organizationName,
+          organizationSlug: session.organizationSlug,
           liveChannels: session.channels.map((channel) => ({
             id: channel.id,
             name: channel.name,

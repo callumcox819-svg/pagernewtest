@@ -95,6 +95,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     baseUrl: deps.env.PAGER_BASE_URL,
     cookieHeader: freshState.pagerAccount!.cookies!,
     orgId: freshState.pagerAccount?.organizationId,
+    orgSlug:
+      freshState.pagerAccount?.organizationSlug ??
+      freshState.pagerAccount?.organizationName?.toLowerCase(),
     locale: "uk",
   });
 
@@ -493,6 +496,9 @@ async function ensureStatusFolders(deps: WorkerDeps, state: ChatState): Promise<
       baseUrl: deps.env.PAGER_BASE_URL,
       cookieHeader: cookies,
       orgId: state.pagerAccount?.organizationId,
+      orgSlug:
+        state.pagerAccount?.organizationSlug ??
+        state.pagerAccount?.organizationName?.toLowerCase(),
       locale: "uk",
     });
     await client.warmSession();

@@ -17,6 +17,7 @@ export type PagerAccountState = {
   cookies?: string;
   organizationId?: string;
   organizationName?: string;
+  organizationSlug?: string;
   liveChannels?: Array<{
     id: string;
     name: string;

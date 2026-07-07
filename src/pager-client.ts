@@ -10,6 +10,7 @@ export type PagerChannel = {
 export type PagerSessionSummary = {
   organizationId?: string;
   organizationName?: string;
+  organizationSlug?: string;
   channelCount: number;
   channels: PagerChannel[];
   templateBanks: PagerTemplateBank[];
@@ -149,7 +150,10 @@ export class PagerClient {
   }
 
   async loadAllStatuses(): Promise<PagerStatus[]> {
+    await this.warmSession();
+    await this.discoverOrgSlug();
     const orgId = await this.ensureOrgId();
+    const userId = await this.resolveSessionUserId().catch(() => "");
     const merged = new Map<string, string>();
 
     const addStatuses = (items: PagerStatus[]) => {
@@ -160,16 +164,35 @@ export class PagerClient {
       }
     };
 
+    const statusParams: Record<string, string> = { orgId };
+    if (userId) {
+      statusParams.userId = userId;
+    }
+
     for (const path of ["/api/status", "/api/statuses"]) {
       try {
         const payload = await this.request<unknown>(path, {
           method: "GET",
-          params: { orgId },
+          params: statusParams,
+          referer: this.chatReferer(),
         });
         addStatuses(parseStatusItems(extractPayloadArray(payload)));
       } catch (error) {
         console.warn(`Pager ${path} failed:`, formatError(error));
       }
+    }
+
+    try {
+      const orgPayload = await this.request<unknown>("/api/organization", {
+        method: "GET",
+        params: statusParams,
+        referer: this.chatReferer(),
+      });
+      const fromOrg = new Map<string, string>();
+      collectStatusesFromPayload(orgPayload, fromOrg);
+      addStatuses([...fromOrg.entries()].map(([id, name]) => ({ id, name })));
+    } catch (error) {
+      console.warn("Pager organization status parse failed:", formatError(error));
     }
 
     if (merged.size < 3) {
@@ -185,8 +208,35 @@ export class PagerClient {
       .map(([id, name]) => ({ id, name }))
       .sort((left, right) => left.name.localeCompare(right.name));
 
-    console.log(`Pager statuses loaded: ${statuses.length} (orgId=${orgId.slice(0, 12)}…)`);
+    console.log(
+      `Pager statuses loaded: ${statuses.length} (orgId=${orgId.slice(0, 12)}… slug=${this.orgSlug || "?"})`,
+    );
     return statuses;
+  }
+
+  private async discoverOrgSlug(): Promise<string> {
+    if (this.orgSlug) {
+      return this.orgSlug;
+    }
+
+    if (this.options.orgSlug) {
+      this.orgSlug = this.options.orgSlug;
+      return this.orgSlug;
+    }
+
+    const organization = await this.getOrganization();
+    const slug = firstString(organization?.slug, organization?.name?.toLowerCase());
+    if (slug) {
+      this.orgSlug = slug;
+      return slug;
+    }
+
+    const html = await this.fetchChatsHtml();
+    const fromHtml = extractOrgSlugFromHtml(html);
+    if (fromHtml) {
+      this.orgSlug = fromHtml;
+    }
+    return this.orgSlug;
   }
 
   private async discoverStatusesFromConversations(maxPages = 15): Promise<PagerStatus[]> {
@@ -530,6 +580,7 @@ export class PagerClient {
     return {
       organizationId: organization?.id ?? this.orgId,
       organizationName: organization?.name,
+      organizationSlug: organization?.slug ?? this.orgSlug,
       channelCount: channels.length,
       channels,
       templateBanks,
@@ -930,7 +981,7 @@ export class PagerClient {
   private buildHeaders(accept = "application/json, text/plain, */*"): Record<string, string> {
     return {
       Cookie: this.options.cookieHeader,
-      Accept: accept,
+      Accept: accept === "application/json, text/plain, */*" ? "*/*" : accept,
       "Content-Type": "application/json",
       "User-Agent": BROWSER_UA,
       Origin: this.options.baseUrl,
@@ -1073,29 +1124,69 @@ function discoverStatusesFromHtml(html: string): PagerStatus[] {
     return [];
   }
 
+  const found = new Map<string, string>();
+
+  for (const key of ["statuses", "statusList", "conversationStatuses", "organizationStatuses"]) {
+    addStatuses(parseStatusItems(extractJsonArrayAfterKey(html, key)), found);
+  }
+
   const nextData = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
   if (nextData?.[1]) {
     try {
-      const found = new Map<string, string>();
       collectStatusesFromPayload(JSON.parse(nextData[1]), found);
-      if (found.size) {
-        return [...found.entries()].map(([id, name]) => ({ id, name }));
-      }
     } catch {
       // ignore parse errors
     }
   }
 
-  const found = new Map<string, string>();
-  const namePattern = /"name"\s*:\s*"([^"]{2,80})"/g;
-  const idPattern = /"(?:id|statusId)"\s*:\s*"([0-9a-f-]{8,})"/gi;
-  const names = [...html.matchAll(namePattern)].map((match) => match[1]);
-  const ids = [...html.matchAll(idPattern)].map((match) => match[1]);
-  for (let index = 0; index < Math.min(names.length, ids.length); index += 1) {
-    found.set(ids[index], names[index]);
+  const objectPattern =
+    /\{[^{}]*"id"\s*:\s*"([0-9a-f-]{36})"[^{}]*"name"\s*:\s*"([^"]{2,80})"[^{}]*\}/gi;
+  for (const match of html.matchAll(objectPattern)) {
+    found.set(match[1], match[2]);
   }
 
   return [...found.entries()].map(([id, name]) => ({ id, name }));
+}
+
+function addStatuses(items: PagerStatus[], found: Map<string, string>): void {
+  for (const item of items) {
+    if (item.id && item.name) {
+      found.set(item.id, item.name);
+    }
+  }
+}
+
+function extractJsonArrayAfterKey(html: string, key: string): unknown[] {
+  const marker = `"${key}"`;
+  const idx = html.indexOf(marker);
+  if (idx < 0) {
+    return [];
+  }
+
+  const start = html.indexOf("[", idx);
+  if (start < 0) {
+    return [];
+  }
+
+  let depth = 0;
+  for (let index = start; index < html.length; index += 1) {
+    const char = html[index];
+    if (char === "[") {
+      depth += 1;
+    } else if (char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(html.slice(start, index + 1));
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+    }
+  }
+
+  return [];
 }
 
 function collectStatusesFromPayload(data: unknown, found: Map<string, string>): void {
