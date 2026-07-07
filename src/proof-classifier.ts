@@ -1,5 +1,7 @@
-import { recognize } from "tesseract.js";
+import tesseract from "tesseract.js";
 import type { PlaybookConfig, ProofKind } from "./config.js";
+
+const { recognize } = tesseract;
 
 export type ProofClassification = {
   proofKind: ProofKind;
