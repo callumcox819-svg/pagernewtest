@@ -1143,8 +1143,8 @@ function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
   return "ZM";
 }
 
-function buildPagerClient(cookieHeader: string, orgId?: string, orgSlug?: string) {
-  const enriched = enrichPagerCookies(cookieHeader, { organizationId: orgId });
+function buildPagerClient(cookieHeader: string, orgId?: string, orgSlug?: string, pagerUserId?: string) {
+  const enriched = enrichPagerCookies(cookieHeader, { organizationId: orgId, pagerUserId });
   const cookies = parseCookieHeader(enriched);
   return new PagerClient({
     baseUrl: env.PAGER_BASE_URL,
@@ -1152,6 +1152,7 @@ function buildPagerClient(cookieHeader: string, orgId?: string, orgSlug?: string
     orgId: orgId || cookies._pager_org_id,
     orgSlug: orgSlug || cookies._pager_org_slug,
     locale: "uk",
+    sessionUserId: pagerUserId || cookies._pager_user_id,
   });
 }
 
@@ -1210,6 +1211,13 @@ async function handlePendingInput(
         organizationId: session.organizationId ?? login.organizationId,
         pagerUserId: login.pagerUserId,
       });
+      const probedUserId =
+        (await buildPagerClient(
+          enrichedCookies,
+          session.organizationId ?? login.organizationId,
+          session.organizationSlug,
+          login.pagerUserId,
+        ).probeOperatorUserId()) || login.pagerUserId;
 
       await stateStore.patch(chatId, {
         pendingAction: undefined,
@@ -1217,7 +1225,8 @@ async function handlePendingInput(
           authMode: "credentials",
           email,
           password: text.trim(),
-          cookies: enrichedCookies,
+          cookies: enrichPagerCookies(enrichedCookies, { pagerUserId: probedUserId }),
+          pagerUserId: probedUserId,
           organizationId: session.organizationId ?? login.organizationId,
           organizationName: session.organizationName,
           organizationSlug: session.organizationSlug,

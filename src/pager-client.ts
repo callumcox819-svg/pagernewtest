@@ -94,12 +94,19 @@ export class PagerClient {
       orgId?: string;
       orgSlug?: string;
       locale?: string;
+      sessionUserId?: string;
     },
   ) {
     this.orgId = options.orgId ?? "";
     this.orgSlug = options.orgSlug ?? "";
     this.cookieHeader = cleanPagerCookies(options.cookieHeader);
-    this.injectSessionCookies(this.orgId, undefined);
+    const cookieUser = parseCookieHeader(this.cookieHeader)._pager_user_id?.trim();
+    if (options.sessionUserId?.startsWith("user_")) {
+      this.sessionUserId = options.sessionUserId;
+    } else if (cookieUser?.startsWith("user_")) {
+      this.sessionUserId = cookieUser;
+    }
+    this.injectSessionCookies(this.orgId, undefined, this.sessionUserId || undefined);
   }
 
   getCookieHeader(): string {
@@ -611,10 +618,58 @@ export class PagerClient {
   }
 
   async resolveSessionUserId(): Promise<string> {
-    if (this.sessionUserId) {
-      return this.sessionUserId;
+    return this.resolveOperatorUserId();
+  }
+
+  async probeOperatorUserId(): Promise<string> {
+    const resolved = await this.resolveOperatorUserId();
+    if (resolved) {
+      this.sessionUserId = resolved;
+      this.injectSessionCookies(this.orgId, this.orgSlug, resolved);
+    }
+    return resolved;
+  }
+
+  async resolveOperatorUserId(authorId = ""): Promise<string> {
+    if (this.sessionUserId?.startsWith("user_") && !authorId) {
+      const validated = await this.mapToMessageAuthorId(this.sessionUserId);
+      if (validated) {
+        return validated;
+      }
     }
 
+    const hints = [
+      authorId,
+      this.sessionUserId,
+      this.parseCookies()._pager_user_id,
+      await this.resolveSessionUserIdFromApi(),
+      await this.resolveSessionUserIdFromClerk(),
+    ];
+
+    for (const hint of hints) {
+      const normalized = (hint || "").trim();
+      if (!normalized.startsWith("user_")) {
+        continue;
+      }
+      const mapped = await this.mapToMessageAuthorId(normalized);
+      if (mapped) {
+        this.sessionUserId = mapped;
+        this.injectSessionCookies(this.orgId, this.orgSlug, mapped);
+        return mapped;
+      }
+    }
+
+    const members = await this.fetchOrganizationMembers();
+    if (members.length === 1) {
+      this.sessionUserId = members[0]!.messageAuthorId;
+      this.injectSessionCookies(this.orgId, this.orgSlug, members[0]!.messageAuthorId);
+      return members[0]!.messageAuthorId;
+    }
+
+    return "";
+  }
+
+  private async resolveSessionUserIdFromApi(): Promise<string> {
     const orgId = await this.ensureOrgId();
     for (const path of ["/api/user/me", "/api/users/me", "/api/user"]) {
       try {
@@ -624,7 +679,6 @@ export class PagerClient {
         });
         const userId = extractUserId(payload);
         if (userId) {
-          this.sessionUserId = userId;
           return userId;
         }
       } catch {
@@ -632,6 +686,97 @@ export class PagerClient {
       }
     }
     return "";
+  }
+
+  private async resolveSessionUserIdFromClerk(): Promise<string> {
+    try {
+      const response = await fetch(
+        "https://clerk.pager.co.ua/v1/client?__clerk_api_version=2024-10-01&_clerk_js_version=5.68.0",
+        {
+          headers: {
+            Accept: "*/*",
+            Cookie: cleanPagerCookies(this.cookieHeader),
+            "User-Agent": BROWSER_UA,
+            Origin: this.options.baseUrl,
+            Referer: `${this.options.baseUrl}/`,
+          },
+        },
+      );
+      if (!response.ok) {
+        return "";
+      }
+      const payload = (await response.json()) as {
+        response?: {
+          sessions?: Array<{ user?: { id?: string } }>;
+        };
+      };
+      const userId = payload.response?.sessions?.[0]?.user?.id?.trim();
+      return userId?.startsWith("user_") ? userId : "";
+    } catch {
+      return "";
+    }
+  }
+
+  private async mapToMessageAuthorId(hint: string): Promise<string> {
+    const normalized = hint.trim();
+    if (!normalized.startsWith("user_")) {
+      return "";
+    }
+
+    const members = await this.fetchOrganizationMembers();
+    for (const member of members) {
+      if (member.messageAuthorId === normalized) {
+        return member.messageAuthorId;
+      }
+      if (member.candidateIds.includes(normalized)) {
+        return member.messageAuthorId;
+      }
+    }
+    return "";
+  }
+
+  private async fetchOrganizationMembers(): Promise<
+    Array<{ messageAuthorId: string; candidateIds: string[]; imageUrl: string }>
+  > {
+    const orgId = await this.ensureOrgId();
+    try {
+      const payload = await this.request<unknown>("/api/organizationMember", {
+        method: "GET",
+        params: { orgId },
+      });
+      if (!Array.isArray(payload)) {
+        return [];
+      }
+
+      const members: Array<{ messageAuthorId: string; candidateIds: string[]; imageUrl: string }> =
+        [];
+      for (const item of payload) {
+        if (!item || typeof item !== "object") {
+          continue;
+        }
+        const record = item as Record<string, unknown>;
+        const user =
+          record.user && typeof record.user === "object"
+            ? (record.user as Record<string, unknown>)
+            : {};
+        const messageAuthorId = firstString(record.userId, record.pagerUserId, user.id, record.id);
+        if (!messageAuthorId?.startsWith("user_")) {
+          continue;
+        }
+        const candidateIds = [
+          messageAuthorId,
+          firstString(record.pagerUserId, user.id, record.id),
+        ].filter((value): value is string => Boolean(value?.startsWith("user_")));
+        members.push({
+          messageAuthorId,
+          candidateIds: [...new Set(candidateIds)],
+          imageUrl: firstString(record.imageUrl, user.imageUrl) ?? "",
+        });
+      }
+      return members;
+    } catch {
+      return [];
+    }
   }
 
   async takeConversation(convId: string, userId: string): Promise<boolean> {
@@ -684,41 +829,47 @@ export class PagerClient {
     authorId = "",
   ): Promise<{ userId: string; conv: PagerConversation }> {
     await this.warmSession();
-    const userId = (authorId || (await this.resolveSessionUserId())).trim();
+    const userId = (await this.resolveOperatorUserId(authorId)).trim();
+    if (!userId) {
+      throw new PagerApiError(
+        400,
+        JSON.stringify({ error: "operator user id missing — re-login to Pager" }),
+      );
+    }
+
     let convData: PagerConversation = { ...(conv ?? { id: convId }) };
     const fresh = await this.openConversation(convId);
     if (fresh) {
       convData = { ...convData, ...fresh };
     }
 
-    if (userId) {
-      let taken = await this.takeConversation(convId, userId);
-      if (!taken) {
-        await sleep(800);
-        const retryConv = await this.openConversation(convId);
-        if (retryConv) {
-          convData = { ...convData, ...retryConv };
-        }
-        taken = await this.takeConversation(convId, userId);
+    let taken = await this.takeConversation(convId, userId);
+    if (!taken) {
+      await sleep(800);
+      const retryConv = await this.openConversation(convId);
+      if (retryConv) {
+        convData = { ...convData, ...retryConv };
       }
-      if (!taken) {
-        throw new PagerApiError(
-          502,
-          JSON.stringify({
-            error: "take chat failed — operator not assigned",
-            conv: convId.slice(0, 8),
-          }),
-        );
-      }
-      try {
-        await this.markConversationRead(convId, userId);
-      } catch {
-        // non-fatal
-      }
-      const afterTake = await this.openConversation(convId);
-      if (afterTake) {
-        convData = { ...convData, ...afterTake };
-      }
+      taken = await this.takeConversation(convId, userId);
+    }
+    if (!taken) {
+      throw new PagerApiError(
+        502,
+        JSON.stringify({
+          error: "take chat failed — operator not assigned",
+          conv: convId.slice(0, 8),
+        }),
+      );
+    }
+
+    try {
+      await this.markConversationRead(convId, userId);
+    } catch {
+      // non-fatal
+    }
+    const afterTake = await this.openConversation(convId);
+    if (afterTake) {
+      convData = { ...convData, ...afterTake };
     }
 
     await this.fetchConversationChatPage(convId);
@@ -742,12 +893,27 @@ export class PagerClient {
   ): Promise<boolean> {
     const prepared = await this.prepareOutbound(convId, options?.conv, options?.userId);
     const userId = prepared.userId;
-    const conv = prepared.conv;
-    const channelId = (options?.channelId || conv.channelId || conv.channel?.id || "").trim();
+    let conv = prepared.conv;
+    let channelId = (options?.channelId || conv.channelId || conv.channel?.id || "").trim();
+
+    if (!channelId) {
+      const opened = await this.openConversation(convId);
+      if (opened) {
+        conv = { ...conv, ...opened };
+        channelId = (opened.channelId || opened.channel?.id || "").trim();
+      }
+    }
+
+    if (!channelId) {
+      throw new PagerApiError(
+        400,
+        JSON.stringify({ error: "channelId missing", conv: convId.slice(0, 8) }),
+      );
+    }
 
     const attempts: Array<() => Promise<Record<string, unknown>>> = [
       () => this.sendMessageSpa(convId, text, { userId, channelId, conv }),
-      () => this.postMessageMinimal(convId, text, userId),
+      () => this.postMessageMinimal(convId, text, userId, channelId),
     ];
 
     for (const attempt of attempts) {
@@ -866,6 +1032,7 @@ export class PagerClient {
     convId: string,
     text: string,
     userId: string,
+    channelId: string,
   ): Promise<Record<string, unknown>> {
     const orgId = await this.ensureOrgId();
     const params: Record<string, string> = { orgId };
@@ -876,7 +1043,7 @@ export class PagerClient {
     const result = await this.request<Record<string, unknown>>("/api/message", {
       method: "POST",
       params,
-      body: { conversationId: convId, text },
+      body: { conversationId: convId, channelId, text, authorId: userId },
       referer: this.chatReferer(convId),
     });
     if (!result || typeof result !== "object") {
@@ -900,16 +1067,28 @@ export class PagerClient {
     if (!conv) {
       return "";
     }
+    const nested = conv as PagerConversation & {
+      responsibleUser?: { id?: string };
+    };
     return (
       conv.responsibleUserId ||
       conv.responsibleuserId ||
+      nested.responsibleUser?.id ||
       ""
     ).trim();
   }
 
   private async waitTakeConfirmed(convId: string, userId: string, attempts = 10): Promise<boolean> {
     for (let index = 0; index < attempts; index += 1) {
-      if ((await this.getResponsibleUserId(convId)) === userId) {
+      const responsible = await this.getResponsibleUserId(convId);
+      if (responsible === userId) {
+        return true;
+      }
+      const members = await this.fetchOrganizationMembers();
+      const member = members.find(
+        (item) => item.messageAuthorId === userId || item.candidateIds.includes(userId),
+      );
+      if (member && responsible === member.messageAuthorId) {
         return true;
       }
       await sleep(500);
@@ -922,30 +1101,17 @@ export class PagerClient {
       return "";
     }
 
-    const orgId = await this.ensureOrgId();
-    try {
-      const members = await this.request<unknown>("/api/organizationMember", {
-        method: "GET",
-        params: { orgId },
-      });
-      if (!Array.isArray(members)) {
-        return "";
+    const nested = conv as (PagerConversation & { responsibleUser?: { imageUrl?: string } }) | undefined;
+    const fromConv = nested?.responsibleUser?.imageUrl?.trim();
+    if (fromConv) {
+      return fromConv;
+    }
+
+    const members = await this.fetchOrganizationMembers();
+    for (const member of members) {
+      if (member.messageAuthorId === userId || member.candidateIds.includes(userId)) {
+        return member.imageUrl;
       }
-      for (const member of members) {
-        if (!member || typeof member !== "object") {
-          continue;
-        }
-        const record = member as Record<string, unknown>;
-        const user = record.user && typeof record.user === "object"
-          ? (record.user as Record<string, unknown>)
-          : {};
-        const memberId = firstString(record.userId, record.pagerUserId, user.id, record.id);
-        if (memberId === userId) {
-          return firstString(record.imageUrl, user.imageUrl) ?? "";
-        }
-      }
-    } catch {
-      return "";
     }
     return "";
   }

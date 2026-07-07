@@ -28,6 +28,7 @@ export type PagerAccountState = {
     name: string;
     replyCount?: number;
   }>;
+  pagerUserId?: string;
   connectedAt: string;
 };
 

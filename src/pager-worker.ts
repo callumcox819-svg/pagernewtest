@@ -314,7 +314,7 @@ async function processConversation(
   }
 
   console.log(
-    `Pager worker: sending to ${convId.slice(0, 8)} channel=${runtime.channelName} role=${templateRole}`,
+    `Pager worker: sending to ${convId.slice(0, 8)} channel=${runtime.channelName} role=${templateRole} bank=${runtime.runtime.templateBankId?.slice(0, 8) ?? "yaml"}`,
   );
 
   const sent = await client.sendMessageReliable(convId, replyText.trim(), {
@@ -364,11 +364,19 @@ function getEnabledChannels(config: BotConfig, state: ChatState): EnabledChannel
       if (!enabledIds.has(channel.id)) {
         continue;
       }
+      const yamlChannel = getChannelConfig(config, channel.id);
+      const country =
+        state.channels?.[channel.id]?.country ??
+        yamlChannel?.country ??
+        inferCountryFromChannelName(channel.name);
+      const bank = pickLiveTemplateBank(state, country);
       const runtime =
         state.channels?.[channel.id] ??
         ({
           enabled: true,
-          country: inferCountryFromChannelName(channel.name),
+          country,
+          templateBank: yamlChannel?.templateBank ?? bank?.name,
+          templateBankId: bank?.id,
         } satisfies ChannelRuntimeState);
       enabled.push({
         channelId: channel.id,
@@ -467,11 +475,13 @@ async function seedEnabledChannelsFromYaml(
   for (const channel of live) {
     const existing = channels[channel.id];
     const yamlChannel = getChannelConfig(deps.config, channel.id);
+    const country = existing?.country ?? yamlChannel?.country ?? inferCountryFromChannelName(channel.name);
+    const bank = pickLiveTemplateBank(state, country);
     channels[channel.id] = {
       enabled: enabledChannelIds.includes(channel.id),
-      country: existing?.country ?? yamlChannel?.country ?? inferCountryFromChannelName(channel.name),
-      templateBank: existing?.templateBank ?? yamlChannel?.templateBank,
-      templateBankId: existing?.templateBankId,
+      country,
+      templateBank: existing?.templateBank ?? yamlChannel?.templateBank ?? bank?.name,
+      templateBankId: existing?.templateBankId ?? bank?.id,
     };
   }
 
@@ -520,6 +530,26 @@ function inferCountryFromChannelName(name: string): "ZM" | "CM" | "EG" {
     return "CM";
   }
   return "ZM";
+}
+
+function pickLiveTemplateBank(
+  state: ChatState,
+  country: "ZM" | "CM" | "EG",
+): { id: string; name: string } | undefined {
+  const banks = state.pagerAccount?.liveTemplateBanks ?? [];
+  if (!banks.length) {
+    return undefined;
+  }
+  const hints: Record<"ZM" | "CM" | "EG", string[]> = {
+    ZM: ["замб", "zamb", "zambia"],
+    EG: ["егип", "egypt", "hapka"],
+    CM: ["камер", "cameroon", "cameroun"],
+  };
+  const matched = banks.find((bank) => {
+    const normalized = bank.name.toLowerCase();
+    return hints[country].some((hint) => normalized.includes(hint));
+  });
+  return matched ?? banks[0];
 }
 
 function getConversationState(

@@ -31,11 +31,12 @@ export function buildPagerAccountPatch(
     ...base,
     cookies: enrichPagerCookies(session.cookieHeader, {
       organizationId: session.organizationId ?? base.organizationId,
-      pagerUserId: session.pagerUserId,
+      pagerUserId: session.pagerUserId ?? base.pagerUserId,
     }),
     organizationId: session.organizationId ?? base.organizationId,
     organizationSlug: session.organizationSlug ?? base.organizationSlug,
     organizationName: session.organizationName ?? base.organizationName,
+    pagerUserId: session.pagerUserId ?? base.pagerUserId,
   };
 }
 
@@ -44,10 +45,12 @@ function buildPagerClient(state: ChatState, env: AppEnv, cookieHeader: string, o
     baseUrl: env.PAGER_BASE_URL,
     cookieHeader: enrichPagerCookies(cookieHeader, {
       organizationId: orgId ?? state.pagerAccount?.organizationId,
+      pagerUserId: state.pagerAccount?.pagerUserId,
     }),
     orgId: orgId ?? state.pagerAccount?.organizationId,
     orgSlug: resolvePagerOrgSlug(state),
     locale: "uk",
+    sessionUserId: state.pagerAccount?.pagerUserId,
   });
 }
 
@@ -59,11 +62,12 @@ async function finalizeSession(
 ): Promise<PagerSessionResult> {
   await client.verifyApiSession();
   const bootstrap = await client.bootstrapSession();
+  const probedUserId = (await client.probeOperatorUserId()) || pagerUserId;
   const patched = await deps.stateStore.patch(state.chatId, {
     pagerAccount: buildPagerAccountPatch(state, {
       ...bootstrap,
       cookieHeader: client.getCookieHeader(),
-      pagerUserId,
+      pagerUserId: probedUserId,
     }),
   });
   return { state: patched ?? state, client };
@@ -132,6 +136,8 @@ export async function refreshPagerSessionWithCredentials(
         authMode: "credentials",
         email: account.email,
         password: account.password,
+        cookies: result.state.pagerAccount?.cookies ?? account.cookies,
+        pagerUserId: result.state.pagerAccount?.pagerUserId ?? login.pagerUserId,
         organizationId:
           result.state.pagerAccount?.organizationId ??
           session.organizationId ??
@@ -150,7 +156,9 @@ export async function refreshPagerSessionWithCredentials(
         })),
       },
     });
-    console.log(`Pager session auto-refreshed for chat ${state.chatId}`);
+    console.log(
+      `Pager session auto-refreshed for chat ${state.chatId} operator=${result.state.pagerAccount?.pagerUserId?.slice(0, 16) ?? "?"}`,
+    );
     return { state: patched ?? result.state, client: result.client };
   } catch (error) {
     console.error(`Pager credential refresh failed for chat ${state.chatId}:`, formatError(error));
