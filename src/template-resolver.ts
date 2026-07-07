@@ -9,6 +9,7 @@ import {
 } from "./cm-script-engine.js";
 import {
   ZM_FOLDER_NAME_HINTS,
+  ZM_SCRIPT_EXCLUDE_SNIPPETS,
   scriptSearchNeedles as zmScriptSearchNeedles,
   scriptSnippet as zmScriptSnippet,
 } from "./zm-script-engine.js";
@@ -128,12 +129,18 @@ export async function resolveScriptTextByKey(
   if (folderId) {
     const replies = await loadFolderReplies(client, folderId);
     const fromPager = matchReplyByScriptKey(replies, options.scriptKey, country);
-    if (fromPager?.text?.trim()) {
+    if (fromPager?.text?.trim() && isScriptReplyAcceptable(fromPager.text, options.scriptKey, country)) {
       return fromPager.text;
     }
-    console.warn(
-      `${country} script pager miss key=${options.scriptKey} folder=${folderId.slice(0, 8)} replies=${replies.length}`,
-    );
+    if (fromPager?.text?.trim()) {
+      console.warn(
+        `${country} script pager rejected weak match key=${options.scriptKey} chars=${fromPager.text.length}`,
+      );
+    } else {
+      console.warn(
+        `${country} script pager miss key=${options.scriptKey} folder=${folderId.slice(0, 8)} replies=${replies.length}`,
+      );
+    }
   }
 
   const local = country === "ZM" ? loadLocalZmScript(options.scriptKey) : loadLocalCmScript(options.scriptKey);
@@ -185,39 +192,94 @@ function matchReplyByScriptKey(
   scriptKey: string,
   country: CountryCode,
 ): PagerSavedReply | undefined {
-  const keyNeedle = scriptKey.toLowerCase();
-  const byName = replies.filter((reply) => (reply.name ?? "").toLowerCase().includes(keyNeedle));
-  if (byName.length) {
-    return byName[byName.length - 1];
-  }
-
   const snippetForCountry = country === "ZM" ? zmScriptSnippet : cmScriptSnippet;
   const needlesForCountry = country === "ZM" ? zmScriptSearchNeedles : cmScriptSearchNeedles;
+  const excludes = country === "ZM" ? ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [] : [];
   const primary = snippetForCountry(scriptKey).trim().toLowerCase();
+
+  const candidates = replies.filter((reply) => {
+    const text = (reply.text || "").trim();
+    if (!text) {
+      return false;
+    }
+    return !hasExcludedSnippet(text, excludes);
+  });
+
+  const byExactName = candidates.filter((reply) => scriptNameMatchesKey(reply.name, scriptKey));
+  if (byExactName.length) {
+    return pickBestScriptReply(byExactName, scriptKey);
+  }
+
   if (primary) {
-    const byPrimary = replies.filter((reply) => normalizeNeedle(reply.text).includes(primary));
+    const byPrimary = candidates.filter((reply) => normalizeNeedle(reply.text).includes(primary));
     if (byPrimary.length) {
-      return byPrimary[byPrimary.length - 1];
+      return pickBestScriptReply(byPrimary, scriptKey);
     }
   }
 
-  const needles = needlesForCountry(scriptKey);
-  let lastHit: PagerSavedReply | undefined;
-  for (const reply of replies) {
-    const name = (reply.name ?? "").toLowerCase();
+  const needles = needlesForCountry(scriptKey).map((needle) => needle.trim().toLowerCase()).filter(Boolean);
+  const byNeedles = candidates.filter((reply) => {
     const body = normalizeNeedle(reply.text);
-    for (const needle of needles) {
-      const normalized = needle.trim().toLowerCase();
-      if (!normalized) {
-        continue;
-      }
-      if (name.includes(normalized) || body.includes(normalized)) {
-        lastHit = reply;
-        break;
-      }
-    }
+    const name = (reply.name ?? "").toLowerCase();
+    return needles.some((needle) => name.includes(needle) || body.includes(needle));
+  });
+  if (byNeedles.length) {
+    return pickBestScriptReply(byNeedles, scriptKey);
   }
-  return lastHit;
+
+  const keyNeedle = scriptKey.toLowerCase();
+  const byLooseName = candidates.filter((reply) => (reply.name ?? "").toLowerCase().includes(keyNeedle));
+  if (byLooseName.length) {
+    return pickBestScriptReply(byLooseName, scriptKey);
+  }
+
+  return undefined;
+}
+
+function scriptNameMatchesKey(name: string | undefined, scriptKey: string): boolean {
+  const normalized = (name ?? "").trim().toLowerCase().replace(/\.txt$/, "");
+  const key = scriptKey.trim().toLowerCase();
+  return normalized === key || normalized.endsWith(`/${key}`) || normalized.includes(key);
+}
+
+function hasExcludedSnippet(text: string, excludes: string[]): boolean {
+  const body = text.trim().toLowerCase();
+  return excludes.some((snippet) => body.includes(snippet.trim().toLowerCase()));
+}
+
+function pickBestScriptReply(replies: PagerSavedReply[], scriptKey: string): PagerSavedReply {
+  if (scriptKey === "05_link" || scriptKey === "06_link") {
+    return [...replies].sort((left, right) => (left.text?.length ?? 0) - (right.text?.length ?? 0))[0];
+  }
+  return [...replies].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0];
+}
+
+function isScriptReplyAcceptable(text: string, scriptKey: string, country: CountryCode): boolean {
+  const snippetForCountry = country === "ZM" ? zmScriptSnippet : cmScriptSnippet;
+  const excludes = country === "ZM" ? ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [] : [];
+  const body = text.trim().toLowerCase();
+  if (!body || hasExcludedSnippet(body, excludes)) {
+    return false;
+  }
+
+  const primary = snippetForCountry(scriptKey).trim().toLowerCase();
+  if (primary && body.includes(primary)) {
+    return true;
+  }
+
+  if (scriptKey === "04_registration" && country === "ZM") {
+    return (
+      body.includes("promo code zam577") ||
+      body.includes("special registration link") ||
+      body.includes("paste it into your google chrome")
+    );
+  }
+
+  if (scriptKey === "05_link") {
+    return body.includes("tinyurl.com/zam577") || body.includes("tinyurl.com/camerun01");
+  }
+
+  return body.length >= 40;
 }
 
 function matchReplyByRole(

@@ -112,6 +112,11 @@ async function processPagerAccounts(deps: WorkerDeps): Promise<void> {
 async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promise<void> {
   let freshState = hydrateOperatorState((await deps.stateStore.get(state.chatId)) ?? state);
 
+  if (freshState.paused) {
+    console.log(`Pager worker: chat ${freshState.chatId} — paused (/reset_pause to resume)`);
+    return;
+  }
+
   const sessionResult = await ensurePagerSession(
     { env: deps.env, stateStore: deps.stateStore },
     freshState,

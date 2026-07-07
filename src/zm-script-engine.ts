@@ -29,12 +29,17 @@ export const ZM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "01_intro": ["hi! i want to show you", "analytical systems", "artificial intelligence"],
   "02_how_it_works": ["how it works:", "1) you create"],
   "03_zmw_table": ["30 zmw - 300 zmw", "are you ready to start today", "here's what you can get"],
-  "04_registration": ["promo code zam577", "registration"],
-  "05_link": ["tinyurl.com/zam577", "zam577"],
+  "04_registration": ["promo code zam577", "special registration link", "paste it into your google chrome"],
+  "05_link": ["tinyurl.com/zam577"],
   "06_deposit": ['click "deposit"', "minimum deposit amount"],
   "07_game_id": ["begins with 17", "send me your game id", "game id"],
   "08_tg_invite": ["join our private telegram", "private telegram channel"],
   "09_tg_link": ["t.me/+", "vhfjiofy"],
+};
+
+export const ZM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
+  "04_registration": ["registration by e-mail", "make registration by e-mail", "by e-mail"],
+  "05_link": ["promo code", "special registration", "how it works"],
 };
 
 export const ZM_FOLDER_NAME_HINTS = ["замб", "zamb", "zambia"];

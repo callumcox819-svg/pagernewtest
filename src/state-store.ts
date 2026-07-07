@@ -69,6 +69,8 @@ export type ChatState = {
     enabledChannelIds: string[];
     statusFolders?: StatusFolderState[];
   };
+  /** When true, worker skips auto-replies for this Telegram operator. */
+  paused?: boolean;
   updatedAt: string;
 };
 

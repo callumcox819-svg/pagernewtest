@@ -56,6 +56,13 @@ const telegram = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
 async function main() {
   stateStore = await createStateStore(env);
   console.log(`Starting ${env.TELEGRAM_BOT_NAME}...`);
+  await telegram.setMyCommands([
+    { command: "start", description: "Открыть меню" },
+    { command: "pause", description: "Пауза авто-ответов" },
+    { command: "reset_pause", description: "Снять паузу" },
+  ]).catch((error) => {
+    console.warn("Telegram setMyCommands failed:", formatError(error));
+  });
   await warmupConnectedAccounts();
 
   await Promise.all([
@@ -545,11 +552,30 @@ async function handleMessage(message: TelegramMessage) {
 }
 
 async function handleCommand(chatId: number, commandText: string, state: ChatState) {
-  const command = commandText.trim();
-  const effectiveChannel = getEffectiveChannel(state);
+  const command = normalizeTelegramCommand(commandText);
 
   if (command === "/start") {
     await sendMainMenu(chatId, state);
+    return;
+  }
+
+  if (command === "/pause") {
+    await stateStore.patch(chatId, { paused: true });
+    await telegram.sendMessage(
+      chatId,
+      "⏸ Авто-ответы на паузе.\nБот не шлёт сообщения в Pager, пока не снимешь паузу: /reset_pause",
+      buildMainMenuKeyboard(),
+    );
+    return;
+  }
+
+  if (command === "/reset_pause") {
+    await stateStore.patch(chatId, { paused: false });
+    await telegram.sendMessage(
+      chatId,
+      "▶️ Пауза снята. Авто-ответы снова работают.",
+      buildMainMenuKeyboard(),
+    );
     return;
   }
 
@@ -581,9 +607,15 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
 
   await telegram.sendMessage(
     chatId,
-    "Unknown command. Available: /start, /account, /channels, /status, /reset",
+    "Unknown command. Available: /start, /pause, /reset_pause, /account, /channels, /status, /reset",
     buildMainMenuKeyboard(),
   );
+}
+
+function normalizeTelegramCommand(commandText: string): string {
+  const token = commandText.trim().split(/\s+/)[0] ?? "";
+  const base = token.split("@")[0]?.toLowerCase() ?? "";
+  return base.startsWith("/") ? base : `/${base}`;
 }
 
 async function getOrCreateState(chatId: number): Promise<ChatState> {
@@ -1418,6 +1450,7 @@ async function sendStatus(chatId: number, state: ChatState) {
       `Enabled channels: ${collectEnabledChannelIds(state).length}`,
       `Live channels: ${state.pagerAccount?.liveChannels?.length ?? 0}`,
       `Status folders enabled: ${state.statusFolders?.filter((folder) => folder.enabled).length ?? "all (not configured)"}`,
+      `Paused: ${state.paused ? "yes" : "no"}`,
       `Pending action: ${state.pendingAction ?? "none"}`,
     ].join("\n"),
     buildMainMenuKeyboard(),

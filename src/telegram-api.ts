@@ -112,6 +112,12 @@ export class TelegramApi {
     });
   }
 
+  async setMyCommands(
+    commands: Array<{ command: string; description: string }>,
+  ): Promise<void> {
+    await this.request("setMyCommands", { commands });
+  }
+
   async getFile(fileId: string): Promise<TelegramFile> {
     return this.request<TelegramFile>("getFile", { file_id: fileId });
   }
