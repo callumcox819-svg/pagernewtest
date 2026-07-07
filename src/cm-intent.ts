@@ -88,14 +88,75 @@ export function classifyCmIntent(
 }
 
 export function isDepositTierChoice(text: string): boolean {
-  const t = (text || "").trim();
+  const t = normalizeFrText(text);
   if (!t) {
     return false;
   }
-  if (/^(1000|1500)\s*(?:cfa|fr|f)?\.?$/i.test(t)) {
+  if (/^(1000|1500|1\s?000|1\s?500)\s*(?:cfa|fr|f)?\.?$/i.test(t)) {
     return true;
   }
-  if (t.split(/\s+/).length <= 8 && /\b(1000|1500)\s*(?:cfa|fr|f)?\b/i.test(t)) {
+  if (t.split(/\s+/).length <= 12 && /\b(1000|1500|1\s?000|1\s?500)\s*(?:cfa|fr|f)?\b/i.test(t)) {
+    return true;
+  }
+  return isCmTier1000Choice(t) || isCmTier1500Choice(t);
+}
+
+function normalizeFrText(text: string): string {
+  return (text || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/['’]/g, "'");
+}
+
+function isCmTier1000Choice(t: string): boolean {
+  if (/^(1er|1ere|premier|premiere)\.?$/i.test(t)) {
+    return true;
+  }
+  if (
+    /\b(je choisis|je prends|je veux|je prend|choisis|prends|prenez|je prendrai)\s+(le\s+)?(1er|premier|premiere|1ere)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (/\b(le|la)\s+(1er|premier|premiere|1ere)\b/i.test(t)) {
+    return true;
+  }
+  if (/\b(1er|premier|premiere)\s+(option|choix|montant|variante)\b/i.test(t)) {
+    return true;
+  }
+  if (/\boption\s+1\b/i.test(t)) {
+    return true;
+  }
+  if (/\b(premier|1er)\s+montant\b/i.test(t)) {
+    return true;
+  }
+  if (/\bfirst(\s+one|\s+option)?\b/i.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+function isCmTier1500Choice(t: string): boolean {
+  if (/^(2eme|2e|deuxieme|second)\.?$/i.test(t)) {
+    return true;
+  }
+  if (
+    /\b(je choisis|je prends|je veux|choisis|prends)\s+(le\s+)?(2eme|deuxieme|second)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (/\b(le|la)\s+(2eme|deuxieme|second)\b/i.test(t)) {
+    return true;
+  }
+  if (/\b(2eme|deuxieme|second)\s+(option|choix|montant)\b/i.test(t)) {
+    return true;
+  }
+  if (/\boption\s+2\b/i.test(t)) {
     return true;
   }
   return false;
