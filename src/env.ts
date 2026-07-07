@@ -4,6 +4,7 @@ import { z } from "zod";
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_BOT_NAME: z.string().default("Pager Test Bot"),
+  PAGER_BASE_URL: z.string().url().default("https://www.pager.co.ua"),
   BOT_CONFIG_PATH: z.string().default("config/bot.config.yaml"),
   BOT_STATE_PATH: z.string().default("data/chat-state.json"),
   OCR_LANG: z.string().default("eng"),

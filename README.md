@@ -13,6 +13,8 @@ It already includes:
 - OCR-based screenshot classification
 - proof-driven transitions based on screenshots and customer confirmations
 - Telegram handoff after deposit confirmation
+- live Pager account validation through imported cookies
+- live channel loading from the connected Pager session
 
 ## Core flow
 
@@ -41,6 +43,14 @@ You can already test the logic through Telegram without Pager API:
 
 This makes the project useful before the Pager session/API layer is connected.
 
+You can now also test a real Pager session:
+
+- open `Pager аккаунт`
+- choose `Импорт cookies`
+- paste your Pager cookies in one line
+- the bot validates the session against `/api/channel`
+- after success, `Каналы` switches to the real live channel list from that account
+
 ## Environment variables
 
 Create `.env` from `.env.example`:
@@ -48,6 +58,7 @@ Create `.env` from `.env.example`:
 ```env
 TELEGRAM_BOT_TOKEN=put_your_botfather_token_here
 TELEGRAM_BOT_NAME=Pager Test Bot
+PAGER_BASE_URL=https://www.pager.co.ua
 BOT_CONFIG_PATH=config/bot.config.yaml
 BOT_STATE_PATH=data/chat-state.json
 OCR_ENABLED=true
@@ -70,6 +81,15 @@ Notes:
 - `/stages` - manually set the current internal stage
 - `/status` - show current chat state
 - `/reset` - reset the local state for this Telegram chat
+
+## Pager account status
+
+At the moment:
+
+- `cookies` auth is live and validated against real Pager API
+- `email + password` is stored in bot state and prepared for the next login-flow step
+- real saved replies are still not loaded from Pager yet because the exact internal endpoint for them still needs to be pinned down
+- until that endpoint is wired, template selection stays playbook-based, but channels can already be live
 
 ## Screenshot logic
 

@@ -8,6 +8,7 @@ import {
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
 import { loadEnv } from "./env.js";
+import { PagerClient } from "./pager-client.js";
 import { classifyProofFromImage } from "./proof-classifier.js";
 import { StateStore, type ChatState } from "./state-store.js";
 import {
@@ -70,7 +71,7 @@ async function handleCallback(
   const [kind, value] = data.split(":");
 
   if (kind === "channel" && value) {
-    const channel = getChannelConfig(config, value);
+    const channel = resolveChannelForState(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
@@ -83,7 +84,12 @@ async function handleCallback(
     await telegram.answerCallbackQuery(callbackId, `Channel: ${channel.name}`);
     await telegram.sendMessage(
       chatId,
-      `Selected channel: ${channel.name}\nCountry: ${channel.country}\nTemplate bank: ${channel.templateBank}`,
+      [
+        `Selected channel: ${channel.name}`,
+        `Country: ${channel.country}`,
+        `Template bank: ${channel.templateBank}`,
+        channel.isLive ? "Source: live Pager account" : "Source: local config",
+      ].join("\n"),
       buildMainMenuKeyboard(),
     );
     return;
@@ -128,16 +134,17 @@ async function handleCallback(
       await telegram.sendMessage(
         chatId,
         "Choose the channel to test:",
-        buildChannelKeyboard(config.channels),
+        buildChannelKeyboard(getSelectableChannels(state)),
       );
       return;
     }
 
     if (value === "templates") {
+      const effectiveChannel = getEffectiveChannel(state);
       await telegram.sendMessage(
         chatId,
-        "Choose the template bank override:",
-        buildTemplateKeyboard(config.templateBanks.map((bank) => bank.name)),
+        `Choose the template bank override for ${effectiveChannel.name}:`,
+        buildTemplateKeyboard(getTemplateOptionsForChannel(effectiveChannel.country)),
       );
       return;
     }
@@ -333,16 +340,17 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
     await telegram.sendMessage(
       chatId,
       "Choose the channel to test:",
-      buildChannelKeyboard(config.channels),
+      buildChannelKeyboard(getSelectableChannels(state)),
     );
     return;
   }
 
   if (command === "/templates") {
+    const effectiveChannel = getEffectiveChannel(state);
     await telegram.sendMessage(
       chatId,
-      "Choose the template bank override:",
-      buildTemplateKeyboard(config.templateBanks.map((bank) => bank.name)),
+      `Choose the template bank override for ${effectiveChannel.name}:`,
+      buildTemplateKeyboard(getTemplateOptionsForChannel(effectiveChannel.country)),
     );
     return;
   }
@@ -400,7 +408,7 @@ function getOrCreateState(chatId: number): ChatState {
 }
 
 function getEffectiveChannel(state: ChatState) {
-  const channel = getChannelConfig(config, state.channelId);
+  const channel = resolveChannelForState(state, state.channelId);
   if (!channel) {
     throw new Error(`Unknown channel in state: ${state.channelId}`);
   }
@@ -413,6 +421,74 @@ function getEffectiveChannel(state: ChatState) {
     ...channel,
     templateBank: state.templateBankOverride,
   };
+}
+
+function getSelectableChannels(state: ChatState) {
+  const liveChannels = state.pagerAccount?.liveChannels ?? [];
+  if (liveChannels.length > 0) {
+    return liveChannels.map((channel) => {
+      const mapped = getChannelConfig(config, channel.id);
+      return {
+        id: channel.id,
+        name: channel.name,
+        country: mapped?.country ?? inferCountryFromName(channel.name),
+        enabled: true,
+      };
+    });
+  }
+
+  return config.channels;
+}
+
+function getTemplateOptionsForChannel(country: string) {
+  const exactMatches = config.templateBanks
+    .map((bank) => bank.name)
+    .filter((name) => name.startsWith(country.toLowerCase()));
+
+  return exactMatches.length > 0
+    ? exactMatches
+    : config.templateBanks.map((bank) => bank.name);
+}
+
+function resolveChannelForState(state: ChatState, channelId: string) {
+  const mapped = getChannelConfig(config, channelId);
+  if (mapped) {
+    return { ...mapped, isLive: false };
+  }
+
+  const live = state.pagerAccount?.liveChannels?.find((channel) => channel.id === channelId);
+  if (!live) {
+    return undefined;
+  }
+
+  const country = inferCountryFromName(live.name);
+  return {
+    id: live.id,
+    name: live.name,
+    enabled: true,
+    country,
+    templateBank: `${country.toLowerCase()}-default`,
+    statusMap: getDefaultEnabledChannel(config).statusMap,
+    isLive: true,
+  };
+}
+
+function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
+  const normalized = name.toLowerCase();
+  if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {
+    return "EG";
+  }
+  if (/moukoko|ndzi|ekambi|cameroon|cm|tchouameni/.test(normalized)) {
+    return "CM";
+  }
+  return "ZM";
+}
+
+function buildPagerClient(cookieHeader: string) {
+  return new PagerClient({
+    baseUrl: env.PAGER_BASE_URL,
+    cookieHeader,
+  });
 }
 
 function sleep(ms: number) {
@@ -458,20 +534,45 @@ async function handlePendingInput(
   }
 
   if (state.pendingAction === "await_pager_cookies") {
-    stateStore.patch(chatId, {
-      pendingAction: undefined,
-      pagerAccount: {
-        authMode: "cookies",
-        cookies: text.trim(),
-        connectedAt: new Date().toISOString(),
-      },
-      draftPagerEmail: undefined,
-    });
-    await telegram.sendMessage(
-      chatId,
-      "Cookies сохранены в локальном состоянии бота.",
-      buildPagerAccountKeyboard(true),
-    );
+    try {
+      const session = await buildPagerClient(text.trim()).validateSession();
+      stateStore.patch(chatId, {
+        pendingAction: undefined,
+        pagerAccount: {
+          authMode: "cookies",
+          cookies: text.trim(),
+          organizationId: session.organizationId,
+          organizationName: session.organizationName,
+          liveChannels: session.channels.map((channel) => ({
+            id: channel.id,
+            name: channel.name,
+            channelSource: channel.channelSource,
+          })),
+          connectedAt: new Date().toISOString(),
+        },
+        draftPagerEmail: undefined,
+      });
+      await telegram.sendMessage(
+        chatId,
+        [
+          "Cookies сохранены и проверены.",
+          `Организация: ${session.organizationName ?? session.organizationId ?? "unknown"}`,
+          `Каналов найдено: ${session.channelCount}`,
+          "Теперь кнопка `Каналы` будет показывать живые каналы аккаунта.",
+        ].join("\n"),
+        buildPagerAccountKeyboard(true),
+      );
+    } catch (error) {
+      stateStore.patch(chatId, {
+        pendingAction: undefined,
+        draftPagerEmail: undefined,
+      });
+      await telegram.sendMessage(
+        chatId,
+        `Не удалось авторизовать cookies: ${formatError(error)}`,
+        buildPagerAccountKeyboard(false),
+      );
+    }
     return true;
   }
 
@@ -487,6 +588,7 @@ async function sendMainMenu(chatId: number, state: ChatState) {
       `Канал: ${effectiveChannel.name} | ${effectiveChannel.country}`,
       `Шаблоны: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
       `Этап: ${state.currentStage}`,
+      `Pager: ${state.pagerAccount?.organizationName ?? (state.pagerAccount ? "connected" : "not connected")}`,
       "Выбери нужное действие кнопками ниже.",
     ].join("\n"),
     buildMainMenuKeyboard(),
@@ -500,11 +602,20 @@ async function sendPagerAccountMenu(chatId: number, state: ChatState) {
         "Pager аккаунт подключён",
         `Режим: ${account.authMode === "credentials" ? "email + пароль" : "cookies"}`,
         account.email ? `Email: ${maskEmail(account.email)}` : undefined,
+        account.organizationName
+          ? `Org: ${account.organizationName}`
+          : account.organizationId
+            ? `Org ID: ${account.organizationId}`
+            : undefined,
+        account.liveChannels?.length
+          ? `Каналы: ${account.liveChannels.length}`
+          : undefined,
         `Подключен: ${new Date(account.connectedAt).toLocaleString("ru-RU")}`,
       ].filter(Boolean)
     : [
         "Pager аккаунт не подключён",
         "Можно войти через email + пароль или сохранить cookies.",
+        "Для реального live-подключения сейчас уже работает вариант через cookies.",
       ];
 
   await telegram.sendMessage(
@@ -524,6 +635,7 @@ async function sendStatus(chatId: number, state: ChatState) {
       `Stage: ${state.currentStage}`,
       `Template bank: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
       `Pager account: ${state.pagerAccount ? "saved" : "not connected"}`,
+      `Live channels: ${state.pagerAccount?.liveChannels?.length ?? 0}`,
       `Pending action: ${state.pendingAction ?? "none"}`,
     ].join("\n"),
     buildMainMenuKeyboard(),
@@ -545,6 +657,13 @@ function maskEmail(email?: string): string {
   }
 
   return `${name.slice(0, 2)}***@${domain}`;
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
 }
 
 main().catch((error) => {

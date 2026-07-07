@@ -12,6 +12,13 @@ export type PagerAccountState = {
   email?: string;
   password?: string;
   cookies?: string;
+  organizationId?: string;
+  organizationName?: string;
+  liveChannels?: Array<{
+    id: string;
+    name: string;
+    channelSource?: string | null;
+  }>;
   connectedAt: string;
 };
 
