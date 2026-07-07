@@ -144,6 +144,20 @@ export function getTemplateBank(
   return bank;
 }
 
+export function resolveYamlTemplateBankName(
+  config: BotConfig,
+  country: CountryCode,
+  channelId?: string,
+): string {
+  if (channelId) {
+    const channel = getChannelConfig(config, channelId);
+    if (channel?.templateBank) {
+      return channel.templateBank;
+    }
+  }
+  return `${country.toLowerCase()}-default`;
+}
+
 export function getDefaultEnabledChannel(config: BotConfig): ChannelConfig {
   const channel = config.channels.find((item) => item.enabled);
   if (!channel) {

@@ -5,6 +5,7 @@ import {
   getChannelConfig,
   getDefaultEnabledChannel,
   getPlaybook,
+  resolveYamlTemplateBankName,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
 import type { AppEnv } from "./env.js";
@@ -525,10 +526,7 @@ function buildRuntimeChannelConfig(
   const mapped = getChannelConfig(config, runtime.channelId);
   const fallback = getDefaultEnabledChannel(config);
   const country = runtime.runtime.country;
-  const templateBank =
-    runtime.runtime.templateBank ??
-    mapped?.templateBank ??
-    `${country.toLowerCase()}-default`;
+  const templateBank = resolveYamlTemplateBankName(config, country, runtime.channelId);
 
   return {
     id: runtime.channelId,
