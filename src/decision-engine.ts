@@ -8,6 +8,12 @@ import {
   getPlaybook,
   getTemplateBank,
 } from "./config.js";
+import {
+  classifySpecialCustomerIntent,
+  matchesPlaybookKeywords,
+  normalizeCustomerText,
+  specialIntentTemplateRole,
+} from "./customer-intent.js";
 
 export type ConversationEvent = {
   channelId: string;
@@ -47,28 +53,36 @@ export function decideNextAction(
         reason: `Matched proof rule ${proofRule.kind}`,
       };
     }
+    if (event.proofKind === "unclear_screenshot") {
+      return {
+        nextStage: "waiting_id",
+        templateRole: "ask_clear_screenshot",
+        templateToSend: templateBank.roles.ask_clear_screenshot,
+        reason: "Unclear screenshot",
+      };
+    }
   }
 
-  const normalizedText = normalizeText(event.latestCustomerText);
+  const text = event.latestCustomerText ?? "";
+  const special = classifySpecialCustomerIntent(playbook, text);
+  const specialRole = specialIntentTemplateRole(special);
+  if (specialRole) {
+    return {
+      nextStage: special === "deferral" ? "not_ready" : "no_money",
+      templateRole: specialRole,
+      templateToSend: templateBank.roles[specialRole],
+      reason: `Special intent ${special}`,
+    };
+  }
+
+  const normalizedText = normalizeCustomerText(text);
   if (!normalizedText) {
     return undefined;
   }
 
-  const noMoneyHit = playbook.noMoneyKeywords.some((keyword) =>
-    normalizedText.includes(normalizeText(keyword)),
-  );
-  if (noMoneyHit) {
-    return {
-      nextStage: "no_money",
-      templateRole: "no_money",
-      templateToSend: templateBank.roles.no_money,
-      reason: "Detected no-money objection",
-    };
-  }
-
   for (const rule of playbook.textRules) {
     const matched = rule.matchAny.some((keyword) =>
-      normalizedText.includes(normalizeText(keyword)),
+      matchesPlaybookKeywords([keyword], normalizedText),
     );
     if (matched) {
       return {
@@ -107,24 +121,18 @@ export function inferProofKindFromCaption(
   playbook: PlaybookConfig,
   captionOrMessage?: string,
 ): ProofKind | undefined {
-  const normalizedText = normalizeText(captionOrMessage);
+  const normalizedText = normalizeCustomerText(captionOrMessage);
   if (!normalizedText) {
     return undefined;
   }
 
-  if (playbook.depositKeywords.some((keyword) => normalizedText.includes(normalizeText(keyword)))) {
+  if (matchesPlaybookKeywords(playbook.depositKeywords, normalizedText)) {
     return "deposit_balance_screenshot";
   }
 
-  if (playbook.registrationKeywords.some((keyword) =>
-    normalizedText.includes(normalizeText(keyword)),
-  )) {
+  if (matchesPlaybookKeywords(playbook.registrationKeywords, normalizedText)) {
     return "registration_screenshot";
   }
 
   return undefined;
-}
-
-function normalizeText(value?: string): string {
-  return value?.toLowerCase().trim() ?? "";
 }

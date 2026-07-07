@@ -78,8 +78,8 @@ templateBanks:
       ask_id: "Envoyez-moi une capture ou l'identifiant du compte est bien visible."
       ask_clear_screenshot: "La capture n'est pas assez claire. Envoyez une image complete et lisible."
       telegram_handoff: "Le depot est visible. Voici le lien Telegram pour la suite: https://t.me/example_cm"
-      no_money: "D'accord, ecrivez-moi quand vous serez pret et on reprendra."
-      reactivation: "Il reste encore quelques places, ecrivez-moi si vous voulez continuer."
+      no_money: "D'accord, quand vous aurez de l'argent, écrivez-moi et nous reprendrons. Je serai là pour vous."
+      reactivation: "Il reste encore quelques places, écrivez-moi si vous voulez continuer."
 
   - name: "zm-default"
     roles:
@@ -113,6 +113,12 @@ playbooks:
       - "مش معاي فلوس"
       - "no money"
       - "مصاري"
+      - "معنديش فلوس"
+      - "مفيش فلوس"
+    notReadyKeywords:
+      - "بعدين"
+      - "مش دلوقتي"
+      - "لاحقا"
     proofRules:
       - kind: "registration_screenshot"
         nextStage: "registered"
@@ -154,7 +160,18 @@ playbooks:
     noMoneyKeywords:
       - "pas d'argent"
       - "pas de money"
+      - "pas d argent"
+      - "j'ai pas"
+      - "je n'ai pas"
+      - "no money"
+      - "sans argent"
+    notReadyKeywords:
       - "plus tard"
+      - "pas maintenant"
+      - "demain"
+      - "occupé"
+      - "occupe"
+      - "pas le temps"
     proofRules:
       - kind: "registration_screenshot"
         nextStage: "registered"
@@ -197,6 +214,14 @@ playbooks:
       - "no money"
       - "not ready"
       - "later"
+      - "broke"
+      - "can't afford"
+    notReadyKeywords:
+      - "later"
+      - "not now"
+      - "tomorrow"
+      - "too busy"
+      - "no time"
     proofRules:
       - kind: "registration_screenshot"
         nextStage: "registered"

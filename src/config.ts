@@ -79,6 +79,7 @@ const playbookSchema = z.object({
   registrationKeywords: z.array(z.string()).default([]),
   depositKeywords: z.array(z.string()).default([]),
   noMoneyKeywords: z.array(z.string()).default([]),
+  notReadyKeywords: z.array(z.string()).default([]),
   proofRules: z.array(proofRuleSchema).min(1),
   textRules: z.array(textRuleSchema).min(1),
 });

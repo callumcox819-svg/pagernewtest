@@ -10,6 +10,12 @@ import {
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
 import {
+  classifySpecialCustomerIntent,
+  moneyRefusalText,
+  specialIntentTemplateRole,
+} from "./customer-intent.js";
+import { ocrLangForCountry } from "./ocr-lang.js";
+import {
   classifyCmMessage,
   collectOutgoingTexts,
   funnelStepFromScriptGaps,
@@ -47,6 +53,7 @@ import {
   getEnabledFolderIds,
   hasEnabledStatusFolders,
 } from "./status-folders.js";
+import type { TemplateRole } from "./config.js";
 import type { TelegramApi } from "./telegram-api.js";
 
 type WorkerDeps = {
@@ -316,6 +323,44 @@ async function processCmConversation(
   const gapStep = funnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
   const imageUrl = extractImageUrl(lastIncoming);
+  const playbook = getPlaybook(deps.config, channel.country);
+
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
+  if (imageUrl) {
+    const imageHandled = await tryHandleCustomerImage(deps, {
+      state,
+      client,
+      conv,
+      runtime,
+      channel,
+      convState,
+      convId,
+      lastIncoming,
+      text: latestCustomerText,
+      imageUrl,
+      playbook,
+      outgoingTexts,
+    });
+    if (imageHandled) {
+      return true;
+    }
+  }
+
   const intent = classifyCmMessage(latestCustomerText, {
     hasImage: Boolean(imageUrl),
     funnelStep: effectiveStep,
@@ -480,6 +525,22 @@ async function processGenericConversation(
   const latestCustomerText = (lastIncoming.text || "").trim();
   const imageUrl = extractImageUrl(lastIncoming);
 
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
   let proofKind;
   if (imageUrl) {
     try {
@@ -487,7 +548,7 @@ async function processGenericConversation(
       const classification = await classifyProofFromImage(playbook, image, {
         caption: latestCustomerText,
         ocrEnabled: deps.env.OCR_ENABLED,
-        ocrLang: deps.env.OCR_LANG,
+        ocrLang: ocrLangForCountry(channel.country),
       });
       proofKind = classification.proofKind;
     } catch (error) {
@@ -860,6 +921,144 @@ function truncate(value: string, max = 40): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type SpecialResponseContext = {
+  state: ChatState;
+  client: PagerClient;
+  conv: PagerConversation;
+  runtime: EnabledChannel;
+  channel: ChannelConfig;
+  convState: ConversationRuntimeState;
+  convId: string;
+  lastIncoming: PagerMessage;
+  text: string;
+  playbook: ReturnType<typeof getPlaybook>;
+};
+
+async function trySendSpecialCustomerResponse(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext,
+): Promise<boolean> {
+  const special = classifySpecialCustomerIntent(ctx.playbook, ctx.text);
+  if (special === "declined" || special === "scam_accusation") {
+    console.log(
+      `Pager worker: skip ${ctx.convId.slice(0, 8)} ${ctx.channel.country} — ${special} (text=${truncate(ctx.text)})`,
+    );
+    await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+      lastCustomerMessageId: ctx.lastIncoming.id,
+      lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+      currentStage: special === "declined" ? "dormant" : ctx.convState.currentStage,
+    });
+    return false;
+  }
+
+  let replyText: string | undefined;
+  let templateRole: TemplateRole | undefined;
+  let nextStage: Stage = ctx.convState.currentStage;
+
+  if (special === "money_request") {
+    replyText = moneyRefusalText(ctx.channel.country);
+    nextStage = "engaged";
+  } else {
+    templateRole = specialIntentTemplateRole(special);
+    if (!templateRole) {
+      return false;
+    }
+    replyText = await resolveTemplateText(deps.config, ctx.client, {
+      folderId: ctx.runtime.runtime.templateBankId,
+      yamlBankName: ctx.channel.templateBank,
+      role: templateRole,
+      country: ctx.channel.country,
+    });
+    nextStage = special === "deferral" ? "not_ready" : "no_money";
+  }
+
+  if (!replyText?.trim()) {
+    return false;
+  }
+
+  console.log(
+    `Pager worker: ${ctx.channel.country} ${ctx.convId.slice(0, 8)} special=${special} role=${templateRole ?? "money_refusal"}`,
+  );
+
+  const sent = await ctx.client.sendMessageReliable(ctx.convId, replyText.trim(), {
+    channelId: ctx.runtime.channelId,
+    conv: ctx.conv,
+  });
+  if (!sent) {
+    return false;
+  }
+
+  await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+    conversationId: ctx.convId,
+    channelId: ctx.runtime.channelId,
+    currentStage: nextStage,
+    lastCustomerMessageId: ctx.lastIncoming.id,
+    lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: templateRole ?? special,
+    sendFailures: 0,
+  });
+  return true;
+}
+
+async function tryHandleCustomerImage(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext & {
+    imageUrl: string;
+    outgoingTexts: string[];
+  },
+): Promise<boolean> {
+  if (!ctx.imageUrl) {
+    return false;
+  }
+
+  let proofKind;
+  try {
+    const image = await ctx.client.downloadAttachment(ctx.imageUrl);
+    const classification = await classifyProofFromImage(ctx.playbook, image, {
+      caption: ctx.text,
+      ocrEnabled: deps.env.OCR_ENABLED,
+      ocrLang: ocrLangForCountry(ctx.channel.country),
+    });
+    proofKind = classification.proofKind;
+  } catch (error) {
+    console.warn(`CM OCR failed ${ctx.convId.slice(0, 8)}:`, formatError(error));
+    proofKind = classifyProofFromText(ctx.playbook, ctx.text).proofKind;
+  }
+
+  if (proofKind === "unclear_screenshot" && regLinkSentInHistory(ctx.outgoingTexts)) {
+    const replyText = await resolveTemplateText(deps.config, ctx.client, {
+      folderId: ctx.runtime.runtime.templateBankId,
+      yamlBankName: ctx.channel.templateBank,
+      role: "ask_clear_screenshot",
+      country: ctx.channel.country,
+    });
+    if (!replyText?.trim()) {
+      return false;
+    }
+    const sent = await ctx.client.sendMessageReliable(ctx.convId, replyText.trim(), {
+      channelId: ctx.runtime.channelId,
+      conv: ctx.conv,
+    });
+    if (!sent) {
+      return false;
+    }
+    await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+      conversationId: ctx.convId,
+      channelId: ctx.runtime.channelId,
+      currentStage: "waiting_id",
+      lastCustomerMessageId: ctx.lastIncoming.id,
+      lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: "ask_clear_screenshot",
+      sendFailures: 0,
+    });
+    return true;
+  }
+
+  return false;
 }
 
 function formatError(error: unknown): string {
