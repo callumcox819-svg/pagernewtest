@@ -5,7 +5,6 @@ import {
   isAgeAnswer,
   isDepositTierChoice,
   isFunnelPositiveReaction,
-  isReadyForRegistration,
   isRegistrationConfirmed,
   isRegistrationPending,
   wantsDetailsAfterIntro,
@@ -40,8 +39,16 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   ],
   "02_age": ["quel âge", "quel age", "age avez-vous", "age as-tu"],
   "03_steps": ["voici comment ça fonctionne", "comment ça fonctionne", "étape par étape"],
-  "04_tier": ["140 000 cfa", "190 000 cfa", "que vas-tu choisir", "1 000 cfa"],
-  "05_registration": ["cash056", "code promo", "promo code"],
+  "04_tier": [
+    "140 000 cfa",
+    "190 000 cfa",
+    "que vas-tu choisir",
+    "tu choisis quoi",
+    "voici ce que tu peux obtenir",
+    "investissement → gain",
+    "bénéfice",
+  ],
+  "05_registration": ["je vous envoie le lien", "télécharger l'application", "cash056", "code promo"],
   "06_link": ["camerun01", "tinyurl"],
   "07_chrome": ["google chrome", "colle le lien"],
   "08_game_id": ["commence par 17", "numéro de joueur"],
@@ -70,8 +77,34 @@ export function cmScriptSentInHistory(outgoingTexts: string[], scriptKey: string
       return true;
     }
   }
+  if (scriptKey === "04_tier") {
+    return tierSentInHistory(outgoingTexts);
+  }
   return scriptSearchNeedles(scriptKey).some((needle) => scriptSentInHistory(outgoingTexts, needle));
 }
+
+export function tierSentInHistory(outgoingTexts: string[]): boolean {
+  const blob = outgoingTexts.join("\n").toLowerCase();
+  return (
+    blob.includes("140 000 cfa") ||
+    blob.includes("190 000 cfa") ||
+    blob.includes("que vas-tu choisir") ||
+    blob.includes("tu choisis quoi") ||
+    blob.includes("voici ce que tu peux obtenir") ||
+    blob.includes("investissement → gain") ||
+    blob.includes("investissement -> gain")
+  );
+}
+
+export function stepsSentInHistory(outgoingTexts: string[]): boolean {
+  if (cmScriptSentInHistory(outgoingTexts, "03_steps")) {
+    return true;
+  }
+  const blob = outgoingTexts.join("\n").toLowerCase();
+  return blob.includes("voici comment ça fonctionne") || blob.includes("comment ça fonctionne");
+}
+
+const CM_REG_BUNDLE = ["05_registration", "06_link", "07_chrome"] as const;
 
 function ageQuestionSentInHistory(outgoingTexts: string[]): boolean {
   const blob = outgoingTexts.join("\n").toLowerCase();
@@ -167,7 +200,7 @@ export function funnelStepFromScriptGaps(
   if (!cmScriptSentInHistory(outgoingTexts, "03_steps")) {
     return Math.min(step, 2);
   }
-  if (!cmScriptSentInHistory(outgoingTexts, "04_tier")) {
+  if (!tierSentInHistory(outgoingTexts)) {
     return Math.min(step, 3);
   }
   if (!regLinkSentInHistory(outgoingTexts)) {
@@ -205,12 +238,12 @@ export function resolveCmFunnelScripts(
 ): string[] {
   const out = outgoingTexts;
   const t = (text || "").trim();
-  const positive =
+  const positiveSignal =
     isFunnelPositiveReaction(t, effectiveStep) ||
     intent === "positive" ||
     intent === "ready" ||
-    intent === "interested" ||
-    intent === "question";
+    intent === "interested";
+  const tierChoice = isDepositTierChoice(t);
 
   if (intent === "declined") {
     return [];
@@ -219,8 +252,8 @@ export function resolveCmFunnelScripts(
   const introSent = cmScriptSentInHistory(out, "01_intro");
   const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
   const ageSent = cmScriptSentInHistory(out, "02_age") || ageQuestionSentInHistory(out);
-  const stepsSent = cmScriptSentInHistory(out, "03_steps");
-  const tierSent = cmScriptSentInHistory(out, "04_tier");
+  const stepsSent = stepsSentInHistory(out);
+  const tierSent = tierSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
 
   if (isAgeAnswer(t) && !stepsSent && effectiveStep < 5 && !linkSent) {
@@ -237,66 +270,94 @@ export function resolveCmFunnelScripts(
     return [];
   }
 
-  if (tierSent && isDepositTierChoice(t)) {
-    return ["05_registration", "06_link", "07_chrome"];
+  if (tierSent && tierChoice && !linkSent) {
+    return [...CM_REG_BUNDLE];
   }
 
   if (wantsRegistrationLink(t) && stepsSent && !linkSent) {
-    return ["05_registration", "06_link", "07_chrome"];
+    return tierSent ? [...CM_REG_BUNDLE] : ["04_tier"];
   }
 
-  if (!introSent) {
-    if (["interested", "positive", "ready", "question", "unknown"].includes(intent) || positive) {
-      return ["01_intro", "01_intro_2"];
+  if (effectiveStep < 1) {
+    if (!introSent) {
+      if (["interested", "positive", "ready", "question", "unknown"].includes(intent) || positiveSignal) {
+        return ["01_intro", "01_intro_2"];
+      }
+      return [];
+    }
+    if (!intro2Sent) {
+      return ["01_intro_2"];
     }
     return [];
   }
 
-  if (!intro2Sent) {
-    return ["01_intro_2"];
-  }
-
-  if (!ageSent && effectiveStep < 5 && intro2Sent) {
-    if (positive || wantsDetailsAfterIntro(t) || /\boui\b/i.test(t)) {
-      return ["02_age"];
-    }
-    if (effectiveStep >= 1 && intent === "unknown" && t.length > 3) {
-      return ["02_age"];
-    }
-    return [];
-  }
-
-  if (!stepsSent && effectiveStep < 5) {
-    if (isAgeAnswer(t) || positive || ageSent) {
-      return ["03_steps"];
+  if (effectiveStep < 2) {
+    if (intro2Sent && !ageSent) {
+      if (
+        positiveSignal ||
+        intent === "question" ||
+        wantsDetailsAfterIntro(t) ||
+        /\boui\b/i.test(t)
+      ) {
+        return ["02_age"];
+      }
     }
     return [];
   }
 
-  if (!tierSent && effectiveStep < 5) {
-    if (isReadyForRegistration(t) || positive || wantsRegistrationLink(t)) {
-      return ["04_tier"];
+  if (effectiveStep < 3) {
+    if (ageSent && !stepsSent) {
+      if (isAgeAnswer(t) || positiveSignal || intent === "question") {
+        return ["03_steps"];
+      }
     }
     return [];
   }
 
-  if (tierSent && (isDepositTierChoice(t) || isReadyForRegistration(t) || positive)) {
-    return ["05_registration", "06_link", "07_chrome"];
+  if (effectiveStep < 4) {
+    if (stepsSent && !tierSent) {
+      if (tierChoice) {
+        return ["04_tier", ...CM_REG_BUNDLE];
+      }
+      if (positiveSignal || intent === "question" || wantsDetailsAfterIntro(t)) {
+        return ["04_tier"];
+      }
+      return [];
+    }
+    if (tierSent && !linkSent) {
+      if (tierChoice || agreesAfterTierTable(t)) {
+        return [...CM_REG_BUNDLE];
+      }
+    }
+    return [];
   }
 
-  if (isRegistrationPending(t)) {
-    return ["05_registration", "06_link", "07_chrome"];
+  if (isRegistrationPending(t) && !linkSent) {
+    return [...CM_REG_BUNDLE];
   }
 
-  if (
-    tierSent &&
-    !linkSent &&
-    (isReadyForRegistration(t) || wantsRegistrationLink(t) || positive)
-  ) {
-    return ["05_registration", "06_link", "07_chrome"];
+  if (tierSent && !linkSent && (tierChoice || agreesAfterTierTable(t) || wantsRegistrationLink(t))) {
+    return [...CM_REG_BUNDLE];
   }
 
   return resolveCmBacklogFallback(effectiveStep, out, intent, t, options);
+}
+
+function agreesAfterTierTable(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  if (isDepositTierChoice(t)) {
+    return true;
+  }
+  if (/^(oui|ok|yes|d'accord)\.?$/i.test(t)) {
+    return true;
+  }
+  if (/\boui\b/i.test(t) && t.split(/\s+/).length <= 6) {
+    return true;
+  }
+  return false;
 }
 
 function resolveCmBacklogFallback(
@@ -309,9 +370,9 @@ function resolveCmBacklogFallback(
   const out = outgoingTexts;
   const introSent = cmScriptSentInHistory(out, "01_intro");
   const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
-  const ageSent = cmScriptSentInHistory(out, "02_age");
-  const stepsSent = cmScriptSentInHistory(out, "03_steps");
-  const tierSent = cmScriptSentInHistory(out, "04_tier");
+  const ageSent = cmScriptSentInHistory(out, "02_age") || ageQuestionSentInHistory(out);
+  const stepsSent = stepsSentInHistory(out);
+  const tierSent = tierSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
 
   if (linkSent) {
@@ -337,16 +398,16 @@ function resolveCmBacklogFallback(
     return ["03_steps"];
   }
   if (wantsRegistrationLink(text) && stepsSent && !linkSent) {
-    return tierSent ? ["05_registration", "06_link", "07_chrome"] : ["04_tier"];
+    return tierSent ? [...CM_REG_BUNDLE] : ["04_tier"];
   }
   if (!tierSent && effectiveStep < 5) {
     return ["04_tier"];
   }
   if (isDepositTierChoice(text)) {
-    return ["05_registration", "06_link", "07_chrome"];
+    return [...CM_REG_BUNDLE];
   }
-  if (effectiveStep < 6) {
-    return ["05_registration", "06_link", "07_chrome"];
+  if (effectiveStep < 6 && tierSent && agreesAfterTierTable(text)) {
+    return [...CM_REG_BUNDLE];
   }
   return [];
 }

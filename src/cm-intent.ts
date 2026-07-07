@@ -110,6 +110,13 @@ export function isAgeAnswer(text: string): boolean {
   if (/\b(j'ai|jai|ai)\s*\d{1,2}\s*ans\b/i.test(t)) {
     return true;
   }
+  if (/\b(j'ai|jai|ai)\s*\d{1,2}\b/i.test(t)) {
+    const match = t.match(/\b(?:j'ai|jai|ai)\s*(\d{1,2})\b/i);
+    if (match) {
+      const age = Number(match[1]);
+      return age >= 15 && age <= 99;
+    }
+  }
   if (/\b\d{1,2}\s*ans\b/i.test(t)) {
     return true;
   }
