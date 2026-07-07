@@ -11,11 +11,13 @@ import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
   isOutgoingDirection,
+  isPagerSessionError,
+  PagerApiError,
   PagerClient,
   type PagerConversation,
   type PagerMessage,
 } from "./pager-client.js";
-import { buildPagerAccountPatch, ensurePagerSession } from "./pager-session.js";
+import { buildPagerAccountPatch, ensurePagerSession, refreshPagerSessionWithCredentials } from "./pager-session.js";
 import { classifyProofFromImage, classifyProofFromText } from "./proof-classifier.js";
 import type {
   ChannelRuntimeState,
@@ -84,11 +86,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     freshState,
   );
   if (!sessionResult) {
+    console.warn(
+      `Pager worker: chat ${freshState.chatId} — no valid Pager session. Re-login via «Email + пароль» in the bot.`,
+    );
     return;
   }
 
   freshState = hydrateOperatorState(sessionResult.state);
-  const client = sessionResult.client;
+  let client = sessionResult.client;
 
   if (countApiStatusFolders(freshState.statusFolders) === 0) {
     freshState = (await ensureStatusFolders(deps, freshState, client)) ?? freshState;
@@ -137,19 +142,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
 
   let conversations: PagerConversation[] = [];
   try {
-    await client.syncOrgIdFromChannels();
-    const orgId = client.getOrganizationId();
-    if (orgId.startsWith("org_")) {
-      freshState =
-        (await deps.stateStore.patch(freshState.chatId, {
-          pagerAccount: buildPagerAccountPatch(freshState, {
-            organizationId: orgId,
-            organizationSlug: client.getOrganizationSlug() || freshState.pagerAccount?.organizationSlug,
-            cookieHeader: client.getCookieHeader(),
-          }),
-        })) ?? freshState;
-    }
-    conversations = await client.collectConversationsForChannels(channelIds);
+    const pollResult = await pollConversations(deps, freshState, client, channelIds);
+    client = pollResult.client;
+    conversations = pollResult.conversations;
   } catch (error) {
     console.error(
       `Pager poll failed for chat ${freshState.chatId} (orgId=${client.getOrganizationId().slice(0, 12) || "?"}):`,
@@ -601,6 +596,39 @@ function formatError(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function isRecoverablePagerError(error: unknown): boolean {
+  return (
+    isPagerSessionError(error) ||
+    (error instanceof PagerApiError &&
+      error.status === 400 &&
+      error.body.toLowerCase().includes("organization id"))
+  );
+}
+
+async function pollConversations(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  channelIds: string[],
+): Promise<{ conversations: PagerConversation[]; client: PagerClient }> {
+  try {
+    await client.syncOrgIdFromChannels();
+    const conversations = await client.collectConversationsForChannels(channelIds);
+    return { conversations, client };
+  } catch (error) {
+    if (!isRecoverablePagerError(error) || !state.pagerAccount?.password) {
+      throw error;
+    }
+    console.warn(`Pager poll retry with credential refresh for chat ${state.chatId}`);
+    const refreshed = await refreshPagerSessionWithCredentials(deps, state);
+    if (!refreshed) {
+      throw error;
+    }
+    const conversations = await refreshed.client.collectConversationsForChannels(channelIds);
+    return { conversations, client: refreshed.client };
+  }
 }
 
 async function ensureStatusFolders(

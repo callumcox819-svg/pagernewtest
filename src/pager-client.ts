@@ -68,6 +68,16 @@ export class PagerApiError extends Error {
   }
 }
 
+export class PagerSessionError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export function isPagerSessionError(error: unknown): boolean {
+  return error instanceof PagerSessionError;
+}
+
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
@@ -104,9 +114,20 @@ export class PagerClient {
     return this.orgSlug;
   }
 
+  async verifyApiSession(): Promise<PagerChannel[]> {
+    const channels = await this.request<PagerChannel[]>("/api/channel", {
+      method: "GET",
+      referer: this.chatReferer(),
+    });
+    if (!Array.isArray(channels)) {
+      throw new PagerSessionError("Pager /api/channel returned non-array payload");
+    }
+    return channels;
+  }
+
   async syncOrgIdFromChannels(): Promise<string> {
     try {
-      const channels = await this.request<PagerChannel[]>("/api/channel", { method: "GET" });
+      const channels = await this.verifyApiSession();
       const orgId = channels.find((channel) => channel.organizationId)?.organizationId ?? "";
       if (orgId.startsWith("org_")) {
         this.orgId = orgId;
@@ -114,6 +135,9 @@ export class PagerClient {
         return orgId;
       }
     } catch (error) {
+      if (isPagerSessionError(error)) {
+        throw error;
+      }
       console.warn("syncOrgIdFromChannels failed:", formatError(error));
     }
     return this.orgId;
@@ -500,6 +524,9 @@ export class PagerClient {
     try {
       return await this.collectConversationsForChannelsInner(channelIds, maxPages);
     } catch (error) {
+      if (isPagerSessionError(error)) {
+        throw error;
+      }
       if (!isOrgIdError(error)) {
         throw error;
       }
@@ -1242,6 +1269,14 @@ export class PagerClient {
     }
 
     const contentType = response.headers.get("content-type") ?? "";
+    const trimmed = text.trimStart();
+    if (
+      trimmed.startsWith("<!DOCTYPE") ||
+      trimmed.startsWith("<html") ||
+      (!contentType.includes("application/json") && trimmed.startsWith("<"))
+    ) {
+      throw new PagerSessionError(`Pager session expired for ${path}`);
+    }
     if (!contentType.includes("application/json")) {
       throw new Error(`Pager request for ${path} did not return JSON: ${text.slice(0, 160)}`);
     }
