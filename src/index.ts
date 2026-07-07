@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import {
   getChannelConfig,
+  getConfigEnabledChannelIds,
   getDefaultEnabledChannel,
   getPlaybook,
   loadConfig,
@@ -819,10 +820,13 @@ function mergeChannelsOnLogin(
     }
   }
 
+  const liveIds = new Set(channels.map((channel) => channel.id));
+  const yamlEnabled = getConfigEnabledChannelIds(config).filter((channelId) => liveIds.has(channelId));
+
   if (!enabledIds.size) {
-    for (const channel of channels) {
-      enabledIds.add(channel.id);
-      merged[channel.id] = { ...merged[channel.id], enabled: true };
+    for (const channelId of yamlEnabled) {
+      enabledIds.add(channelId);
+      merged[channelId] = { ...merged[channelId], enabled: true };
     }
   } else {
     for (const channelId of enabledIds) {

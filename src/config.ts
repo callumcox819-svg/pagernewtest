@@ -158,6 +158,10 @@ export function resolveYamlTemplateBankName(
   return `${country.toLowerCase()}-default`;
 }
 
+export function getConfigEnabledChannelIds(config: BotConfig): string[] {
+  return config.channels.filter((channel) => channel.enabled).map((channel) => channel.id);
+}
+
 export function getDefaultEnabledChannel(config: BotConfig): ChannelConfig {
   const channel = config.channels.find((item) => item.enabled);
   if (!channel) {

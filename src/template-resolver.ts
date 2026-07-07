@@ -1,8 +1,41 @@
-import type { BotConfig, TemplateRole } from "./config.js";
+import type { BotConfig, CountryCode, TemplateRole } from "./config.js";
 import { getTemplateBank } from "./config.js";
 import type { PagerClient, PagerSavedReply } from "./pager-client.js";
 
 const replyCache = new Map<string, PagerSavedReply[]>();
+
+const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>> = {
+  CM: {
+    intro: ["01_intro", "Tu es du Cameroun", "Mon équipe cumule"],
+    details: ["03_steps", "voici comment ça fonctionne", "02_age", "Quel âge"],
+    registration: ["05_registration", "CASH056", "06_link", "Camerun01"],
+    deposit: ["09_deposit", "bouton vert"],
+    ask_id: ["08_game_id", "commence par 17"],
+    telegram_handoff: ["11_tg_link", "XtIY04zvcVw2YzZi", "10_tg_invite"],
+    no_money: ["pas d'argent", "plus tard"],
+    reactivation: ["Il reste encore"],
+  },
+  EG: {
+    intro: ["01_intro", "إنت من مصر"],
+    details: ["02_how_it_works", "تمام كده"],
+    registration: ["04_registration", "هبعتلك اللينك", "05_link", "Egypt0011"],
+    deposit: ["06_deposit", "الأخضر"],
+    ask_id: ["07_game_id", "يبدأ ب 17"],
+    telegram_handoff: ["10_tg_link", "t7iYS46b2Ls2YWRk", "09_tg_invite"],
+    no_money: ["مش معايه فلوس", "no money"],
+    reactivation: ["لسه عندنا"],
+  },
+  ZM: {
+    intro: ["01_intro", "Hi! I want to show you"],
+    details: ["02_how_it_works", "How it works"],
+    registration: ["04_registration", "ZAM577", "05_link"],
+    deposit: ["06_deposit", "click \"Deposit\""],
+    ask_id: ["07_game_id", "begins with 17"],
+    telegram_handoff: ["09_tg_link", "t.me/+"],
+    no_money: ["No problem", "when you are ready"],
+    reactivation: ["still a spot"],
+  },
+};
 
 export async function resolveTemplateText(
   config: BotConfig,
@@ -11,21 +44,19 @@ export async function resolveTemplateText(
     folderId?: string;
     yamlBankName: string;
     role: TemplateRole;
+    country: CountryCode;
   },
 ): Promise<string | undefined> {
+  if (options.folderId) {
+    const replies = await loadFolderReplies(client, options.folderId);
+    const fromPager = matchReplyByRole(replies, options.country, options.role);
+    if (fromPager?.text) {
+      return fromPager.text;
+    }
+  }
+
   const yamlBank = getTemplateBank(config, options.yamlBankName);
-  const yamlText = yamlBank.roles[options.role];
-  if (!options.folderId) {
-    return yamlText;
-  }
-
-  const replies = await loadFolderReplies(client, options.folderId);
-  if (!replies.length) {
-    return yamlText;
-  }
-
-  const fromPager = matchReplyByNeedle(replies, yamlText);
-  return fromPager?.text ?? yamlText;
+  return yamlBank.roles[options.role];
 }
 
 async function loadFolderReplies(client: PagerClient, folderId: string): Promise<PagerSavedReply[]> {
@@ -39,24 +70,31 @@ async function loadFolderReplies(client: PagerClient, folderId: string): Promise
   return replies;
 }
 
-function matchReplyByNeedle(
+function matchReplyByRole(
   replies: PagerSavedReply[],
-  yamlText: string,
+  country: CountryCode,
+  role: TemplateRole,
 ): PagerSavedReply | undefined {
-  const needle = normalizeNeedle(yamlText);
-  if (!needle) {
-    return replies[0];
+  const hints = ROLE_SNIPPETS[country]?.[role] ?? [];
+  for (const hint of hints) {
+    const needle = hint.trim().toLowerCase();
+    if (!needle) {
+      continue;
+    }
+    const matched = replies.find((reply) => {
+      const name = (reply.name ?? "").toLowerCase();
+      const body = normalizeNeedle(reply.text);
+      return name.includes(needle) || body.includes(needle) || needle.includes(body.slice(0, 40));
+    });
+    if (matched) {
+      return matched;
+    }
   }
-
-  const matched = replies.find((reply) => {
-    const body = normalizeNeedle(reply.text);
-    return body.includes(needle) || needle.includes(body.slice(0, 40));
-  });
-  return matched ?? replies[0];
+  return undefined;
 }
 
 function normalizeNeedle(value: string): string {
-  return value.trim().toLowerCase().slice(0, 40);
+  return value.trim().toLowerCase().slice(0, 80);
 }
 
 export function clearTemplateReplyCache(): void {

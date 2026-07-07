@@ -24,7 +24,7 @@ channels:
 
   - id: "069e972b-e3c4-4d14-b716-0c1226bf753c"
     name: "Mahmoud Fathy"
-    enabled: true
+    enabled: false
     country: "EG"
     templateBank: "eg-default"
     statusMap:

@@ -3,6 +3,7 @@ import {
   type ChannelConfig,
   type Stage,
   getChannelConfig,
+  getConfigEnabledChannelIds,
   getDefaultEnabledChannel,
   getPlaybook,
   resolveYamlTemplateBankName,
@@ -96,6 +97,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   freshState = hydrateOperatorState(sessionResult.state);
   let client = sessionResult.client;
 
+  freshState = (await normalizeEnabledChannelsToConfig(deps, freshState)) ?? freshState;
+  freshState = hydrateOperatorState(freshState);
+
   if (countApiStatusFolders(freshState.statusFolders) === 0) {
     freshState = (await ensureStatusFolders(deps, freshState, client)) ?? freshState;
     freshState = hydrateOperatorState(freshState);
@@ -107,14 +111,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     !collectEnabledChannelIdsFromState(freshState).length &&
     hasEnabledStatusFolders(freshState)
   ) {
-    freshState = (await autoEnableLiveChannels(deps, freshState)) ?? freshState;
+    freshState = (await seedEnabledChannelsFromYaml(deps, freshState)) ?? freshState;
     freshState = hydrateOperatorState(freshState);
     console.log(
-      `Pager worker: chat ${freshState.chatId} — auto-enabled ${freshState.enabledChannelIds?.length ?? 0} channels (folders are configured)`,
+      `Pager worker: chat ${freshState.chatId} — enabled ${freshState.enabledChannelIds?.length ?? 0} channel(s) from config`,
     );
   }
 
-  const enabledChannels = getEnabledChannels(freshState);
+  const enabledChannels = getEnabledChannels(deps.config, freshState);
 
   if (!enabledChannels.length) {
     const liveCount = freshState.pagerAccount?.liveChannels?.length ?? 0;
@@ -217,6 +221,11 @@ async function processConversation(
   runtime: EnabledChannel,
 ): Promise<boolean> {
   const convId = conv.id;
+
+  if (!isIncomingDirection(conv.lastMessageDirection)) {
+    return false;
+  }
+
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const convState = getConversationState(currentState, convId, runtime.channelId);
 
@@ -224,7 +233,7 @@ async function processConversation(
     return false;
   }
 
-  const messages = await client.listMessages(convId, 1, 30);
+  const messages = await client.listMessages(convId, 1, 50);
   if (!messages.length) {
     return false;
   }
@@ -233,23 +242,25 @@ async function processConversation(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
   const latest = sorted[0];
-  const lastIncoming = sorted.find((message) => isIncomingDirection(message.messageDirection));
 
-  if (!lastIncoming) {
+  if (!isIncomingDirection(latest.messageDirection)) {
     return false;
   }
 
-  if (deps.config.bot.requireCustomerLastMessage) {
-    if (isOutgoingDirection(latest.messageDirection)) {
-      if (shouldSkipHumanReply(deps.config, convState, latest)) {
-        return false;
-      }
-    }
-  } else if (!isIncomingDirection(conv.lastMessageDirection) && !lastIncoming) {
-    return false;
-  }
+  const lastIncoming = latest;
+  const lastIncomingAt = lastIncoming.createdAt ?? "";
 
   if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
+    return false;
+  }
+
+  if (hasDeliveredReplyAfter(sorted, lastIncomingAt)) {
+    if (convState.lastCustomerMessageId !== lastIncoming.id) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+      });
+    }
     return false;
   }
 
@@ -282,21 +293,20 @@ async function processConversation(
     proofKind,
   });
 
-  if (!decision?.templateRole && !decision?.templateToSend) {
+  if (!decision?.templateRole) {
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} — no rule matched (stage=${convState.currentStage}, text=${truncate(latestCustomerText)})`,
     );
     return false;
   }
 
-  const templateRole = decision.templateRole ?? "intro";
-  const replyText =
-    decision.templateToSend ??
-    (await resolveTemplateText(deps.config, client, {
-      folderId: runtime.runtime.templateBankId,
-      yamlBankName: channel.templateBank,
-      role: templateRole,
-    }));
+  const templateRole = decision.templateRole;
+  const replyText = await resolveTemplateText(deps.config, client, {
+    folderId: runtime.runtime.templateBankId,
+    yamlBankName: channel.templateBank,
+    role: templateRole,
+    country: channel.country,
+  });
 
   if (!replyText?.trim()) {
     console.warn(`No template text resolved for ${convId.slice(0, 8)} role=${templateRole}`);
@@ -318,16 +328,6 @@ async function processConversation(
       sendFailures: failures,
     });
     console.error(`Pager worker: send failed for ${convId.slice(0, 8)} (failures=${failures})`);
-    if (failures >= MAX_SEND_FAILURES) {
-      try {
-        await deps.telegram.sendMessage(
-          state.chatId,
-          `⚠️ Чат ${convId.slice(0, 8)} приостановлен после ${failures} неудачных отправок.`,
-        );
-      } catch {
-        // telegram may be unavailable
-      }
-    }
     return false;
   }
 
@@ -342,22 +342,6 @@ async function processConversation(
     sendFailures: 0,
   });
 
-  try {
-    await deps.telegram.sendMessage(
-      state.chatId,
-      [
-        `✅ Ответил в Pager`,
-        `Канал: ${runtime.channelName}`,
-        `Чат: ${convId.slice(0, 8)}…`,
-        `Клиент: ${truncate(latestCustomerText || "(image)")}`,
-        `Стадия: ${convState.currentStage} → ${decision.nextStage}`,
-        `Пресет: ${templateRole}`,
-      ].join("\n"),
-    );
-  } catch {
-    // telegram may be unavailable
-  }
-
   return true;
 }
 
@@ -367,8 +351,11 @@ type EnabledChannel = {
   runtime: ChannelRuntimeState;
 };
 
-function getEnabledChannels(state: ChatState): EnabledChannel[] {
-  const enabledIds = new Set(collectEnabledChannelIdsFromState(state));
+function getEnabledChannels(config: BotConfig, state: ChatState): EnabledChannel[] {
+  const configAllowed = new Set(getConfigEnabledChannelIds(config));
+  const enabledIds = new Set(
+    collectEnabledChannelIdsFromState(state).filter((channelId) => configAllowed.has(channelId)),
+  );
   const liveChannels = state.pagerAccount?.liveChannels ?? [];
   const enabled: EnabledChannel[] = [];
 
@@ -429,7 +416,37 @@ function hydrateOperatorState(state: ChatState): ChatState {
   };
 }
 
-async function autoEnableLiveChannels(
+async function normalizeEnabledChannelsToConfig(
+  deps: WorkerDeps,
+  state: ChatState,
+): Promise<ChatState | undefined> {
+  const allowed = new Set(getConfigEnabledChannelIds(deps.config));
+  const current = collectEnabledChannelIdsFromState(state);
+  const filtered = current.filter((channelId) => allowed.has(channelId));
+  if (filtered.length === current.length) {
+    return state;
+  }
+
+  const channels: Record<string, ChannelRuntimeState> = { ...(state.channels ?? {}) };
+  for (const [channelId, runtime] of Object.entries(channels)) {
+    channels[channelId] = { ...runtime, enabled: filtered.includes(channelId) };
+  }
+
+  const statusFolders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  console.log(
+    `Pager worker: chat ${state.chatId} — trimmed enabled channels ${current.length} → ${filtered.length} (config whitelist)`,
+  );
+  return deps.stateStore.patch(state.chatId, {
+    enabledChannelIds: filtered,
+    channels,
+    operatorSettings: {
+      enabledChannelIds: filtered,
+      statusFolders,
+    },
+  });
+}
+
+async function seedEnabledChannelsFromYaml(
   deps: WorkerDeps,
   state: ChatState,
 ): Promise<ChatState | undefined> {
@@ -438,14 +455,22 @@ async function autoEnableLiveChannels(
     return state;
   }
 
-  const enabledChannelIds = live.map((channel) => channel.id);
+  const liveIds = new Set(live.map((channel) => channel.id));
+  const enabledChannelIds = getConfigEnabledChannelIds(deps.config).filter((channelId) =>
+    liveIds.has(channelId),
+  );
+  if (!enabledChannelIds.length) {
+    return state;
+  }
+
   const channels: Record<string, ChannelRuntimeState> = { ...(state.channels ?? {}) };
   for (const channel of live) {
     const existing = channels[channel.id];
+    const yamlChannel = getChannelConfig(deps.config, channel.id);
     channels[channel.id] = {
-      enabled: true,
-      country: existing?.country ?? inferCountryFromChannelName(channel.name),
-      templateBank: existing?.templateBank,
+      enabled: enabledChannelIds.includes(channel.id),
+      country: existing?.country ?? yamlChannel?.country ?? inferCountryFromChannelName(channel.name),
+      templateBank: existing?.templateBank ?? yamlChannel?.templateBank,
       templateBankId: existing?.templateBankId,
     };
   }
@@ -459,6 +484,31 @@ async function autoEnableLiveChannels(
       statusFolders,
     },
   });
+}
+
+function hasDeliveredReplyAfter(messages: PagerMessage[], lastIncomingAt: string): boolean {
+  const incomingTs = Date.parse(lastIncomingAt);
+  if (!Number.isFinite(incomingTs)) {
+    return false;
+  }
+
+  for (const message of messages) {
+    if (!isOutgoingDirection(message.messageDirection)) {
+      continue;
+    }
+    const outgoingTs = Date.parse(message.createdAt ?? "");
+    if (!Number.isFinite(outgoingTs) || outgoingTs <= incomingTs) {
+      continue;
+    }
+    const text = (message.text || "").trim();
+    if (!text) {
+      continue;
+    }
+    if (message.isDelivered || message.facebookMessageId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function inferCountryFromChannelName(name: string): "ZM" | "CM" | "EG" {
@@ -536,34 +586,6 @@ function buildRuntimeChannelConfig(
     templateBank,
     statusMap: mapped?.statusMap ?? fallback.statusMap,
   };
-}
-
-function shouldSkipHumanReply(
-  config: BotConfig,
-  convState: ConversationRuntimeState,
-  latestOutgoing: PagerMessage,
-): boolean {
-  const skipMinutes = config.bot.skipIfHumanRepliedRecentlyMinutes;
-  if (!skipMinutes) {
-    return false;
-  }
-
-  const outgoingAt = Date.parse(latestOutgoing.createdAt ?? "");
-  if (!Number.isFinite(outgoingAt)) {
-    return false;
-  }
-
-  const repliedRecently = Date.now() - outgoingAt < skipMinutes * 60_000;
-  if (!repliedRecently) {
-    return false;
-  }
-
-  const ourReplyAt = Date.parse(convState.lastReplyAt ?? "");
-  if (!Number.isFinite(ourReplyAt)) {
-    return true;
-  }
-
-  return outgoingAt > ourReplyAt + 5_000;
 }
 
 function extractImageUrl(message: PagerMessage): string | undefined {
