@@ -6,6 +6,7 @@ import {
   getPlaybook,
   loadConfig,
 } from "./config.js";
+import { ClerkPasswordAuthClient } from "./clerk-auth.js";
 import { decideNextAction } from "./decision-engine.js";
 import { loadEnv } from "./env.js";
 import { PagerClient } from "./pager-client.js";
@@ -491,6 +492,17 @@ function buildPagerClient(cookieHeader: string) {
   });
 }
 
+function buildClerkAuthClient() {
+  return new ClerkPasswordAuthClient({
+    frontendApi: "clerk.pager.co.ua",
+  });
+}
+
+function buildCookieHeaderFromJwt(jwt: string) {
+  const clientUat = Math.floor(Date.now() / 1000);
+  return `__session=${jwt}; __client_uat=${clientUat}`;
+}
+
 function sleep(ms: number) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
@@ -510,26 +522,56 @@ async function handlePendingInput(
   }
 
   if (state.pendingAction === "await_pager_password") {
-    const nextState = stateStore.patch(chatId, {
-      pendingAction: undefined,
-      pagerAccount: {
-        authMode: "credentials",
-        email: state.draftPagerEmail,
-        password: text.trim(),
-        connectedAt: new Date().toISOString(),
-      },
-      draftPagerEmail: undefined,
-    });
+    try {
+      const email = state.draftPagerEmail?.trim();
+      if (!email) {
+        throw new Error("Pager email is missing. Start the login flow again.");
+      }
 
-    await telegram.sendMessage(
-      chatId,
-      [
-        "Pager аккаунт сохранен.",
-        `Email: ${maskEmail(nextState?.pagerAccount?.email)}`,
-        "Режим: email + пароль",
-      ].join("\n"),
-      buildPagerAccountKeyboard(true),
-    );
+      const jwt = await buildClerkAuthClient().signInWithPassword(email, text.trim());
+      const cookieHeader = buildCookieHeaderFromJwt(jwt);
+      const session = await buildPagerClient(cookieHeader).validateSession();
+
+      stateStore.patch(chatId, {
+        pendingAction: undefined,
+        pagerAccount: {
+          authMode: "credentials",
+          email,
+          password: text.trim(),
+          cookies: cookieHeader,
+          organizationId: session.organizationId,
+          organizationName: session.organizationName,
+          liveChannels: session.channels.map((channel) => ({
+            id: channel.id,
+            name: channel.name,
+            channelSource: channel.channelSource,
+          })),
+          connectedAt: new Date().toISOString(),
+        },
+        draftPagerEmail: undefined,
+      });
+
+      await telegram.sendMessage(
+        chatId,
+        [
+          "Pager аккаунт подключён через email + пароль.",
+          `Email: ${maskEmail(email)}`,
+          `Организация: ${session.organizationName ?? session.organizationId ?? "unknown"}`,
+          `Каналов найдено: ${session.channelCount}`,
+        ].join("\n"),
+        buildPagerAccountKeyboard(true),
+      );
+    } catch (error) {
+      stateStore.patch(chatId, {
+        pendingAction: undefined,
+        draftPagerEmail: undefined,
+      });
+      await telegram.sendMessage(
+        chatId,
+        `Не удалось войти по email + пароль: ${formatError(error)}`,
+        buildPagerAccountKeyboard(false),
+      );
+    }
     return true;
   }
 
