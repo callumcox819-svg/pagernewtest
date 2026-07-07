@@ -5,7 +5,7 @@ import {
   getPlaybook,
   loadConfig,
 } from "./config.js";
-import { ClerkPasswordAuthClient } from "./clerk-auth.js";
+import { ClerkPasswordAuthClient, parseCookieHeader } from "./clerk-auth.js";
 import { decideNextAction } from "./decision-engine.js";
 import { loadEnv } from "./env.js";
 import { PagerClient } from "./pager-client.js";
@@ -736,10 +736,11 @@ function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
 }
 
 function buildPagerClient(cookieHeader: string, orgId?: string) {
+  const cookies = parseCookieHeader(cookieHeader);
   return new PagerClient({
     baseUrl: env.PAGER_BASE_URL,
     cookieHeader,
-    orgId,
+    orgId: orgId || cookies._pager_org_id,
     locale: "uk",
   });
 }
@@ -748,11 +749,6 @@ function buildClerkAuthClient() {
   return new ClerkPasswordAuthClient({
     frontendApi: "clerk.pager.co.ua",
   });
-}
-
-function buildCookieHeaderFromJwt(jwt: string) {
-  const clientUat = Math.floor(Date.now() / 1000);
-  return `__session=${jwt}; __client_uat=${clientUat}`;
 }
 
 function sleep(ms: number) {
@@ -780,9 +776,11 @@ async function handlePendingInput(
         throw new Error("Pager email is missing. Start the login flow again.");
       }
 
-      const jwt = await buildClerkAuthClient().signInWithPassword(email, text.trim());
-      const cookieHeader = buildCookieHeaderFromJwt(jwt);
-      const session = await buildPagerClient(cookieHeader).validateSession();
+      const login = await buildClerkAuthClient().signInWithPassword(email, text.trim());
+      const session = await buildPagerClient(
+        login.cookieHeader,
+        login.organizationId,
+      ).validateSession();
 
       await stateStore.patch(chatId, {
         pendingAction: undefined,
@@ -790,8 +788,8 @@ async function handlePendingInput(
           authMode: "credentials",
           email,
           password: text.trim(),
-          cookies: cookieHeader,
-          organizationId: session.organizationId,
+          cookies: login.cookieHeader,
+          organizationId: session.organizationId ?? login.organizationId,
           organizationName: session.organizationName,
           liveChannels: session.channels.map((channel) => ({
             id: channel.id,

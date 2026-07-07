@@ -647,6 +647,24 @@ export class PagerClient {
   }
 
   async warmSession(): Promise<void> {
+    const html = await this.fetchChatsHtml();
+    if (!html) {
+      return;
+    }
+
+    const orgFromHtml = extractOrgFromHtml(html);
+    if (orgFromHtml) {
+      this.orgId = orgFromHtml;
+    }
+    if (!this.orgSlug) {
+      const slug = extractOrgSlugFromHtml(html);
+      if (slug) {
+        this.orgSlug = slug;
+      }
+    }
+  }
+
+  private async fetchChatsHtml(): Promise<string> {
     const locale = this.options.locale ?? "uk";
     const paths = [
       this.orgSlug ? `/${locale}/${this.orgSlug}/chats` : "",
@@ -658,7 +676,12 @@ export class PagerClient {
       try {
         const response = await fetch(new URL(path, this.options.baseUrl), {
           method: "GET",
-          headers: this.buildHeaders("text/html"),
+          headers: {
+            Cookie: this.options.cookieHeader,
+            Accept: "text/html",
+            Referer: `${this.options.baseUrl}/`,
+            "User-Agent": BROWSER_UA,
+          },
           redirect: "follow",
         });
         const finalUrl = response.url;
@@ -669,16 +692,29 @@ export class PagerClient {
             this.orgSlug = slug;
           }
         }
-        if (response.ok) {
-          return;
+        const html = await response.text();
+        if (html) {
+          return html;
         }
       } catch {
         continue;
       }
     }
+    return "";
   }
 
-  private async ensureOrgId(): Promise<string> {
+  private async discoverOrgId(): Promise<string> {
+    if (this.orgId) {
+      return this.orgId;
+    }
+
+    const cookieOrg = this.parseCookies()._pager_org_id?.trim();
+    if (cookieOrg?.startsWith("org_")) {
+      this.orgId = cookieOrg;
+      return cookieOrg;
+    }
+
+    await this.warmSession();
     if (this.orgId) {
       return this.orgId;
     }
@@ -687,6 +723,16 @@ export class PagerClient {
     if (organization?.id) {
       this.orgId = organization.id;
       return organization.id;
+    }
+
+    const fromConversations = await this.tryOrgFromConversations();
+    if (fromConversations) {
+      return fromConversations;
+    }
+
+    const fromSlug = await this.tryOrgBySlug();
+    if (fromSlug) {
+      return fromSlug;
     }
 
     try {
@@ -700,7 +746,80 @@ export class PagerClient {
       // fall through
     }
 
-    throw new PagerApiError(400, '{"error":"Organization ID required — could not auto-detect orgId"}');
+    const html = await this.fetchChatsHtml();
+    if (html) {
+      const orgFromHtml = extractOrgFromHtml(html);
+      if (orgFromHtml) {
+        this.orgId = orgFromHtml;
+        return orgFromHtml;
+      }
+    }
+
+    return "";
+  }
+
+  private async tryOrgFromConversations(): Promise<string> {
+    try {
+      const payload = await this.request<unknown>("/api/conversation", {
+        method: "GET",
+        params: { pageSize: "1", page: "1" },
+      });
+      if (!Array.isArray(payload) || !payload.length) {
+        return "";
+      }
+      const first = payload[0] as Record<string, unknown>;
+      const orgId = String(first.organizationId || first.orgId || "").trim();
+      if (orgId.startsWith("org_")) {
+        this.orgId = orgId;
+        return orgId;
+      }
+    } catch {
+      return "";
+    }
+    return "";
+  }
+
+  private async tryOrgBySlug(): Promise<string> {
+    if (!this.orgSlug) {
+      return "";
+    }
+    for (const path of [`/api/organization/${this.orgSlug}`, `/api/organizations/${this.orgSlug}`]) {
+      try {
+        const payload = await this.request<unknown>(path, { method: "GET" });
+        const orgId = extractOrgFromPayload(payload);
+        if (orgId) {
+          this.orgId = orgId;
+          return orgId;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return "";
+  }
+
+  private parseCookies(): Record<string, string> {
+    const cookies: Record<string, string> = {};
+    for (const part of this.options.cookieHeader.split(";")) {
+      const piece = part.trim();
+      if (!piece.includes("=")) {
+        continue;
+      }
+      const [key, ...rest] = piece.split("=");
+      cookies[key.trim()] = rest.join("=").trim();
+    }
+    return cookies;
+  }
+
+  private async ensureOrgId(): Promise<string> {
+    const orgId = await this.discoverOrgId();
+    if (!orgId) {
+      throw new PagerApiError(
+        400,
+        '{"error":"Organization ID required — could not auto-detect orgId"}',
+      );
+    }
+    return orgId;
   }
 
   private chatReferer(convId?: string): string {
@@ -832,6 +951,79 @@ function extractRecipientPsid(conv: PagerConversation): string {
     conv.client?.PSID ||
     ""
   ).trim();
+}
+
+function extractOrgFromPayload(data: unknown): string {
+  if (!data || typeof data !== "object") {
+    if (Array.isArray(data) && data.length) {
+      return extractOrgFromPayload(data[0]);
+    }
+    return "";
+  }
+
+  const record = data as Record<string, unknown>;
+  for (const key of ["id", "organizationId", "orgId"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.startsWith("org_")) {
+      return value;
+    }
+  }
+
+  for (const key of ["organizations", "items", "data", "organization", "org"]) {
+    const nested = record[key];
+    const found = extractOrgFromPayload(nested);
+    if (found) {
+      return found;
+    }
+  }
+
+  return "";
+}
+
+function extractOrgFromHtml(html: string): string {
+  const nextData = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+  if (nextData?.[1]) {
+    try {
+      const found = extractOrgFromPayload(JSON.parse(nextData[1]));
+      if (found) {
+        return found;
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  const patterns = [
+    /"orgId"\s*:\s*"(org_[^"]+)"/,
+    /"organizationId"\s*:\s*"(org_[^"]+)"/,
+    /orgId=(org_[^&"'\s]+)/,
+    /(org_[a-zA-Z0-9]{20,})/,
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return "";
+}
+
+function extractOrgSlugFromHtml(html: string): string {
+  const patterns = [
+    /\/(?:uk|en)\/([a-z0-9_-]+)\/chats/i,
+    /"slug"\s*:\s*"([a-z0-9_-]+)"/i,
+    /"orgSlug"\s*:\s*"([a-z0-9_-]+)"/i,
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) {
+      const slug = match[1].toLowerCase();
+      if (!["chats", "sign-in", "en", "uk", "api"].includes(slug)) {
+        return slug;
+      }
+    }
+  }
+  return "";
 }
 
 function messageDelivered(result: Record<string, unknown>): boolean {

@@ -17,6 +17,11 @@ type ClerkClientPayload = {
       active_organization_id?: string | null;
       user?: {
         id?: string;
+        organization_memberships?: Array<{
+          organization?: { id?: string };
+        }>;
+        public_metadata?: { orgId?: string; organizationId?: string };
+        publicMetadata?: { orgId?: string; organizationId?: string };
       };
     }>;
     last_active_organization_id?: string | null;
@@ -43,6 +48,12 @@ type ClerkSignInResponse = {
   }>;
 };
 
+export type ClerkLoginResult = {
+  cookieHeader: string;
+  organizationId?: string;
+  pagerUserId?: string;
+};
+
 export class ClerkPasswordAuthClient {
   private readonly queryString =
     "__clerk_api_version=2024-10-01&_clerk_js_version=5.68.0";
@@ -57,7 +68,7 @@ export class ClerkPasswordAuthClient {
     },
   ) {}
 
-  async signInWithPassword(email: string, password: string): Promise<string> {
+  async signInWithPassword(email: string, password: string): Promise<ClerkLoginResult> {
     const client = await this.createClient();
 
     const signInAttempt = await this.createSignInAttempt(client, email);
@@ -86,12 +97,37 @@ export class ClerkPasswordAuthClient {
     }
 
     const clerkClient = await this.fetchClientState(client);
+    let sessionInfo = extractClerkSessionInfo(clerkClient);
     const jwt = this.extractSessionJwt(clerkClient);
     if (!jwt) {
       throw new Error("Clerk session JWT was not found after login.");
     }
 
-    return jwt;
+    for (const path of ["/chats", "/uk/chats"]) {
+      await client.fetchWithCookies(`${this.pagerBaseUrl}${path}`, {
+        method: "GET",
+        headers: this.baseHeaders(),
+        redirect: "follow",
+      });
+    }
+
+    const jarCookies = await jarToCookieDict(client.jar, [
+      this.pagerBaseUrl,
+      `https://${this.options.frontendApi}`,
+    ]);
+    const cookies = mergeClerkSessionCookies(jarCookies, clerkClient, jwt);
+    if (sessionInfo.organizationId) {
+      cookies._pager_org_id = sessionInfo.organizationId;
+    }
+    if (sessionInfo.pagerUserId) {
+      cookies._pager_user_id = sessionInfo.pagerUserId;
+    }
+
+    return {
+      cookieHeader: cookiesToHeader(cookies),
+      organizationId: sessionInfo.organizationId,
+      pagerUserId: sessionInfo.pagerUserId,
+    };
   }
 
   private async createClient(): Promise<ClerkClientContext> {
@@ -104,7 +140,7 @@ export class ClerkPasswordAuthClient {
       headers,
     });
 
-    const response = await fetchWithCookies(`https://${this.options.frontendApi}/v1/client?${this.queryString}`, {
+    await fetchWithCookies(`https://${this.options.frontendApi}/v1/client?${this.queryString}`, {
       method: "POST",
       headers: {
         ...headers,
@@ -112,7 +148,8 @@ export class ClerkPasswordAuthClient {
       },
       body: JSON.stringify({}),
     });
-    return this.buildClientContext(response, fetchWithCookies, jar);
+
+    return { fetchWithCookies, jar };
   }
 
   private async createSignInAttempt(
@@ -123,14 +160,12 @@ export class ClerkPasswordAuthClient {
       `https://${this.options.frontendApi}/v1/client/sign_ins?${this.queryString}`,
       {
         method: "POST",
-        headers: this.buildHeaders(client),
+        headers: this.buildHeaders(),
         body: new URLSearchParams({
           identifier: email,
         }),
       },
     );
-
-    this.refreshClientContext(client, response);
 
     return (await response.json()) as ClerkSignInResponse;
   }
@@ -144,7 +179,7 @@ export class ClerkPasswordAuthClient {
       `https://${this.options.frontendApi}/v1/client/sign_ins/${signInId}/attempt_first_factor?${this.queryString}`,
       {
         method: "POST",
-        headers: this.buildHeaders(client),
+        headers: this.buildHeaders(),
         body: new URLSearchParams({
           strategy: "password",
           password,
@@ -152,45 +187,27 @@ export class ClerkPasswordAuthClient {
       },
     );
 
-    this.refreshClientContext(client, response);
-
     return (await response.json()) as ClerkSignInResponse;
   }
 
-  private async fetchClientState(
-    client: ClerkClientContext,
-  ): Promise<ClerkClientPayload> {
+  private async fetchClientState(client: ClerkClientContext): Promise<ClerkClientPayload> {
     const response = await client.fetchWithCookies(
       `https://${this.options.frontendApi}/v1/client?${this.queryString}`,
       {
         method: "GET",
-        headers: this.buildHeaders(client),
+        headers: this.buildHeaders(),
       },
     );
 
-    this.refreshClientContext(client, response);
     return (await response.json()) as ClerkClientPayload;
   }
 
-  private buildHeaders(client: ClerkClientContext): Record<string, string> {
+  private buildHeaders(): Record<string, string> {
     return {
       ...this.baseHeaders(),
       "content-type": "application/x-www-form-urlencoded",
     };
   }
-
-  private buildClientContext(
-    response: Response,
-    fetchWithCookies: typeof fetch,
-    jar: CookieJar,
-  ): ClerkClientContext {
-    return {
-      fetchWithCookies,
-      jar,
-    };
-  }
-
-  private refreshClientContext(_client: ClerkClientContext, _response: Response) {}
 
   private extractSessionJwt(payload: ClerkClientPayload): string {
     const sessions = payload.response?.sessions ?? [];
@@ -214,4 +231,129 @@ export class ClerkPasswordAuthClient {
       referer: `${this.pagerBaseUrl}/sign-in`,
     };
   }
+}
+
+export function parseCookieHeader(raw: string): Record<string, string> {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {};
+  }
+
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.entries(parsed).map(([key, value]) => [key, String(value)]),
+      );
+    } catch {
+      return {};
+    }
+  }
+
+  const cookies: Record<string, string> = {};
+  for (const part of trimmed.split(";")) {
+    const piece = part.trim();
+    if (!piece.includes("=")) {
+      continue;
+    }
+    const [key, ...rest] = piece.split("=");
+    cookies[key.trim()] = rest.join("=").trim();
+  }
+  return cookies;
+}
+
+export function cookiesToHeader(cookies: Record<string, string>): string {
+  return Object.entries(cookies)
+    .filter(([, value]) => value)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("; ");
+}
+
+function extractClerkSessionInfo(payload: ClerkClientPayload): {
+  organizationId?: string;
+  pagerUserId?: string;
+} {
+  const client = payload.response;
+  if (!client) {
+    return {};
+  }
+
+  let organizationId =
+    client.last_active_organization_id ||
+    client.active_organization_id ||
+    undefined;
+
+  const sessions = client.sessions ?? [];
+  const session = sessions[0];
+  const user = session?.user;
+  const pagerUserId = user?.id;
+
+  for (const membership of user?.organization_memberships ?? []) {
+    const orgId = membership.organization?.id;
+    if (orgId) {
+      organizationId = orgId;
+      break;
+    }
+  }
+
+  if (!organizationId) {
+    const metadata = user?.public_metadata ?? user?.publicMetadata ?? {};
+    organizationId = metadata.orgId || metadata.organizationId;
+  }
+
+  if (!organizationId && session) {
+    organizationId =
+      session.last_active_organization_id ||
+      session.active_organization_id ||
+      undefined;
+  }
+
+  return {
+    organizationId: organizationId || undefined,
+    pagerUserId: pagerUserId || undefined,
+  };
+}
+
+function mergeClerkSessionCookies(
+  jarCookies: Record<string, string>,
+  clerkPayload: ClerkClientPayload,
+  jwt: string,
+): Record<string, string> {
+  const merged = { ...jarCookies };
+  merged.__session = jwt;
+
+  const clientUat = Math.floor(Date.now() / 1000);
+  merged.__client_uat = String(clientUat);
+
+  let suffix = "";
+  for (const key of Object.keys(merged)) {
+    if (key.startsWith("__client_uat_")) {
+      suffix = key.slice("__client_uat_".length);
+      break;
+    }
+  }
+  if (suffix) {
+    merged[`__session_${suffix}`] = jwt;
+  }
+
+  const info = extractClerkSessionInfo(clerkPayload);
+  if (info.organizationId) {
+    merged._pager_org_id = info.organizationId;
+  }
+  if (info.pagerUserId) {
+    merged._pager_user_id = info.pagerUserId;
+  }
+
+  return merged;
+}
+
+async function jarToCookieDict(jar: CookieJar, urls: string[]): Promise<Record<string, string>> {
+  const merged: Record<string, string> = {};
+  for (const url of urls) {
+    const cookies = await jar.getCookies(url);
+    for (const cookie of cookies) {
+      merged[cookie.key] = cookie.value;
+    }
+  }
+  return merged;
 }
