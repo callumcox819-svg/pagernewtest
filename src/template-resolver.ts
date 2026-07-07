@@ -1,6 +1,9 @@
 import type { BotConfig, CountryCode, TemplateRole } from "./config.js";
 import { getTemplateBank } from "./config.js";
-import { CM_SCRIPT_SNIPPETS } from "./cm-script-engine.js";
+import {
+  CM_FOLDER_NAME_HINTS,
+  scriptSearchNeedles,
+} from "./cm-script-engine.js";
 import type { PagerClient, PagerSavedReply } from "./pager-client.js";
 
 const replyCache = new Map<string, PagerSavedReply[]>();
@@ -38,20 +41,63 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
   },
 };
 
-export async function resolveScriptTextByKey(
+export async function resolveCmTemplateFolderId(
   client: PagerClient,
-  folderId: string | undefined,
-  scriptKey: string,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
 ): Promise<string | undefined> {
-  const snippet = CM_SCRIPT_SNIPPETS[scriptKey];
-  if (folderId) {
-    const replies = await loadFolderReplies(client, folderId);
-    const fromPager = matchReplyByScriptKey(replies, scriptKey, snippet);
-    if (fromPager?.text) {
-      return fromPager.text;
+  if (preferredId) {
+    const replies = await loadFolderReplies(client, preferredId).catch(() => []);
+    if (replies.length) {
+      return preferredId;
     }
   }
-  return undefined;
+
+  for (const bank of liveBanks ?? []) {
+    const normalized = bank.name.toLowerCase();
+    if (CM_FOLDER_NAME_HINTS.some((hint) => normalized.includes(hint))) {
+      const replies = await loadFolderReplies(client, bank.id).catch(() => []);
+      if (replies.length) {
+        return bank.id;
+      }
+    }
+  }
+
+  const banks = await client.getTemplateBanks().catch(() => []);
+  for (const bank of banks) {
+    const normalized = bank.name.toLowerCase();
+    if (!CM_FOLDER_NAME_HINTS.some((hint) => normalized.includes(hint))) {
+      continue;
+    }
+    const replies = await loadFolderReplies(client, bank.id).catch(() => []);
+    if (replies.length) {
+      return bank.id;
+    }
+  }
+
+  return preferredId || liveBanks?.[0]?.id || banks[0]?.id;
+}
+
+export async function resolveScriptTextByKey(
+  client: PagerClient,
+  options: {
+    folderId?: string;
+    liveBanks?: Array<{ id: string; name: string }>;
+    scriptKey: string;
+  },
+): Promise<string | undefined> {
+  const folderId = await resolveCmTemplateFolderId(
+    client,
+    options.folderId,
+    options.liveBanks,
+  );
+  if (!folderId) {
+    return undefined;
+  }
+
+  const replies = await loadFolderReplies(client, folderId);
+  const fromPager = matchReplyByScriptKey(replies, options.scriptKey);
+  return fromPager?.text;
 }
 
 export async function resolveTemplateText(
@@ -90,21 +136,30 @@ async function loadFolderReplies(client: PagerClient, folderId: string): Promise
 function matchReplyByScriptKey(
   replies: PagerSavedReply[],
   scriptKey: string,
-  snippet?: string,
 ): PagerSavedReply | undefined {
   const keyNeedle = scriptKey.toLowerCase();
-  const matchedByName = replies.find((reply) => (reply.name ?? "").toLowerCase().includes(keyNeedle));
-  if (matchedByName) {
-    return matchedByName;
+  const byName = replies.filter((reply) => (reply.name ?? "").toLowerCase().includes(keyNeedle));
+  if (byName.length) {
+    return byName[byName.length - 1];
   }
-  if (!snippet) {
-    return undefined;
-  }
-  const needle = snippet.trim().toLowerCase();
-  return replies.find((reply) => {
+
+  const needles = scriptSearchNeedles(scriptKey);
+  let lastHit: PagerSavedReply | undefined;
+  for (const reply of replies) {
+    const name = (reply.name ?? "").toLowerCase();
     const body = normalizeNeedle(reply.text);
-    return body.includes(needle) || needle.includes(body.slice(0, 40));
-  });
+    for (const needle of needles) {
+      const normalized = needle.trim().toLowerCase();
+      if (!normalized) {
+        continue;
+      }
+      if (name.includes(normalized) || body.includes(normalized) || normalized.includes(body.slice(0, 48))) {
+        lastHit = reply;
+        break;
+      }
+    }
+  }
+  return lastHit;
 }
 
 function matchReplyByRole(
@@ -131,7 +186,7 @@ function matchReplyByRole(
 }
 
 function normalizeNeedle(value: string): string {
-  return value.trim().toLowerCase().slice(0, 80);
+  return value.trim().toLowerCase().slice(0, 120);
 }
 
 export function clearTemplateReplyCache(): void {

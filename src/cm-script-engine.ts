@@ -27,11 +27,50 @@ export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
   "11_tg_link": "XtIY04zvcVw2YzZi",
 };
 
+export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
+  "01_intro": ["tu es du cameroun", "bonjour !tu es du cameroun"],
+  "01_intro_2": [
+    "mon équipe cumule",
+    "mon equipe cumule",
+    "business comme un autre",
+    "gagner ensemble",
+    "ans d'expérience",
+    "ans d'experience",
+    "expérience dans les paris",
+  ],
+  "02_age": ["quel âge", "quel age", "age avez-vous", "age as-tu"],
+  "03_steps": ["voici comment ça fonctionne", "comment ça fonctionne", "étape par étape"],
+  "04_tier": ["140 000 cfa", "190 000 cfa", "que vas-tu choisir", "1 000 cfa"],
+  "05_registration": ["cash056", "code promo", "promo code"],
+  "06_link": ["camerun01", "tinyurl"],
+  "07_chrome": ["google chrome", "colle le lien"],
+  "08_game_id": ["commence par 17", "numéro de joueur"],
+  "09_deposit": ["bouton vert", "déposer", "deposer", "mtn", "orange"],
+  "10_tg_invite": ["canal telegram privé", "canal telegram prive"],
+  "11_tg_link": ["xtiy04zvcvw", "t.me/"],
+};
+
+export const CM_FOLDER_NAME_HINTS = ["камерун", "cameroon", "cameroun", "cm"];
+
 export const CM_REG_SEND_KEYS = new Set(["05_registration", "06_link", "07_chrome"]);
 export const CM_INTRO_SEND_KEYS = new Set(["01_intro", "01_intro_2"]);
 
 export function scriptSnippet(key: string): string {
   return CM_SCRIPT_SNIPPETS[key] ?? "";
+}
+
+export function scriptSearchNeedles(key: string): string[] {
+  return CM_SCRIPT_SEARCH_NEEDLES[key] ?? [scriptSnippet(key)].filter(Boolean);
+}
+
+export function cmScriptSentInHistory(outgoingTexts: string[], scriptKey: string): boolean {
+  if (scriptKey === "01_intro_2") {
+    const blob = outgoingTexts.join("\n").toLowerCase();
+    if (blob.includes("mon équipe") || blob.includes("mon equipe")) {
+      return true;
+    }
+  }
+  return scriptSearchNeedles(scriptKey).some((needle) => scriptSentInHistory(outgoingTexts, needle));
 }
 
 export function scriptSentInHistory(outgoingTexts: string[], snippet: string): boolean {
@@ -46,7 +85,7 @@ export function scriptSentInHistory(outgoingTexts: string[], snippet: string): b
 }
 
 export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
-  if (scriptSentInHistory(outgoingTexts, scriptSnippet("06_link"))) {
+  if (cmScriptSentInHistory(outgoingTexts, "06_link")) {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
@@ -54,7 +93,7 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
 }
 
 export function depositSentInHistory(outgoingTexts: string[]): boolean {
-  if (scriptSentInHistory(outgoingTexts, scriptSnippet("09_deposit"))) {
+  if (cmScriptSentInHistory(outgoingTexts, "09_deposit")) {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
@@ -114,16 +153,16 @@ export function funnelStepFromScriptGaps(
     return 0;
   }
   step = Math.max(step, 1);
-  if (!scriptSentInHistory(outgoingTexts, scriptSnippet("01_intro_2"))) {
+  if (!cmScriptSentInHistory(outgoingTexts, "01_intro_2")) {
     return Math.min(step, 1);
   }
-  if (!scriptSentInHistory(outgoingTexts, scriptSnippet("02_age"))) {
+  if (!cmScriptSentInHistory(outgoingTexts, "02_age")) {
     return Math.min(step, 2);
   }
-  if (!scriptSentInHistory(outgoingTexts, scriptSnippet("03_steps"))) {
+  if (!cmScriptSentInHistory(outgoingTexts, "03_steps")) {
     return Math.min(step, 2);
   }
-  if (!scriptSentInHistory(outgoingTexts, scriptSnippet("04_tier"))) {
+  if (!cmScriptSentInHistory(outgoingTexts, "04_tier")) {
     return Math.min(step, 3);
   }
   if (!regLinkSentInHistory(outgoingTexts)) {
@@ -172,11 +211,11 @@ export function resolveCmFunnelScripts(
     return [];
   }
 
-  const introSent = scriptSentInHistory(out, scriptSnippet("01_intro"));
-  const intro2Sent = scriptSentInHistory(out, scriptSnippet("01_intro_2"));
-  const ageSent = scriptSentInHistory(out, scriptSnippet("02_age"));
-  const stepsSent = scriptSentInHistory(out, scriptSnippet("03_steps"));
-  const tierSent = scriptSentInHistory(out, scriptSnippet("04_tier"));
+  const introSent = cmScriptSentInHistory(out, "01_intro");
+  const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
+  const ageSent = cmScriptSentInHistory(out, "02_age");
+  const stepsSent = cmScriptSentInHistory(out, "03_steps");
+  const tierSent = cmScriptSentInHistory(out, "04_tier");
   const linkSent = regLinkSentInHistory(out);
 
   if (linkSent) {
@@ -256,11 +295,11 @@ function resolveCmBacklogFallback(
   options?: { hasImage?: boolean; messageReaction?: string },
 ): string[] {
   const out = outgoingTexts;
-  const introSent = scriptSentInHistory(out, scriptSnippet("01_intro"));
-  const intro2Sent = scriptSentInHistory(out, scriptSnippet("01_intro_2"));
-  const ageSent = scriptSentInHistory(out, scriptSnippet("02_age"));
-  const stepsSent = scriptSentInHistory(out, scriptSnippet("03_steps"));
-  const tierSent = scriptSentInHistory(out, scriptSnippet("04_tier"));
+  const introSent = cmScriptSentInHistory(out, "01_intro");
+  const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
+  const ageSent = cmScriptSentInHistory(out, "02_age");
+  const stepsSent = cmScriptSentInHistory(out, "03_steps");
+  const tierSent = cmScriptSentInHistory(out, "04_tier");
   const linkSent = regLinkSentInHistory(out);
 
   if (linkSent) {

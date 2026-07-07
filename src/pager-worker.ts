@@ -18,6 +18,7 @@ import {
   regSendTriggersInProgress,
   resolveCmFunnelScripts,
 } from "./cm-script-engine.js";
+import { isRegistrationConfirmed } from "./cm-intent.js";
 import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
@@ -36,7 +37,7 @@ import type {
   ConversationRuntimeState,
   StateStore,
 } from "./state-store.js";
-import { resolveScriptTextByKey, resolveTemplateText } from "./template-resolver.js";
+import { resolveCmTemplateFolderId, resolveScriptTextByKey, resolveTemplateText } from "./template-resolver.js";
 import {
   countApiStatusFolders,
   isNoStatusConversation,
@@ -330,15 +331,27 @@ async function processCmConversation(
     `Pager worker: CM ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
   );
 
+  const folderId = await resolveCmTemplateFolderId(
+    client,
+    runtime.runtime.templateBankId,
+    currentState.pagerAccount?.liveTemplateBanks,
+  );
+
   let sentAny = false;
   for (const scriptKey of scriptKeys) {
-    const replyText = await resolveScriptTextByKey(
-      client,
-      runtime.runtime.templateBankId,
+    const replyText = await resolveScriptTextByKey(client, {
+      folderId,
+      liveBanks: currentState.pagerAccount?.liveTemplateBanks,
       scriptKey,
-    );
+    });
     if (!replyText?.trim()) {
-      console.warn(`CM script missing in Pager folder: ${scriptKey}`);
+      if (scriptKey === "01_intro_2") {
+        console.warn(`CM script optional miss ${convId.slice(0, 8)}: ${scriptKey}`);
+        continue;
+      }
+      console.warn(
+        `CM script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${scriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
+      );
       continue;
     }
 
