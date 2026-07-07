@@ -24,6 +24,7 @@ import type {
 } from "./state-store.js";
 import { resolveTemplateText } from "./template-resolver.js";
 import {
+  buildStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
 } from "./status-folders.js";
@@ -69,7 +70,12 @@ async function processPagerAccounts(deps: WorkerDeps): Promise<void> {
 }
 
 async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promise<void> {
-  const freshState = (await deps.stateStore.get(state.chatId)) ?? state;
+  let freshState = (await deps.stateStore.get(state.chatId)) ?? state;
+
+  if (!freshState.statusFolders?.length && freshState.pagerAccount?.cookies) {
+    freshState = (await ensureStatusFolders(deps, freshState)) ?? freshState;
+  }
+
   const enabledChannels = getEnabledChannels(freshState);
 
   if (!enabledChannels.length) {
@@ -474,4 +480,28 @@ function formatError(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+async function ensureStatusFolders(deps: WorkerDeps, state: ChatState): Promise<ChatState | undefined> {
+  const cookies = state.pagerAccount?.cookies;
+  if (!cookies) {
+    return undefined;
+  }
+
+  try {
+    const client = new PagerClient({
+      baseUrl: deps.env.PAGER_BASE_URL,
+      cookieHeader: cookies,
+      orgId: state.pagerAccount?.organizationId,
+      locale: "uk",
+    });
+    await client.warmSession();
+    const statuses = await client.listStatuses().catch(() => []);
+    const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
+    return deps.stateStore.patch(state.chatId, { statusFolders });
+  } catch (error) {
+    console.error(`ensureStatusFolders failed for chat ${state.chatId}:`, formatError(error));
+    const statusFolders = buildStatusFolderList([], state.statusFolders);
+    return deps.stateStore.patch(state.chatId, { statusFolders });
+  }
 }

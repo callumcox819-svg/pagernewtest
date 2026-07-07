@@ -23,6 +23,7 @@ import {
   buildChannelKeyboard,
   buildCountryKeyboard,
   buildFoldersKeyboard,
+  buildFoldersRetryKeyboard,
   buildMainMenuKeyboard,
   buildPagerAccountKeyboard,
   buildTemplateKeyboard,
@@ -253,8 +254,8 @@ async function handleCallback(
     await telegram.answerCallbackQuery(callbackId);
 
     if (value === "refresh") {
-      const nextState = (await syncStatusFolders(chatId, state)) ?? state;
-      await showFoldersMenu(chatId, nextState, messageId);
+      const synced = await syncStatusFolders(chatId, state);
+      await showFoldersMenu(chatId, synced.state ?? state, messageId);
       return;
     }
 
@@ -295,8 +296,7 @@ async function handleCallback(
     }
 
     if (value === "folders") {
-      const nextState = (await syncStatusFolders(chatId, state)) ?? state;
-      await showFoldersMenu(chatId, nextState);
+      await showFoldersMenu(chatId, state);
       return;
     }
 
@@ -699,16 +699,33 @@ async function showChannelsMenu(chatId: number, state: ChatState, messageId?: nu
 }
 
 async function showFoldersMenu(chatId: number, state: ChatState, messageId?: number) {
-  const folders = state.statusFolders ?? [];
-  if (!folders.length) {
+  let currentState = state;
+  if (!currentState.pagerAccount?.cookies) {
     await telegram.sendMessage(
       chatId,
-      "Папки не загружены. Подключи Pager аккаунт и нажми «Обновить папки».",
+      "Сначала подключи Pager аккаунт через «Pager аккаунт».",
       buildMainMenuKeyboard(),
     );
     return;
   }
 
+  if (!currentState.statusFolders?.length) {
+    const synced = await syncStatusFolders(chatId, currentState);
+    currentState = synced.state ?? currentState;
+    if (!currentState.statusFolders?.length) {
+      await telegram.sendMessage(
+        chatId,
+        [
+          "Не удалось загрузить папки из Pager.",
+          synced.error ? `Причина: ${synced.error}` : "Попробуй обновить или перелогиниться.",
+        ].join("\n"),
+        buildFoldersRetryKeyboard(),
+      );
+      return;
+    }
+  }
+
+  const folders = currentState.statusFolders ?? [];
   const enabled = folders.filter((folder) => folder.enabled).length;
   const text = [
     "Папки Pager — откуда бот берёт чаты для автоответа:",
@@ -731,21 +748,46 @@ async function showFoldersMenu(chatId: number, state: ChatState, messageId?: num
 async function syncStatusFolders(
   chatId: number,
   state: ChatState,
-): Promise<ChatState | undefined> {
+): Promise<{ state?: ChatState; error?: string }> {
   const cookies = state.pagerAccount?.cookies;
   if (!cookies) {
-    return undefined;
+    return { error: "Pager аккаунт не подключён" };
   }
 
   try {
     const client = buildPagerClient(cookies, state.pagerAccount?.organizationId);
     await client.warmSession();
-    const statuses = await client.listStatuses();
+
+    let statuses: Array<{ id: string; name: string }> = [];
+    try {
+      statuses = await client.listStatuses();
+    } catch (error) {
+      console.warn("listStatuses failed, refreshing session:", error);
+      const session = await client.validateSession();
+      const patchedAccount = await stateStore.patch(chatId, {
+        pagerAccount: {
+          ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
+          organizationId: session.organizationId ?? state.pagerAccount?.organizationId,
+          organizationName: session.organizationName ?? state.pagerAccount?.organizationName,
+        },
+      });
+      if (patchedAccount?.pagerAccount) {
+        state = patchedAccount;
+      }
+      statuses = await client.listStatuses().catch(() => []);
+    }
+
     const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
-    return stateStore.patch(chatId, { statusFolders });
+    const patched = await stateStore.patch(chatId, { statusFolders });
+    return { state: patched };
   } catch (error) {
     console.error("syncStatusFolders failed:", error);
-    return undefined;
+    const statusFolders = buildStatusFolderList([], state.statusFolders);
+    const patched = await stateStore.patch(chatId, { statusFolders });
+    return {
+      state: patched,
+      error: formatError(error),
+    };
   }
 }
 

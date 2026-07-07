@@ -248,6 +248,15 @@ export function buildFoldersKeyboard(
   return { inline_keyboard: rows };
 }
 
+export function buildFoldersRetryKeyboard(): ReplyMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: "🔄 Обновить папки", callback_data: "folders:refresh" }],
+      [{ text: "« Назад", callback_data: "menu:main" }],
+    ],
+  };
+}
+
 export function buildMainMenuKeyboard(): ReplyMarkup {
   return {
     inline_keyboard: [
