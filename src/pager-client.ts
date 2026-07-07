@@ -96,6 +96,29 @@ export class PagerClient {
     return this.cookieHeader;
   }
 
+  getOrganizationId(): string {
+    return this.orgId;
+  }
+
+  getOrganizationSlug(): string {
+    return this.orgSlug;
+  }
+
+  async syncOrgIdFromChannels(): Promise<string> {
+    try {
+      const channels = await this.request<PagerChannel[]>("/api/channel", { method: "GET" });
+      const orgId = channels.find((channel) => channel.organizationId)?.organizationId ?? "";
+      if (orgId.startsWith("org_")) {
+        this.orgId = orgId;
+        this.injectSessionCookies(orgId, this.orgSlug);
+        return orgId;
+      }
+    } catch (error) {
+      console.warn("syncOrgIdFromChannels failed:", formatError(error));
+    }
+    return this.orgId;
+  }
+
   injectSessionCookies(orgId?: string, orgSlug?: string, pagerUserId?: string): void {
     this.cookieHeader = enrichPagerCookies(this.cookieHeader, {
       organizationId: orgId || this.orgId,
@@ -111,11 +134,23 @@ export class PagerClient {
 
   async prepareSession(): Promise<void> {
     await this.warmSession();
-    await this.resolveOrgIdLive();
+
+    const cookieOrg = this.parseCookies()._pager_org_id?.trim();
+    if (!this.orgId?.startsWith("org_") && cookieOrg?.startsWith("org_")) {
+      this.orgId = cookieOrg;
+    }
+
     if (!this.orgSlug) {
       await this.discoverOrgSlug();
     }
-    if (this.orgId) {
+
+    if (!this.orgId?.startsWith("org_")) {
+      await this.syncOrgIdFromChannels();
+    }
+
+    if (!this.orgId?.startsWith("org_")) {
+      await this.resolveOrgIdLive();
+    } else {
       this.injectSessionCookies(this.orgId, this.orgSlug);
     }
   }
@@ -127,6 +162,7 @@ export class PagerClient {
     cookieHeader: string;
   }> {
     await this.prepareSession();
+    await this.syncOrgIdFromChannels();
     const organizationId = await this.ensureOrgId();
     const organization = await this.getOrganization().catch(() => undefined);
     const organizationSlug = this.orgSlug || organization?.slug || "";
@@ -156,20 +192,31 @@ export class PagerClient {
   }
 
   async resolveOrgIdLive(): Promise<string> {
+    const cookieOrg = this.parseCookies()._pager_org_id?.trim();
+    if (cookieOrg?.startsWith("org_")) {
+      this.orgId = cookieOrg;
+      this.injectSessionCookies(cookieOrg, this.orgSlug);
+      return cookieOrg;
+    }
+
+    if (this.orgId?.startsWith("org_")) {
+      this.injectSessionCookies(this.orgId, this.orgSlug);
+      return this.orgId;
+    }
+
     const savedOrg = this.orgId;
     const savedSlug = this.orgSlug;
     this.orgId = "";
 
-    const cookieOrg = this.parseCookies()._pager_org_id?.trim();
-    if (cookieOrg?.startsWith("org_")) {
-      this.orgId = cookieOrg;
-      return cookieOrg;
-    }
-
     await this.warmSession();
-    if (this.orgId) {
+    if (this.orgId?.startsWith("org_")) {
       this.injectSessionCookies(this.orgId, this.orgSlug);
       return this.orgId;
+    }
+
+    const fromChannels = await this.syncOrgIdFromChannels();
+    if (fromChannels.startsWith("org_")) {
+      return fromChannels;
     }
 
     for (const getter of [
@@ -181,18 +228,6 @@ export class PagerClient {
         this.injectSessionCookies(orgId, this.orgSlug);
         return orgId;
       }
-    }
-
-    try {
-      const channels = await this.request<PagerChannel[]>("/api/channel", { method: "GET" });
-      const orgId = channels.find((channel) => channel.organizationId)?.organizationId ?? "";
-      if (orgId.startsWith("org_")) {
-        this.orgId = orgId;
-        this.injectSessionCookies(orgId, this.orgSlug);
-        return orgId;
-      }
-    } catch {
-      // fall through
     }
 
     const html = await this.fetchChatsHtml();
@@ -213,7 +248,7 @@ export class PagerClient {
 
     this.orgId = savedOrg;
     this.orgSlug = savedSlug;
-    if (this.orgId) {
+    if (this.orgId?.startsWith("org_")) {
       return this.orgId;
     }
     return this.discoverOrgId();
@@ -446,7 +481,7 @@ export class PagerClient {
 
     const payload = await this.requestWithOrgRetry<PagerConversation[]>(
       "/api/conversation",
-      { method: "GET", params },
+      { method: "GET", params, referer: this.chatReferer() },
     );
     const conversations = Array.isArray(payload) ? payload : [];
     if (options?.channelId) {
@@ -460,6 +495,26 @@ export class PagerClient {
     maxPages = 5,
   ): Promise<PagerConversation[]> {
     await this.prepareSession();
+    await this.syncOrgIdFromChannels();
+
+    try {
+      return await this.collectConversationsForChannelsInner(channelIds, maxPages);
+    } catch (error) {
+      if (!isOrgIdError(error)) {
+        throw error;
+      }
+      console.warn("collectConversations org retry:", formatError(error));
+      this.orgId = "";
+      await this.resolveOrgIdLive();
+      await this.syncOrgIdFromChannels();
+      return this.collectConversationsForChannelsInner(channelIds, maxPages);
+    }
+  }
+
+  private async collectConversationsForChannelsInner(
+    channelIds: string[],
+    maxPages: number,
+  ): Promise<PagerConversation[]> {
     const enabled = new Set(channelIds);
     const seen = new Map<string, PagerConversation>();
 

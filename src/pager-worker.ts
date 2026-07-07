@@ -15,7 +15,7 @@ import {
   type PagerConversation,
   type PagerMessage,
 } from "./pager-client.js";
-import { ensurePagerSession } from "./pager-session.js";
+import { buildPagerAccountPatch, ensurePagerSession } from "./pager-session.js";
 import { classifyProofFromImage, classifyProofFromText } from "./proof-classifier.js";
 import type {
   ChannelRuntimeState,
@@ -137,9 +137,24 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
 
   let conversations: PagerConversation[] = [];
   try {
+    await client.syncOrgIdFromChannels();
+    const orgId = client.getOrganizationId();
+    if (orgId.startsWith("org_")) {
+      freshState =
+        (await deps.stateStore.patch(freshState.chatId, {
+          pagerAccount: buildPagerAccountPatch(freshState, {
+            organizationId: orgId,
+            organizationSlug: client.getOrganizationSlug() || freshState.pagerAccount?.organizationSlug,
+            cookieHeader: client.getCookieHeader(),
+          }),
+        })) ?? freshState;
+    }
     conversations = await client.collectConversationsForChannels(channelIds);
   } catch (error) {
-    console.error(`Pager poll failed for chat ${freshState.chatId}:`, formatError(error));
+    console.error(
+      `Pager poll failed for chat ${freshState.chatId} (orgId=${client.getOrganizationId().slice(0, 12) || "?"}):`,
+      formatError(error),
+    );
     return;
   }
 
