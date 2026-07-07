@@ -43,6 +43,10 @@ type ClerkSignInResponse = {
 export class ClerkPasswordAuthClient {
   private readonly queryString =
     "__clerk_api_version=2024-10-01&_clerk_js_version=5.68.0";
+  private readonly pagerBaseUrl = "https://www.pager.co.ua";
+  private readonly userAgent =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
   constructor(
     private readonly options: {
@@ -88,13 +92,17 @@ export class ClerkPasswordAuthClient {
   }
 
   private async createClient(): Promise<ClerkClientContext> {
-    await fetch("https://www.pager.co.ua/sign-in");
+    const headers = this.baseHeaders();
 
-    const response = await fetch(`https://${this.options.frontendApi}/v1/client`, {
+    await fetch(`${this.pagerBaseUrl}/sign-in`, {
+      method: "GET",
+      headers,
+    });
+
+    const response = await fetch(`https://${this.options.frontendApi}/v1/client?${this.queryString}`, {
       method: "POST",
       headers: {
-        origin: "https://www.pager.co.ua",
-        referer: "https://www.pager.co.ua/sign-in",
+        ...headers,
         "content-type": "application/json",
       },
       body: JSON.stringify({}),
@@ -161,10 +169,9 @@ export class ClerkPasswordAuthClient {
 
   private buildHeaders(client: ClerkClientContext): Record<string, string> {
     return {
+      ...this.baseHeaders(),
       authorization: client.authorizationToken,
       "content-type": "application/x-www-form-urlencoded",
-      origin: "https://www.pager.co.ua",
-      referer: "https://www.pager.co.ua/sign-in",
       ...(client.cookieHeader ? { cookie: client.cookieHeader } : {}),
     };
   }
@@ -221,5 +228,13 @@ export class ClerkPasswordAuthClient {
       }
     }
     return "";
+  }
+
+  private baseHeaders(): Record<string, string> {
+    return {
+      "user-agent": this.userAgent,
+      origin: this.pagerBaseUrl,
+      referer: `${this.pagerBaseUrl}/sign-in`,
+    };
   }
 }
