@@ -10,6 +10,13 @@ export type PagerSessionSummary = {
   organizationName?: string;
   channelCount: number;
   channels: PagerChannel[];
+  templateBanks: PagerTemplateBank[];
+};
+
+export type PagerTemplateBank = {
+  id: string;
+  name: string;
+  replyCount: number;
 };
 
 export class PagerClient {
@@ -34,10 +41,34 @@ export class PagerClient {
     }
   }
 
+  async getTemplateBanks(): Promise<PagerTemplateBank[]> {
+    const folderCandidates = [
+      "/api/savedReplyFolder",
+      "/api/saved-reply-folder",
+      "/api/savedRepliesFolder",
+      "/api/saved-replies-folder",
+      "/api/savedReply/folder",
+      "/api/saved-reply/folder",
+    ];
+    const replyCandidates = [
+      "/api/savedReply",
+      "/api/saved-reply",
+      "/api/savedReplies",
+      "/api/saved-replies",
+      "/api/replyTemplate",
+      "/api/reply-template",
+    ];
+
+    const foldersPayload = await this.requestFirstSuccessful<unknown>(folderCandidates);
+    const repliesPayload = await this.requestFirstSuccessful<unknown>(replyCandidates);
+    return normalizeTemplateBanks(foldersPayload, repliesPayload);
+  }
+
   async validateSession(): Promise<PagerSessionSummary> {
-    const [channels, organization] = await Promise.all([
+    const [channels, organization, templateBanks] = await Promise.all([
       this.getChannels(),
       this.getOrganization(),
+      this.getTemplateBanks().catch(() => []),
     ]);
 
     if (!channels.length) {
@@ -49,7 +80,20 @@ export class PagerClient {
       organizationName: organization?.name,
       channelCount: channels.length,
       channels,
+      templateBanks,
     };
+  }
+
+  private async requestFirstSuccessful<T>(paths: string[]): Promise<T | undefined> {
+    for (const path of paths) {
+      try {
+        return await this.request<T>(path);
+      } catch {
+        continue;
+      }
+    }
+
+    return undefined;
   }
 
   private async request<T>(path: string): Promise<T> {
@@ -74,4 +118,77 @@ export class PagerClient {
 
     return (await response.json()) as T;
   }
+}
+
+function normalizeTemplateBanks(
+  foldersPayload: unknown,
+  repliesPayload: unknown,
+): PagerTemplateBank[] {
+  const folderItems = Array.isArray(foldersPayload) ? foldersPayload : [];
+  const replyItems = Array.isArray(repliesPayload) ? repliesPayload : [];
+
+  const folderMap = new Map<string, PagerTemplateBank>();
+
+  for (const item of folderItems) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const record = item as Record<string, unknown>;
+    const id = firstString(record.id, record._id, record.folderId, record.uuid);
+    const name = firstString(record.name, record.title, record.folderName, record.label);
+    if (!id || !name) {
+      continue;
+    }
+
+    folderMap.set(id, {
+      id,
+      name,
+      replyCount: 0,
+    });
+  }
+
+  for (const item of replyItems) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const record = item as Record<string, unknown>;
+    const folderId = firstString(
+      record.folderId,
+      record.savedReplyFolderId,
+      record.saved_reply_folder_id,
+    );
+    const folderName = firstString(record.folderName, record.folder, record.categoryName);
+
+    if (folderId && folderMap.has(folderId)) {
+      const current = folderMap.get(folderId);
+      if (current) {
+        current.replyCount += 1;
+      }
+      continue;
+    }
+
+    if (folderName) {
+      const syntheticId = `name:${folderName}`;
+      const current = folderMap.get(syntheticId) ?? {
+        id: syntheticId,
+        name: folderName,
+        replyCount: 0,
+      };
+      current.replyCount += 1;
+      folderMap.set(syntheticId, current);
+    }
+  }
+
+  return [...folderMap.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
 }

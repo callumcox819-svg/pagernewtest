@@ -19,7 +19,18 @@ export type PagerAccountState = {
     name: string;
     channelSource?: string | null;
   }>;
+  liveTemplateBanks?: Array<{
+    id: string;
+    name: string;
+    replyCount?: number;
+  }>;
   connectedAt: string;
+};
+
+export type ChannelRuntimeState = {
+  enabled: boolean;
+  country: "ZM" | "CM" | "EG";
+  templateBank?: string;
 };
 
 export type ChatState = {
@@ -30,6 +41,7 @@ export type ChatState = {
   pendingAction?: PendingAction;
   draftPagerEmail?: string;
   pagerAccount?: PagerAccountState;
+  channels?: Record<string, ChannelRuntimeState>;
   updatedAt: string;
 };
 

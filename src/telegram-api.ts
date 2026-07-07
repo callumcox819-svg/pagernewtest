@@ -118,22 +118,41 @@ export class TelegramApi {
 }
 
 export function buildChannelKeyboard(
-  channels: Array<{ id: string; name: string; country: string; enabled: boolean }>,
+  channels: Array<{
+    id: string;
+    name: string;
+    country: string;
+    enabled: boolean;
+    templateBank?: string;
+  }>,
 ): ReplyMarkup {
   return {
-    inline_keyboard: channels.map((channel) => [
-      {
-        text: `${channel.enabled ? "ON" : "OFF"} | ${channel.name} | ${channel.country}`,
-        callback_data: `channel:${channel.id}`,
-      },
+    inline_keyboard: channels.flatMap((channel) => [
+      [
+        {
+          text: `${channel.enabled ? "ON" : "OFF"} | ${channel.name}`,
+          callback_data: `channel_toggle:${channel.id}`,
+        },
+        {
+          text: channel.country,
+          callback_data: `channel_country:${channel.id}`,
+        },
+        {
+          text: channel.templateBank ?? "Replies",
+          callback_data: `channel_bank:${channel.id}`,
+        },
+      ],
     ]),
   };
 }
 
-export function buildTemplateKeyboard(templateNames: string[]): ReplyMarkup {
+export function buildTemplateKeyboard(
+  channelId: string,
+  templateNames: string[],
+): ReplyMarkup {
   return {
     inline_keyboard: templateNames.map((name) => [
-      { text: name, callback_data: `template:${name}` },
+      { text: name, callback_data: `template:${channelId}:${name}` },
     ]),
   };
 }
@@ -154,11 +173,7 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
         { text: "Каналы", callback_data: "menu:channels" },
       ],
       [
-        { text: "Выбор шаблонов", callback_data: "menu:templates" },
         { text: "Статус", callback_data: "menu:status" },
-      ],
-      [
-        { text: "Этапы", callback_data: "menu:stages" },
         { text: "Сброс", callback_data: "menu:reset" },
       ],
     ],

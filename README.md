@@ -15,6 +15,7 @@ It already includes:
 - Telegram handoff after deposit confirmation
 - live Pager account validation through imported cookies
 - live channel loading from the connected Pager session
+- live template-bank discovery from the connected Pager session
 
 ## Core flow
 
@@ -35,8 +36,7 @@ You can already test the logic through Telegram without Pager API:
 
 - start the bot with your Telegram token
 - choose a channel/playbook with `/channels`
-- optionally override the template bank with `/templates`
-- set the current stage with `/stages`
+- toggle channel on/off, switch country, and pick a bank directly in the channel row
 - send text messages to trigger text rules
 - send screenshots to trigger OCR proof classification
 - inspect the current test state with `/status`
@@ -50,6 +50,7 @@ You can now also test a real Pager session:
 - paste your Pager cookies in one line
 - the bot validates the session against `/api/channel`
 - after success, `Каналы` switches to the real live channel list from that account
+- if Pager returns saved-reply folders, the bank button in each channel row uses those real folders
 
 ## Environment variables
 
@@ -77,8 +78,6 @@ Notes:
 
 - `/start` - show the quick usage summary
 - `/channels` - choose the channel/playbook to test
-- `/templates` - override the saved-reply bank
-- `/stages` - manually set the current internal stage
 - `/status` - show current chat state
 - `/reset` - reset the local state for this Telegram chat
 
@@ -87,9 +86,9 @@ Notes:
 At the moment:
 
 - `cookies` auth is live and validated against real Pager API
-- `email + password` is stored in bot state and prepared for the next login-flow step
-- real saved replies are still not loaded from Pager yet because the exact internal endpoint for them still needs to be pinned down
-- until that endpoint is wired, template selection stays playbook-based, but channels can already be live
+- `email + password` auth is live and validated against real Pager API
+- the bot now probes several likely Pager saved-reply endpoints and uses real folder names when the account returns them
+- if a specific account does not expose those endpoints in the current session, the bot falls back to country defaults from config
 
 ## Screenshot logic
 
@@ -130,7 +129,6 @@ npm run dev
 ## Next implementation steps
 
 1. connect real Pager API polling for conversations and messages
-2. bind real saved replies from Pager instead of static template text
-3. inspect real Pager image attachments instead of Telegram-only screenshots
-4. wire status changes back to Pager API using real status IDs
-5. add a real operator UI for channel toggle, country selector, and template bank selector
+2. inspect real Pager image attachments instead of Telegram-only screenshots
+3. wire status changes back to Pager API using real status IDs
+4. send actual Pager saved replies by folder/reply id instead of only selecting the bank name

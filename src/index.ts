@@ -1,6 +1,5 @@
 import { resolve } from "node:path";
 import {
-  STAGES,
   getChannelConfig,
   getDefaultEnabledChannel,
   getPlaybook,
@@ -17,7 +16,6 @@ import {
   buildChannelKeyboard,
   buildMainMenuKeyboard,
   buildPagerAccountKeyboard,
-  buildStageKeyboard,
   buildTemplateKeyboard,
   type TelegramMessage,
   type TelegramUpdate,
@@ -69,9 +67,84 @@ async function handleCallback(
   }
 
   const state = getOrCreateState(chatId);
-  const [kind, value] = data.split(":");
+  const [kind, value, extra] = data.split(":");
 
-  if (kind === "channel" && value) {
+  if (kind === "channel_toggle" && value) {
+    const channel = resolveChannelForState(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Channel not found");
+      return;
+    }
+
+    const nextEnabled = !getChannelEnabled(state, channel.id);
+    stateStore.patch(chatId, {
+      channels: {
+        ...(state.channels ?? {}),
+        [channel.id]: {
+          enabled: nextEnabled,
+          country: getChannelCountry(state, channel.id, channel.country),
+          templateBank:
+            state.channels?.[channel.id]?.templateBank ??
+            `${getChannelCountry(state, channel.id, channel.country).toLowerCase()}-default`,
+        },
+      },
+    });
+    await telegram.answerCallbackQuery(callbackId, nextEnabled ? "Включено" : "Выключено");
+    await telegram.sendMessage(
+      chatId,
+      "Обновил канал.",
+      buildChannelKeyboard(getSelectableChannels(stateStore.get(chatId) ?? state)),
+    );
+    return;
+  }
+
+  if (kind === "channel_country" && value) {
+    const channel = resolveChannelForState(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Channel not found");
+      return;
+    }
+
+    const current = getChannelCountry(state, channel.id, channel.country);
+    const next =
+      current === "ZM" ? "EG" : current === "EG" ? "CM" : "ZM";
+    stateStore.patch(chatId, {
+      channels: {
+        ...(state.channels ?? {}),
+        [channel.id]: {
+          enabled: getChannelEnabled(state, channel.id),
+          country: next,
+          templateBank:
+            pickTemplateBankForCountry(state, next) ?? `${next.toLowerCase()}-default`,
+        },
+      },
+    });
+    await telegram.answerCallbackQuery(callbackId, `Страна: ${next}`);
+    await telegram.sendMessage(
+      chatId,
+      "Обновил страну канала.",
+      buildChannelKeyboard(getSelectableChannels(stateStore.get(chatId) ?? state)),
+    );
+    return;
+  }
+
+  if (kind === "channel_bank" && value) {
+    const channel = resolveChannelForState(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Channel not found");
+      return;
+    }
+
+    await telegram.answerCallbackQuery(callbackId, "Выбирай шаблоны");
+    await telegram.sendMessage(
+      chatId,
+      `Выбери банк шаблонов для ${channel.name}:`,
+      buildTemplateKeyboard(channel.id, getTemplateOptionsForState(state)),
+    );
+    return;
+  }
+
+  if (kind === "template" && value && extra) {
     const channel = resolveChannelForState(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
@@ -79,41 +152,20 @@ async function handleCallback(
     }
 
     stateStore.patch(chatId, {
-      channelId: channel.id,
-      templateBankOverride: undefined,
+      channels: {
+        ...(state.channels ?? {}),
+        [channel.id]: {
+          enabled: getChannelEnabled(state, channel.id),
+          country: getChannelCountry(state, channel.id, channel.country),
+          templateBank: extra,
+        },
+      },
     });
-    await telegram.answerCallbackQuery(callbackId, `Channel: ${channel.name}`);
+    await telegram.answerCallbackQuery(callbackId, "Банк обновлён");
     await telegram.sendMessage(
       chatId,
-      [
-        `Selected channel: ${channel.name}`,
-        `Country: ${channel.country}`,
-        `Template bank: ${channel.templateBank}`,
-        channel.isLive ? "Source: live Pager account" : "Source: local config",
-      ].join("\n"),
-      buildMainMenuKeyboard(),
-    );
-    return;
-  }
-
-  if (kind === "template" && value) {
-    stateStore.patch(chatId, { templateBankOverride: value });
-    await telegram.answerCallbackQuery(callbackId, `Template bank: ${value}`);
-    await telegram.sendMessage(
-      chatId,
-      `Template bank override set to: ${value}`,
-      buildMainMenuKeyboard(),
-    );
-    return;
-  }
-
-  if (kind === "stage" && value) {
-    stateStore.patch(chatId, { currentStage: value as ChatState["currentStage"] });
-    await telegram.answerCallbackQuery(callbackId, `Stage: ${value}`);
-    await telegram.sendMessage(
-      chatId,
-      `Current stage manually set to: ${value}`,
-      buildMainMenuKeyboard(),
+      `Для канала ${channel.name} выбран банк: ${extra}`,
+      buildChannelKeyboard(getSelectableChannels(stateStore.get(chatId) ?? state)),
     );
     return;
   }
@@ -134,27 +186,8 @@ async function handleCallback(
     if (value === "channels") {
       await telegram.sendMessage(
         chatId,
-        "Choose the channel to test:",
+        "Слева — вкл/выкл, справа — страна канала.",
         buildChannelKeyboard(getSelectableChannels(state)),
-      );
-      return;
-    }
-
-    if (value === "templates") {
-      const effectiveChannel = getEffectiveChannel(state);
-      await telegram.sendMessage(
-        chatId,
-        `Choose the template bank override for ${effectiveChannel.name}:`,
-        buildTemplateKeyboard(getTemplateOptionsForChannel(effectiveChannel.country)),
-      );
-      return;
-    }
-
-    if (value === "stages") {
-      await telegram.sendMessage(
-        chatId,
-        "Choose the current stage:",
-        buildStageKeyboard([...STAGES]),
       );
       return;
     }
@@ -311,7 +344,7 @@ async function handleMessage(message: TelegramMessage) {
   if (!decision) {
     await telegram.sendMessage(
       chatId,
-      "No rule matched this message yet. Use /status, /channels, /templates, or send a clearer text or screenshot.",
+      "No rule matched this message yet. Use /status, /channels, or send a clearer text or screenshot.",
       buildMainMenuKeyboard(),
     );
     return;
@@ -340,27 +373,8 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
   if (command === "/channels") {
     await telegram.sendMessage(
       chatId,
-      "Choose the channel to test:",
+      "Слева — вкл/выкл, справа — страна канала.",
       buildChannelKeyboard(getSelectableChannels(state)),
-    );
-    return;
-  }
-
-  if (command === "/templates") {
-    const effectiveChannel = getEffectiveChannel(state);
-    await telegram.sendMessage(
-      chatId,
-      `Choose the template bank override for ${effectiveChannel.name}:`,
-      buildTemplateKeyboard(getTemplateOptionsForChannel(effectiveChannel.country)),
-    );
-    return;
-  }
-
-  if (command === "/stages") {
-    await telegram.sendMessage(
-      chatId,
-      "Choose the current stage:",
-      buildStageKeyboard([...STAGES]),
     );
     return;
   }
@@ -388,7 +402,7 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
 
   await telegram.sendMessage(
     chatId,
-    "Unknown command. Available: /start, /account, /channels, /templates, /stages, /status, /reset",
+    "Unknown command. Available: /start, /account, /channels, /status, /reset",
     buildMainMenuKeyboard(),
   );
 }
@@ -404,6 +418,16 @@ function getOrCreateState(chatId: number): ChatState {
     chatId,
     channelId: channel.id,
     currentStage: "new_lead",
+    channels: Object.fromEntries(
+      config.channels.map((item) => [
+        item.id,
+        {
+          enabled: true,
+          country: item.country,
+          templateBank: `${item.country.toLowerCase()}-default`,
+        },
+      ]),
+    ),
     updatedAt: new Date().toISOString(),
   });
 }
@@ -415,7 +439,11 @@ function getEffectiveChannel(state: ChatState) {
   }
 
   if (!state.templateBankOverride) {
-    return channel;
+    return {
+      ...channel,
+      templateBank:
+        state.channels?.[channel.id]?.templateBank ?? channel.templateBank,
+    };
   }
 
   return {
@@ -432,23 +460,41 @@ function getSelectableChannels(state: ChatState) {
       return {
         id: channel.id,
         name: channel.name,
-        country: mapped?.country ?? inferCountryFromName(channel.name),
-        enabled: true,
+        country: getChannelCountry(
+          state,
+          channel.id,
+          mapped?.country ?? inferCountryFromName(channel.name),
+        ),
+        enabled: getChannelEnabled(state, channel.id),
+        templateBank:
+          state.channels?.[channel.id]?.templateBank ??
+          pickTemplateBankForCountry(
+            state,
+            mapped?.country ?? inferCountryFromName(channel.name),
+          ),
       };
     });
   }
 
-  return config.channels;
+  return config.channels.map((channel) => ({
+    id: channel.id,
+    name: channel.name,
+    country: getChannelCountry(state, channel.id, channel.country),
+    enabled: getChannelEnabled(state, channel.id),
+    templateBank:
+      state.channels?.[channel.id]?.templateBank ??
+      pickTemplateBankForCountry(state, channel.country),
+  }));
 }
 
-function getTemplateOptionsForChannel(country: string) {
-  const exactMatches = config.templateBanks
-    .map((bank) => bank.name)
-    .filter((name) => name.startsWith(country.toLowerCase()));
+function getTemplateOptionsForState(state: ChatState): string[] {
+  const liveBanks =
+    state.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).filter(Boolean) ?? [];
+  if (liveBanks.length > 0) {
+    return liveBanks;
+  }
 
-  return exactMatches.length > 0
-    ? exactMatches
-    : config.templateBanks.map((bank) => bank.name);
+  return config.templateBanks.map((bank) => bank.name);
 }
 
 function resolveChannelForState(state: ChatState, channelId: string) {
@@ -466,12 +512,46 @@ function resolveChannelForState(state: ChatState, channelId: string) {
   return {
     id: live.id,
     name: live.name,
-    enabled: true,
-    country,
-    templateBank: `${country.toLowerCase()}-default`,
+    enabled: getChannelEnabled(state, live.id),
+    country: getChannelCountry(state, live.id, country),
+    templateBank:
+      state.channels?.[live.id]?.templateBank ??
+      `${getChannelCountry(state, live.id, country).toLowerCase()}-default`,
     statusMap: getDefaultEnabledChannel(config).statusMap,
     isLive: true,
   };
+}
+
+function getChannelEnabled(state: ChatState, channelId: string): boolean {
+  return state.channels?.[channelId]?.enabled ?? true;
+}
+
+function getChannelCountry(
+  state: ChatState,
+  channelId: string,
+  fallback: "ZM" | "CM" | "EG",
+): "ZM" | "CM" | "EG" {
+  return state.channels?.[channelId]?.country ?? fallback;
+}
+
+function pickTemplateBankForCountry(
+  state: ChatState,
+  country: "ZM" | "CM" | "EG",
+): string | undefined {
+  return pickTemplateBankFromList(getTemplateOptionsForState(state), country);
+}
+
+function pickTemplateBankFromList(
+  templateBanks: string[],
+  country: "ZM" | "CM" | "EG",
+): string | undefined {
+  const normalizedCountry = country.toLowerCase();
+  const exact = templateBanks.find((name) => name.toLowerCase().includes(normalizedCountry));
+  if (exact) {
+    return exact;
+  }
+
+  return templateBanks[0];
 }
 
 function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
@@ -546,8 +626,28 @@ async function handlePendingInput(
             name: channel.name,
             channelSource: channel.channelSource,
           })),
+          liveTemplateBanks: session.templateBanks.map((bank) => ({
+            id: bank.id,
+            name: bank.name,
+            replyCount: bank.replyCount,
+          })),
           connectedAt: new Date().toISOString(),
         },
+        channels: Object.fromEntries(
+          session.channels.map((channel) => {
+            const country = inferCountryFromName(channel.name);
+            return [
+              channel.id,
+              {
+                enabled: true,
+                country,
+                templateBank:
+                  pickTemplateBankFromList(session.templateBanks.map((bank) => bank.name), country) ??
+                  `${country.toLowerCase()}-default`,
+              },
+            ];
+          }),
+        ),
         draftPagerEmail: undefined,
       });
 
@@ -558,6 +658,7 @@ async function handlePendingInput(
           `Email: ${maskEmail(email)}`,
           `Организация: ${session.organizationName ?? session.organizationId ?? "unknown"}`,
           `Каналов найдено: ${session.channelCount}`,
+          `Банков шаблонов: ${session.templateBanks.length}`,
         ].join("\n"),
         buildPagerAccountKeyboard(true),
       );
@@ -590,8 +691,28 @@ async function handlePendingInput(
             name: channel.name,
             channelSource: channel.channelSource,
           })),
+          liveTemplateBanks: session.templateBanks.map((bank) => ({
+            id: bank.id,
+            name: bank.name,
+            replyCount: bank.replyCount,
+          })),
           connectedAt: new Date().toISOString(),
         },
+        channels: Object.fromEntries(
+          session.channels.map((channel) => {
+            const country = inferCountryFromName(channel.name);
+            return [
+              channel.id,
+              {
+                enabled: true,
+                country,
+                templateBank:
+                  pickTemplateBankFromList(session.templateBanks.map((bank) => bank.name), country) ??
+                  `${country.toLowerCase()}-default`,
+              },
+            ];
+          }),
+        ),
         draftPagerEmail: undefined,
       });
       await telegram.sendMessage(
@@ -600,6 +721,7 @@ async function handlePendingInput(
           "Cookies сохранены и проверены.",
           `Организация: ${session.organizationName ?? session.organizationId ?? "unknown"}`,
           `Каналов найдено: ${session.channelCount}`,
+          `Банков шаблонов: ${session.templateBanks.length}`,
           "Теперь кнопка `Каналы` будет показывать живые каналы аккаунта.",
         ].join("\n"),
         buildPagerAccountKeyboard(true),
@@ -628,8 +750,7 @@ async function sendMainMenu(chatId: number, state: ChatState) {
     [
       "Pager test bot is running.",
       `Канал: ${effectiveChannel.name} | ${effectiveChannel.country}`,
-      `Шаблоны: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
-      `Этап: ${state.currentStage}`,
+      `Банк шаблонов: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
       `Pager: ${state.pagerAccount?.organizationName ?? (state.pagerAccount ? "connected" : "not connected")}`,
       "Выбери нужное действие кнопками ниже.",
     ].join("\n"),
@@ -651,6 +772,9 @@ async function sendPagerAccountMenu(chatId: number, state: ChatState) {
             : undefined,
         account.liveChannels?.length
           ? `Каналы: ${account.liveChannels.length}`
+          : undefined,
+        account.liveTemplateBanks?.length
+          ? `Банки шаблонов: ${account.liveTemplateBanks.length}`
           : undefined,
         `Подключен: ${new Date(account.connectedAt).toLocaleString("ru-RU")}`,
       ].filter(Boolean)
