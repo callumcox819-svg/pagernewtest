@@ -36,6 +36,9 @@ export function classifyCmIntent(
   if (FR_DECLINED.test(t) || /nigerian|scam|arnaque|escroc/i.test(t)) {
     return "declined";
   }
+  if (isClientReadyPhrase(t)) {
+    return "ready";
+  }
   if (isAgeAnswer(t) && step >= 1 && step < 5) {
     return "positive";
   }
@@ -99,6 +102,20 @@ export function isDepositTierChoice(text: string): boolean {
     return true;
   }
   return isCmTier1000Choice(t) || isCmTier1500Choice(t);
+}
+
+export function isClientReadyPhrase(text: string): boolean {
+  const t = normalizeFrText(text);
+  if (!t) {
+    return false;
+  }
+  return (
+    /\b(je suis pret|je suis prete|pret a commencer|pret a continuer|je suis partant|je suis partante)\b/i.test(
+      t,
+    ) ||
+    /\b(j'attends|j attends|jattends|vas y|allons y|on y va|je suis d'accord)\b/i.test(t) ||
+    /\bje veux commencer|je veux continuer\b/i.test(t)
+  );
 }
 
 function normalizeFrText(text: string): string {
