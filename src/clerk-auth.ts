@@ -34,23 +34,9 @@ export class ClerkPasswordAuthClient {
 
   async signInWithPassword(email: string, password: string): Promise<string> {
     const client = await this.createClient();
-    const signInAttempt = await this.createSignInAttempt(client, email);
-
-    if (signInAttempt.response?.status !== "needs_first_factor") {
-      throw new Error("Clerk did not enter password sign-in stage.");
-    }
-
-    const supportsPassword = signInAttempt.response?.supported_first_factors?.some(
-      (factor) => factor.strategy === "password",
-    );
-
-    if (!supportsPassword) {
-      throw new Error("This account does not offer password sign-in.");
-    }
-
-    const attempt = await this.attemptPasswordFactor(
+    const attempt = await this.createPasswordSignInAttempt(
       client,
-      signInAttempt.response.id ?? "",
+      email,
       password,
     );
 
@@ -92,17 +78,18 @@ export class ClerkPasswordAuthClient {
     return (await response.json()) as ClerkSignInResponse;
   }
 
-  private async attemptPasswordFactor(
+  private async createPasswordSignInAttempt(
     client: ClerkClientContext,
-    signInId: string,
+    email: string,
     password: string,
   ): Promise<ClerkSignInResponse> {
     const response = await fetch(
-      `https://${this.options.frontendApi}/v1/client/sign_ins/${signInId}/attempt_first_factor?${this.queryString}`,
+      `https://${this.options.frontendApi}/v1/client/sign_ins?${this.queryString}`,
       {
         method: "POST",
         headers: this.buildHeaders(client),
         body: new URLSearchParams({
+          identifier: email,
           strategy: "password",
           password,
         }),
