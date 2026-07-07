@@ -77,6 +77,30 @@ export function countApiStatusFolders(folders?: StatusFolderState[]): number {
   return folders?.filter((folder) => folder.id !== "" && folder.id !== "*").length ?? 0;
 }
 
+export function stripChannelNamesFromFolders(
+  folders: StatusFolderState[],
+  liveChannels?: Array<{ id: string; name: string }>,
+): StatusFolderState[] {
+  if (!liveChannels?.length) {
+    return folders;
+  }
+
+  const channelIds = new Set(liveChannels.map((channel) => channel.id).filter(Boolean));
+  const channelNames = new Set(
+    liveChannels.map((channel) => channel.name.trim().toLowerCase()).filter(Boolean),
+  );
+
+  return folders.filter((folder) => {
+    if (folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
+      return true;
+    }
+    if (channelIds.has(folder.id)) {
+      return false;
+    }
+    return !channelNames.has(folder.name.trim().toLowerCase());
+  });
+}
+
 export function mergeStatusFolderList(
   apiStatuses: Array<{ id: string; name: string }>,
   existing?: StatusFolderState[],

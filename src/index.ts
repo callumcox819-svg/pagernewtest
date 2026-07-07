@@ -19,6 +19,7 @@ import {
   countApiStatusFolders,
   mergeStatusFolderList,
   setAllStatusFolders,
+  stripChannelNamesFromFolders,
   toggleStatusFolder,
   hasEnabledStatusFolders,
 } from "./status-folders.js";
@@ -327,9 +328,6 @@ async function handleCallback(
           statusFolders: folders,
           operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
         })) ?? state;
-      if (value === "all_on" && !collectEnabledChannelIds(nextState).length) {
-        nextState = (await setAllChannelsEnabled(chatId, nextState, true)) ?? nextState;
-      }
       await showFoldersMenu(chatId, nextState, messageId);
       return;
     }
@@ -344,9 +342,6 @@ async function handleCallback(
         statusFolders: folders,
         operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
       })) ?? state;
-    if (hasEnabledStatusFolders({ ...state, statusFolders: folders }) && !collectEnabledChannelIds(nextState).length) {
-      nextState = (await setAllChannelsEnabled(chatId, nextState, true)) ?? nextState;
-    }
     const folder = folders[index];
     await telegram.answerCallbackQuery(
       callbackId,
@@ -953,7 +948,10 @@ async function showFoldersMenu(
     };
   }
 
-  const folders = currentState.statusFolders ?? [];
+  const folders = stripChannelNamesFromFolders(
+    currentState.statusFolders ?? [],
+    currentState.pagerAccount?.liveChannels,
+  );
   const enabled = folders.filter((folder) => folder.enabled).length;
   const apiFolderCount = folders.filter(
     (folder) => folder.id !== "" && folder.id !== "*",
@@ -968,7 +966,7 @@ async function showFoldersMenu(
       : "⚠️ Список из Pager пуст — нажми «Обновить папки».",
     "«Без статусу» — только новые чаты без статуса.",
     "«Всі» — все чаты. Можно включить любую одну папку.",
-    "Каналы включаются автоматически при выборе папки.",
+    "Каналы включаются отдельно в меню «Каналы».",
   ].join("\n");
   const keyboard = buildFoldersKeyboard(folders, page);
 
@@ -995,9 +993,9 @@ async function syncStatusFolders(
 
     const { client, state: sessionState } = sessionResult;
     const statuses = await client.loadAllStatuses();
-    const statusFolders = mergeStatusFolderList(
-      statuses,
-      previousFolders,
+    const statusFolders = stripChannelNamesFromFolders(
+      mergeStatusFolderList(statuses, previousFolders),
+      sessionState.pagerAccount?.liveChannels,
     );
     const apiCount = countApiStatusFolders(statusFolders);
     const patch: Partial<Omit<ChatState, "chatId">> = {

@@ -349,29 +349,30 @@ export class PagerClient {
   async loadAllStatuses(): Promise<PagerStatus[]> {
     await this.prepareSession();
     const orgId = await this.ensureOrgId();
+    const channelFilter = await this.loadChannelFilter();
     const merged = new Map<string, string>();
 
     const addStatuses = (items: PagerStatus[]) => {
-      for (const item of items) {
-        if (item.id && item.name) {
-          merged.set(item.id, item.name);
-        }
+      for (const item of filterStatusesExcludingChannels(items, channelFilter)) {
+        merged.set(item.id, item.name);
       }
     };
 
     addStatuses(await this.listStatusesApi());
 
-    try {
-      const orgPayload = await this.requestWithOrgRetry<unknown>("/api/organization", {
-        method: "GET",
-        params: { orgId },
-        referer: this.chatReferer(),
-      });
-      const fromOrg = new Map<string, string>();
-      collectStatusesFromPayload(orgPayload, fromOrg);
-      addStatuses([...fromOrg.entries()].map(([id, name]) => ({ id, name })));
-    } catch (error) {
-      console.warn("Pager organization status parse failed:", formatError(error));
+    if (merged.size < 1) {
+      try {
+        const orgPayload = await this.requestWithOrgRetry<unknown>("/api/organization", {
+          method: "GET",
+          params: { orgId },
+          referer: this.chatReferer(),
+        });
+        const fromOrg = new Map<string, string>();
+        collectStatusesFromPayload(orgPayload, fromOrg);
+        addStatuses([...fromOrg.entries()].map(([id, name]) => ({ id, name })));
+      } catch (error) {
+        console.warn("Pager organization status parse failed:", formatError(error));
+      }
     }
 
     if (merged.size < 1) {
@@ -398,7 +399,7 @@ export class PagerClient {
             this.injectSessionCookies(orgFromHtml, this.orgSlug);
           }
         }
-        addStatuses(discoverStatusesFromHtml(html));
+        addStatuses(discoverStatusesFromHtml(html, channelFilter));
       }
     }
 
@@ -410,6 +411,15 @@ export class PagerClient {
       `Pager statuses loaded: ${statuses.length} (orgId=${orgId.slice(0, 12)}… slug=${this.orgSlug || "?"})`,
     );
     return statuses;
+  }
+
+  private async loadChannelFilter(): Promise<ChannelFilter> {
+    try {
+      const channels = await this.getChannels();
+      return buildChannelFilter(channels);
+    } catch {
+      return { ids: new Set(), names: new Set() };
+    }
   }
 
   private async discoverOrgSlug(): Promise<string> {
@@ -1536,6 +1546,10 @@ function parseStatusItems(items: unknown[]): PagerStatus[] {
     }
 
     const record = item as Record<string, unknown>;
+    if (isLikelyChannelRecord(record)) {
+      continue;
+    }
+
     const nestedStatus =
       record.status && typeof record.status === "object"
         ? (record.status as Record<string, unknown>)
@@ -1557,7 +1571,55 @@ function parseStatusItems(items: unknown[]): PagerStatus[] {
   return statuses;
 }
 
-function discoverStatusesFromHtml(html: string): PagerStatus[] {
+type ChannelFilter = {
+  ids: Set<string>;
+  names: Set<string>;
+};
+
+function buildChannelFilter(channels: PagerChannel[]): ChannelFilter {
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (const channel of channels) {
+    if (channel.id) {
+      ids.add(channel.id);
+    }
+    if (channel.name) {
+      names.add(channel.name.trim().toLowerCase());
+    }
+  }
+  return { ids, names };
+}
+
+function filterStatusesExcludingChannels(
+  items: PagerStatus[],
+  filter: ChannelFilter,
+): PagerStatus[] {
+  return items.filter((item) => {
+    if (!item.id || !item.name) {
+      return false;
+    }
+    if (filter.ids.has(item.id)) {
+      return false;
+    }
+    if (filter.names.has(item.name.trim().toLowerCase())) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function isLikelyChannelRecord(record: Record<string, unknown>): boolean {
+  return Boolean(
+    record.channelSource ||
+      record.pagePSID ||
+      record.channelId ||
+      record.facebookPageId ||
+      record.messengerPageId ||
+      record.clientPSID,
+  );
+}
+
+function discoverStatusesFromHtml(html: string, filter: ChannelFilter = { ids: new Set(), names: new Set() }): PagerStatus[] {
   if (!html) {
     return [];
   }
@@ -1580,10 +1642,18 @@ function discoverStatusesFromHtml(html: string): PagerStatus[] {
   const objectPattern =
     /\{[^{}]*"id"\s*:\s*"([0-9a-f-]{36})"[^{}]*"name"\s*:\s*"([^"]{2,80})"[^{}]*\}/gi;
   for (const match of html.matchAll(objectPattern)) {
-    found.set(match[1], match[2]);
+    const id = match[1];
+    const name = match[2];
+    if (filter.ids.has(id) || filter.names.has(name.trim().toLowerCase())) {
+      continue;
+    }
+    found.set(id, name);
   }
 
-  return [...found.entries()].map(([id, name]) => ({ id, name }));
+  return filterStatusesExcludingChannels(
+    [...found.entries()].map(([id, name]) => ({ id, name })),
+    filter,
+  );
 }
 
 function addStatuses(items: PagerStatus[], found: Map<string, string>): void {
@@ -1640,6 +1710,10 @@ function collectStatusesFromPayload(data: unknown, found: Map<string, string>): 
   }
 
   const record = data as Record<string, unknown>;
+  if (isLikelyChannelRecord(record)) {
+    return;
+  }
+
   const id = firstString(record.id, record.statusId);
   const name = firstString(record.name, record.title, record.label);
   if (id && name && !id.startsWith("user_") && !id.startsWith("org_") && name.length <= 80) {
@@ -1647,6 +1721,9 @@ function collectStatusesFromPayload(data: unknown, found: Map<string, string>): 
   }
 
   for (const key of Object.keys(record)) {
+    if (key === "channels" || key === "channel" || key === "liveChannels") {
+      continue;
+    }
     const value = record[key];
     if (value && typeof value === "object") {
       collectStatusesFromPayload(value, found);
