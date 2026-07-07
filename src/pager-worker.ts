@@ -6,6 +6,7 @@ import {
   getDefaultEnabledChannel,
   getPlaybook,
 } from "./config.js";
+import { enrichPagerCookies } from "./clerk-auth.js";
 import { decideNextAction } from "./decision-engine.js";
 import type { AppEnv } from "./env.js";
 import {
@@ -24,7 +25,7 @@ import type {
 } from "./state-store.js";
 import { resolveTemplateText } from "./template-resolver.js";
 import {
-  buildStatusFolderList,
+  mergeStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
 } from "./status-folders.js";
@@ -78,7 +79,12 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
 
   const client = new PagerClient({
     baseUrl: deps.env.PAGER_BASE_URL,
-    cookieHeader: cookies,
+    cookieHeader: enrichPagerCookies(cookies, {
+      organizationId: freshState.pagerAccount?.organizationId,
+      organizationSlug:
+        freshState.pagerAccount?.organizationSlug ??
+        freshState.pagerAccount?.organizationName?.toLowerCase(),
+    }),
     orgId: freshState.pagerAccount?.organizationId,
     orgSlug:
       freshState.pagerAccount?.organizationSlug ??
@@ -92,6 +98,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       (await deps.stateStore.patch(freshState.chatId, {
         pagerAccount: {
           ...(freshState.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
+          cookies: session.cookieHeader,
           organizationId: session.organizationId,
           organizationSlug: session.organizationSlug || freshState.pagerAccount?.organizationSlug,
           organizationName: session.organizationName ?? freshState.pagerAccount?.organizationName,
@@ -533,11 +540,12 @@ async function ensureStatusFolders(
       });
     const session = await pagerClient.bootstrapSession();
     const statuses = await pagerClient.loadAllStatuses().catch(() => []);
-    const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
+    const statusFolders = mergeStatusFolderList(statuses, state.statusFolders);
     return deps.stateStore.patch(state.chatId, {
       statusFolders,
       pagerAccount: {
         ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
+        cookies: session.cookieHeader,
         organizationId: session.organizationId,
         organizationSlug: session.organizationSlug || state.pagerAccount?.organizationSlug,
         organizationName: session.organizationName ?? state.pagerAccount?.organizationName,
@@ -545,7 +553,6 @@ async function ensureStatusFolders(
     });
   } catch (error) {
     console.error(`ensureStatusFolders failed for chat ${state.chatId}:`, formatError(error));
-    const statusFolders = buildStatusFolderList([], state.statusFolders);
-    return deps.stateStore.patch(state.chatId, { statusFolders });
+    return state;
   }
 }

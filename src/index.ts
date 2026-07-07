@@ -5,7 +5,7 @@ import {
   getPlaybook,
   loadConfig,
 } from "./config.js";
-import { ClerkPasswordAuthClient, parseCookieHeader } from "./clerk-auth.js";
+import { ClerkPasswordAuthClient, enrichPagerCookies, parseCookieHeader } from "./clerk-auth.js";
 import { decideNextAction } from "./decision-engine.js";
 import { loadEnv } from "./env.js";
 import { PagerClient } from "./pager-client.js";
@@ -15,6 +15,7 @@ import { clearTemplateReplyCache } from "./template-resolver.js";
 import { createStateStore, type ChatState, type StateStore } from "./state-store.js";
 import {
   buildStatusFolderList,
+  mergeStatusFolderList,
   setAllStatusFolders,
   toggleStatusFolder,
 } from "./status-folders.js";
@@ -255,6 +256,9 @@ async function handleCallback(
 
     if (value === "refresh") {
       const synced = await syncStatusFolders(chatId, state);
+      if (synced.error) {
+        await telegram.sendMessage(chatId, `⚠️ ${synced.error}`);
+      }
       await showFoldersMenu(chatId, synced.state ?? state, messageId);
       return;
     }
@@ -737,7 +741,7 @@ async function showFoldersMenu(chatId: number, state: ChatState, messageId?: num
     `Включено: ${enabled} из ${folders.length}`,
     apiFolderCount
       ? `Загружено из Pager: ${apiFolderCount} папок`
-      : "⚠️ Список из Pager пуст — нажми «Обновить папки» или перелогинься.",
+      : "⚠️ Список из Pager пуст — нажми «Обновить папки».",
     "«Всі» — все чаты. «Без статусу» — только новые без статуса.",
     "Для чатов в «Думають», «В процесі», «рега» — включи эти папки или «Всі».",
   ].join("\n");
@@ -755,10 +759,12 @@ async function syncStatusFolders(
   chatId: number,
   state: ChatState,
 ): Promise<{ state?: ChatState; error?: string }> {
-  const cookies = state.pagerAccount?.cookies;
+  const cookies = state.pagerAccount?.cookies?.trim();
   if (!cookies) {
     return { error: "Pager аккаунт не подключён" };
   }
+
+  const previousApiFolderCount = countApiStatusFolders(state.statusFolders);
 
   try {
     const client = buildPagerClient(
@@ -772,38 +778,43 @@ async function syncStatusFolders(
     try {
       statuses = await client.loadAllStatuses();
     } catch (error) {
-      console.warn("listStatuses failed, retrying after session refresh:", error);
-      await client.bootstrapSession();
+      console.warn("listStatuses failed, retrying after live org resolve:", error);
+      await client.resolveOrgIdLive();
       statuses = await client.loadAllStatuses().catch(() => []);
     }
 
-    const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
-    const patched = await stateStore.patch(chatId, {
-      statusFolders,
-      pagerAccount: {
-        ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() }),
-        organizationId: session.organizationId,
-        organizationSlug: session.organizationSlug || state.pagerAccount?.organizationSlug,
-        organizationName: session.organizationName ?? state.pagerAccount?.organizationName,
-      },
-    });
-    const apiCount = statusFolders.filter(
-      (folder) => folder.id !== "" && folder.id !== "*",
-    ).length;
+    const statusFolders = mergeStatusFolderList(statuses, state.statusFolders);
+    const apiCount = countApiStatusFolders(statusFolders);
+    const patch: Partial<Omit<ChatState, "chatId">> = {
+      pagerAccount: buildPagerAccountPatch(state, {
+        ...session,
+        cookieHeader: client.getCookieHeader(),
+      }),
+    };
+    if (apiCount > 0 || !previousApiFolderCount) {
+      patch.statusFolders = statusFolders;
+    }
+
+    const patched = await stateStore.patch(chatId, patch);
+    if (apiCount <= 0 && previousApiFolderCount > 0) {
+      return {
+        state: patched ?? state,
+        error:
+          "Pager не отдал список папок — оставил прежний список. Сессия обновлена, перелогин не нужен.",
+      };
+    }
     if (apiCount <= 0) {
       return {
         state: patched,
-        error: "Pager не отдал список папок. Нажми «Отключить» и войди заново через Email+пароль.",
+        error: "Pager не отдал список папок. Попробуй ещё раз через минуту.",
       };
     }
     return { state: patched };
   } catch (error) {
     console.error("syncStatusFolders failed:", error);
-    const statusFolders = buildStatusFolderList([], state.statusFolders);
-    const patched = await stateStore.patch(chatId, { statusFolders });
     return {
-      state: patched,
-      error: formatError(error),
+      state,
+      error: `Не удалось обновить папки: ${formatError(error)}. Прежний список сохранён.`,
     };
   }
 }
@@ -832,7 +843,7 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
       resolvePagerOrgSlug(state),
     );
     const statuses = await client.loadAllStatuses().catch(() => []);
-    const statusFolders = buildStatusFolderList(statuses, state.statusFolders);
+    const statusFolders = mergeStatusFolderList(statuses, state.statusFolders);
 
     return await stateStore.patch(chatId, {
       pagerAccount: {
@@ -910,14 +921,45 @@ function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
 }
 
 function buildPagerClient(cookieHeader: string, orgId?: string, orgSlug?: string) {
-  const cookies = parseCookieHeader(cookieHeader);
+  const enriched = enrichPagerCookies(cookieHeader, {
+    organizationId: orgId,
+    organizationSlug: orgSlug,
+  });
+  const cookies = parseCookieHeader(enriched);
   return new PagerClient({
     baseUrl: env.PAGER_BASE_URL,
-    cookieHeader,
+    cookieHeader: enriched,
     orgId: orgId || cookies._pager_org_id,
     orgSlug: orgSlug || cookies._pager_org_slug,
     locale: "uk",
   });
+}
+
+function buildPagerAccountPatch(
+  state: ChatState,
+  session: {
+    organizationId?: string;
+    organizationSlug?: string;
+    organizationName?: string;
+    cookieHeader: string;
+  },
+): NonNullable<ChatState["pagerAccount"]> {
+  const base =
+    state.pagerAccount ?? { authMode: "cookies", connectedAt: new Date().toISOString() };
+  return {
+    ...base,
+    cookies: enrichPagerCookies(session.cookieHeader, {
+      organizationId: session.organizationId ?? base.organizationId,
+      organizationSlug: session.organizationSlug ?? base.organizationSlug,
+    }),
+    organizationId: session.organizationId ?? base.organizationId,
+    organizationSlug: session.organizationSlug ?? base.organizationSlug,
+    organizationName: session.organizationName ?? base.organizationName,
+  };
+}
+
+function countApiStatusFolders(folders?: Array<{ id: string }>): number {
+  return folders?.filter((folder) => folder.id !== "" && folder.id !== "*").length ?? 0;
 }
 
 function resolvePagerOrgSlug(state: ChatState): string | undefined {
@@ -969,7 +1011,12 @@ async function handlePendingInput(
         session.organizationSlug,
       );
       const statuses = await statusClient.loadAllStatuses().catch(() => []);
-      const statusFolders = buildStatusFolderList(statuses);
+      const statusFolders = mergeStatusFolderList(statuses);
+      const enrichedCookies = enrichPagerCookies(login.cookieHeader, {
+        organizationId: session.organizationId ?? login.organizationId,
+        organizationSlug: session.organizationSlug,
+        pagerUserId: login.pagerUserId,
+      });
 
       await stateStore.patch(chatId, {
         pendingAction: undefined,
@@ -977,7 +1024,7 @@ async function handlePendingInput(
           authMode: "credentials",
           email,
           password: text.trim(),
-          cookies: login.cookieHeader,
+          cookies: enrichedCookies,
           organizationId: session.organizationId ?? login.organizationId,
           organizationName: session.organizationName,
           organizationSlug: session.organizationSlug,
@@ -1036,12 +1083,16 @@ async function handlePendingInput(
         session.organizationSlug,
       );
       const statuses = await statusClient.loadAllStatuses().catch(() => []);
-      const statusFolders = buildStatusFolderList(statuses);
+      const statusFolders = mergeStatusFolderList(statuses);
+      const enrichedCookies = enrichPagerCookies(text.trim(), {
+        organizationId: session.organizationId,
+        organizationSlug: session.organizationSlug,
+      });
       await stateStore.patch(chatId, {
         pendingAction: undefined,
         pagerAccount: {
           authMode: "cookies",
-          cookies: text.trim(),
+          cookies: enrichedCookies,
           organizationId: session.organizationId,
           organizationName: session.organizationName,
           organizationSlug: session.organizationSlug,

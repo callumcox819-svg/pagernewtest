@@ -269,6 +269,30 @@ export function cookiesToHeader(cookies: Record<string, string>): string {
     .join("; ");
 }
 
+export function enrichPagerCookies(
+  cookieHeader: string,
+  session: {
+    organizationId?: string;
+    organizationSlug?: string;
+    pagerUserId?: string;
+  },
+): string {
+  const cookies = parseCookieHeader(cookieHeader);
+  const orgId = session.organizationId?.trim();
+  if (orgId?.startsWith("org_")) {
+    cookies._pager_org_id = orgId;
+  }
+  const orgSlug = session.organizationSlug?.trim();
+  if (orgSlug) {
+    cookies._pager_org_slug = orgSlug;
+  }
+  const userId = session.pagerUserId?.trim();
+  if (userId?.startsWith("user_")) {
+    cookies._pager_user_id = userId;
+  }
+  return cookiesToHeader(cookies);
+}
+
 function extractClerkSessionInfo(payload: ClerkClientPayload): {
   organizationId?: string;
   pagerUserId?: string;

@@ -65,6 +65,19 @@ export function getEnabledFolderIds(state: {
   return new Set(state.statusFolders.filter((folder) => folder.enabled).map((folder) => folder.id));
 }
 
+export function mergeStatusFolderList(
+  apiStatuses: Array<{ id: string; name: string }>,
+  existing?: StatusFolderState[],
+): StatusFolderState[] {
+  const hasSavedApiFolders = existing?.some(
+    (folder) => folder.id !== NO_STATUS_FOLDER_ID && folder.id !== ALL_INBOX_FOLDER_ID,
+  );
+  if (!apiStatuses.length && hasSavedApiFolders) {
+    return existing!;
+  }
+  return buildStatusFolderList(apiStatuses, existing);
+}
+
 export function buildStatusFolderList(
   apiStatuses: Array<{ id: string; name: string }>,
   existing?: StatusFolderState[],
