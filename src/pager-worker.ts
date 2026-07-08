@@ -238,6 +238,30 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
         skipped += 1;
       }
     } catch (error) {
+      if (isRecoverablePagerError(error)) {
+        console.warn(
+          `Conversation ${conv.id.slice(0, 8)} hit recoverable Pager error for chat ${freshState.chatId}; refreshing session and retrying once`,
+        );
+        const refreshed = await refreshPagerSessionWithCredentials(deps, freshState);
+        if (refreshed) {
+          freshState = hydrateOperatorState(refreshed.state);
+          client = refreshed.client;
+          try {
+            const didReply = await processConversation(deps, freshState, client, conv, runtime);
+            if (didReply) {
+              replied += 1;
+            } else {
+              skipped += 1;
+            }
+            continue;
+          } catch (retryError) {
+            console.error(
+              `Conversation ${conv.id.slice(0, 8)} retry failed for chat ${freshState.chatId}:`,
+              formatError(retryError),
+            );
+          }
+        }
+      }
       console.error(
         `Conversation ${conv.id.slice(0, 8)} failed for chat ${freshState.chatId}:`,
         formatError(error),

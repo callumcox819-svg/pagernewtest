@@ -252,7 +252,7 @@ function hasExcludedSnippet(text: string, excludes: string[]): boolean {
 }
 
 function pickBestScriptReply(replies: PagerSavedReply[], scriptKey: string): PagerSavedReply {
-  if (scriptKey === "05_link" || scriptKey === "06_link") {
+  if (scriptKey === "05_link" || scriptKey === "06_link" || scriptKey === "07_chrome") {
     return [...replies].sort((left, right) => (left.text?.length ?? 0) - (right.text?.length ?? 0))[0];
   }
   return [...replies].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0];
@@ -279,6 +279,13 @@ function isScriptReplyAcceptable(text: string, scriptKey: string, country: Count
       body.includes("cash056") ||
       body.includes("je vous envoie le lien") ||
       body.includes("télécharger l'application")
+    );
+  }
+
+  if (scriptKey === "07_chrome" && country === "CM") {
+    return (
+      body.includes("google chrome") &&
+      (body.includes("copiez ce lien") || body.includes("collez-le"))
     );
   }
 
