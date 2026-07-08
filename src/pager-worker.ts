@@ -61,7 +61,6 @@ import type {
 import { resolveCmTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import {
   countApiStatusFolders,
-  isNoStatusConversation,
   mergeStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
@@ -348,20 +347,6 @@ async function processCmConversation(
     }
   }
 
-  const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
-  const statusName = (conv.status?.name ?? "").toLowerCase();
-  const inProgressStatus =
-    !isNoStatusConversation(conv) &&
-    (/процес|process|registered|рега/i.test(statusName) || cmRegLinkSentInHistory(outgoingTexts));
-  if (
-    inProgressStatus &&
-    Number.isFinite(incomingAgeMs) &&
-    incomingAgeMs > 2 * 60 * 60 * 1000 &&
-    outgoingTexts.length >= 2
-  ) {
-    return false;
-  }
-
   const threadStep = cmInferStepFromThread(messages);
   const gapStep = cmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
@@ -563,20 +548,6 @@ async function processZmConversation(
         lastCustomerMessageAt: lastIncoming.createdAt,
       });
     }
-    return false;
-  }
-
-  const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
-  const statusName = (conv.status?.name ?? "").toLowerCase();
-  const inProgressStatus =
-    !isNoStatusConversation(conv) &&
-    (/процес|process|registered|рега/i.test(statusName) || zmRegLinkSentInHistory(outgoingTexts));
-  if (
-    inProgressStatus &&
-    Number.isFinite(incomingAgeMs) &&
-    incomingAgeMs > 2 * 60 * 60 * 1000 &&
-    outgoingTexts.length >= 2
-  ) {
     return false;
   }
 

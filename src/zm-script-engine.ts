@@ -237,6 +237,12 @@ function wantsRegistrationNow(
   );
 }
 
+function isGreeting(text: string): boolean {
+  return /^(hi|hello|hey|morning|good morning|good evening|yo)([\s,!.]|$)/i.test(
+    (text || "").trim(),
+  );
+}
+
 export function resolveZmFunnelScripts(
   effectiveStep: number,
   text: string,
@@ -274,7 +280,7 @@ export function resolveZmFunnelScripts(
       }
       return [];
     }
-    if (intent === "interested" || signal || intent === "question") {
+    if (intent === "interested" || signal || intent === "question" || isGreeting(t)) {
       return ["01_intro"];
     }
     return [];
@@ -300,13 +306,16 @@ export function resolveZmFunnelScripts(
     }
 
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep)) {
-      if (linkSent && isRegistrationConfirmed(t)) {
-        return shouldSendDepositScript(t, effectiveStep, out) ? ["06_deposit"] : [];
-      }
       if (linkSent) {
+        if (shouldSendDepositScript(t, effectiveStep, out) || signal || intent === "ready") {
+          return depositSentInHistory(out) ? [] : ["06_deposit"];
+        }
         return [];
       }
       return ["04_registration", "05_link"];
+    }
+    if (linkSent && !depositSentInHistory(out) && (signal || intent === "joined")) {
+      return ["06_deposit"];
     }
     return [];
   }
@@ -328,13 +337,30 @@ export function resolveZmFunnelScripts(
     if (!linkSent && wantsRegistrationNow(t, intent, effectiveStep)) {
       return ["04_registration", "05_link"];
     }
+    if (
+      linkSent &&
+      !depositSentInHistory(out) &&
+      (signal ||
+        intent === "ready" ||
+        intent === "positive" ||
+        intent === "interested" ||
+        intent === "question" ||
+        isReadyForRegistration(t))
+    ) {
+      return ["06_deposit"];
+    }
     return [];
   }
 
   if (
     effectiveStep >= 7 &&
     !zmScriptSentInHistory(out, "07_game_id") &&
-    (intent === "ready" || intent === "positive" || intent === "image_only")
+    (intent === "ready" ||
+      intent === "positive" ||
+      intent === "interested" ||
+      intent === "image_only" ||
+      signal ||
+      isReadyForRegistration(t))
   ) {
     return ["07_game_id"];
   }

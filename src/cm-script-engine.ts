@@ -7,6 +7,7 @@ import {
   isClientReadyPhrase,
   isDepositTierChoice,
   isFunnelPositiveReaction,
+  isCmProfitFigure,
   isReadyForRegistration,
   isRegistrationConfirmed,
   isRegistrationPending,
@@ -294,6 +295,9 @@ export function resolveCmFunnelScripts(
   }
 
   if (isRegistrationHelpRequest(t)) {
+    if (regLinkSentInHistory(out)) {
+      return ["07_chrome", "06_link"];
+    }
     return [...registrationHelpScriptKeys("CM")];
   }
 
@@ -314,7 +318,7 @@ export function resolveCmFunnelScripts(
   const tierChoice = isDepositTierChoice(t);
   const signal = positiveSignal(t, intent, effectiveStep);
 
-  if (tierSent && tierChoice && !linkSent) {
+  if ((tierSent || effectiveStep >= 3) && tierChoice && !linkSent) {
     return [...CM_REG_BUNDLE];
   }
 
@@ -339,6 +343,7 @@ export function resolveCmFunnelScripts(
       !depositSentInHistory(out) &&
       (intent === "positive" ||
         intent === "ready" ||
+        intent === "interested" ||
         isReadyForRegistration(t) ||
         isClientReadyPhrase(t))
     ) {
@@ -349,7 +354,11 @@ export function resolveCmFunnelScripts(
 
   if (effectiveStep < 1) {
     if (!introSent) {
-      if (["interested", "positive", "ready", "question"].includes(intent) || signal) {
+      if (
+        ["interested", "positive", "ready", "question"].includes(intent) ||
+        signal ||
+        t.length > 0
+      ) {
         return ["01_intro", "01_intro_2"];
       }
       return [];
@@ -361,11 +370,12 @@ export function resolveCmFunnelScripts(
   }
 
   if (effectiveStep < 2) {
-    if (intro2Sent && !ageSent) {
+    if (!ageSent) {
       if (
         ["interested", "positive", "ready", "question"].includes(intent) ||
         signal ||
-        wantsDetailsAfterIntro(t)
+        wantsDetailsAfterIntro(t) ||
+        t.length > 0
       ) {
         return ["02_age"];
       }
@@ -377,16 +387,18 @@ export function resolveCmFunnelScripts(
     if (!stepsSent) {
       if (
         isAgeAnswer(t) ||
-        ["positive", "ready", "interested", "question"].includes(intent) ||
-        signal
+        ["positive", "ready", "interested", "question", "unknown"].includes(intent) ||
+        signal ||
+        t.length > 0
       ) {
         return ["03_steps"];
       }
     } else if (!tierSent) {
       if (
-        ["positive", "ready", "interested", "question"].includes(intent) ||
+        ["positive", "ready", "interested", "question", "unknown"].includes(intent) ||
         signal ||
-        isReadyForRegistration(t)
+        isReadyForRegistration(t) ||
+        t.length > 0
       ) {
         return ["04_tier"];
       }
@@ -398,16 +410,26 @@ export function resolveCmFunnelScripts(
     if (wantsRegistrationLink(t) && stepsSent && !linkSent) {
       return [...CM_REG_BUNDLE];
     }
+    if (tierChoice && !linkSent && (tierSent || stepsSent || effectiveStep >= 3)) {
+      return [...CM_REG_BUNDLE];
+    }
+    if (isCmProfitFigure(t) && !linkSent) {
+      if (!tierSent) {
+        return ["04_tier"];
+      }
+      return [...CM_REG_BUNDLE];
+    }
     if (stepsSent && !tierSent) {
       if (
-        ["positive", "ready", "interested", "question"].includes(intent) ||
+        ["positive", "ready", "interested", "question", "unknown"].includes(intent) ||
         signal ||
-        isReadyForRegistration(t)
+        isReadyForRegistration(t) ||
+        t.length > 0
       ) {
         return ["04_tier"];
       }
     }
-    if (tierSent && (tierChoice || signal)) {
+    if (tierSent && (tierChoice || signal || intent === "ready" || intent === "positive")) {
       return [...CM_REG_BUNDLE];
     }
     return [];
@@ -454,7 +476,10 @@ function isRegistrationHelpRequest(text: string): boolean {
   }
   return (
     /\b(je ne sais pas|je sais pas|sais pas faire|pas faire|aide|help|comment faire)\b/i.test(t) ||
-    /\b(je connais pas|connais pas)\b/i.test(t)
+    /\b(je connais pas|connais pas)\b/i.test(t) ||
+    /\b(je ne vois pas|je vois pas|pas de plate ?forme|plateforme|telecharg|m[' ]inscrit|je fais comment)\b/i.test(
+      t,
+    )
   );
 }
 

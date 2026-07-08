@@ -14,8 +14,11 @@ export type ZmIntent =
 
 const INTERESTED =
   /\b(interested|i'?m interested|i am interested|tell me more|teach me|need help|go ahead|very interested|want to learn|i want to invest|would like to join|count me in)\b/i;
-const POSITIVE = /\b(yes|yess?|ok|okay|sure|alright|got it|i am|how can i start|how do i start)\b/i;
-const READY = /\b(i'?m ready|am ready|let'?s start|start today|ready to start|i'?m in)\b/i;
+const POSITIVE =
+  /\b(yes|yess?|ok|okay|sure|alright|got it|i am|how can i start|how do i start|continue|proceed)\b/i;
+const READY =
+  /\b(i'?m ready|am ready|let'?s start|start today|ready to start|i'?m in|i am ready|lets start|let us start)\b/i;
+const GREETING = /^(hi|hello|hey|good morning|good evening|morning|yo)([\s,!.]|$)/i;
 const JOINED = /\b(have joined|joined|i joined|registered already|done registering|account created)\b/i;
 const DECLINED = /\b(not interested|no thanks|stop|scam|leave me alone)\b/i;
 const GAME_ID = /\b(17\d{6,}|16\d{6,}|account\s*\d+)\b/i;
@@ -66,11 +69,17 @@ export function classifyZmIntent(
   if (INTERESTED.test(t)) {
     return "interested";
   }
+  if (GREETING.test(t)) {
+    return step < 2 ? "interested" : "positive";
+  }
   if (READY.test(t)) {
     return "ready";
   }
   if (POSITIVE.test(t) && t.split(/\s+/).length <= 8) {
     return "positive";
+  }
+  if (/^(ok|okay|yes|sure|alright)\.?$/i.test(t)) {
+    return step >= 4 ? "ready" : "positive";
   }
   if (/\?/.test(t) || /\b(what|how|why|when|explain)\b/i.test(t)) {
     return "question";
@@ -93,6 +102,9 @@ export function isFunnelPositiveReaction(text: string, funnelStep = 0): boolean 
     return true;
   }
   if (funnelStep < 4 && /^(yes|ok|okay|sure|alright)\.?$/i.test(t)) {
+    return true;
+  }
+  if (funnelStep >= 4 && /^(yes|ok|okay|sure|alright|i'?m ready|ready)\.?$/i.test(t)) {
     return true;
   }
   if (funnelStep < 4 && POSITIVE.test(t) && t.split(/\s+/).length <= 4) {

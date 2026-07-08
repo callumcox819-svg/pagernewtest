@@ -13,9 +13,11 @@ export type CmIntent =
   | "image_only";
 
 const FR_POSITIVE =
-  /\b(oui|ok|d'accord|dac|dacc|bien|super|parfait|merci|yes|yeah|yep)\b/i;
+  /\b(oui|ok|okay|d'accord|dac|dacc|bien|super|parfait|merci|yes|yeah|yep)\b/i;
+const FR_GREETING =
+  /^(bonjour|bonsoir|salut|saluu+t|bjr|slt|hello|hi)([\s,!.]|$)/i;
 const FR_INTERESTED =
-  /\b(je veux|interesse|intéressé|m'intéresse|ca m'intéresse|ça m'intéresse|comment|explique|details|détails|investir|gagner|j[' ]?ai vu votre publication|jai vu votre publication|j[' ]?ai vu votre pub|jai vu votre pub|publication)\b/i;
+  /\b(je veux|interesse|interesse|interessee|interessee|m'interesse|ca m'interesse|comment|explique|details|details|investir|gagner|j[' ]?ai vu votre publication|jai vu votre publication|j[' ]?ai vu votre pub|jai vu votre pub|publication|je suis interesse|suis interesse|commen[cç]ons)\b/i;
 const FR_DECLINED =
   /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b/i;
 const FR_REG_DONE =
@@ -37,6 +39,7 @@ export function classifyCmIntent(
   },
 ): CmIntent {
   const t = (text || "").trim();
+  const normalized = normalizeFrText(text);
   const step = options?.funnelStep ?? 0;
 
   if (FR_DECLINED.test(t) || /nigerian|scam|arnaque|escroc/i.test(t)) {
@@ -51,10 +54,10 @@ export function classifyCmIntent(
   if (isDepositTierChoice(t)) {
     return "ready";
   }
-  if (FR_REG_DONE.test(t)) {
+  if (FR_REG_DONE.test(t) || FR_REG_DONE.test(normalized)) {
     return "positive";
   }
-  if (FR_REG_PENDING.test(t)) {
+  if (FR_REG_PENDING.test(t) || FR_REG_PENDING.test(normalized)) {
     return "ready";
   }
   if (wantsRegistrationLink(t)) {
@@ -69,11 +72,24 @@ export function classifyCmIntent(
   if (POSITIVE_EMOJI.test(t) && t.length <= 4) {
     return "positive";
   }
-  if (FR_INTERESTED.test(t)) {
+  if (FR_INTERESTED.test(t) || FR_INTERESTED.test(normalized)) {
     return "interested";
   }
-  if (/\b(je suis à l'écoute|je suis a l'ecoute|à l'écoute|je vous écoute)\b/i.test(t)) {
+  if (FR_GREETING.test(t) || FR_GREETING.test(normalized)) {
+    return step < 2 ? "interested" : "positive";
+  }
+  if (
+    /\b(je suis a l'ecoute|je suis a l ecoute|a l'ecoute|je vous ecoute|je t'ecoute)\b/i.test(
+      normalized,
+    )
+  ) {
     return "positive";
+  }
+  if (/\bje suis au cameroun\b|\bau cameroun\b/i.test(normalized)) {
+    return "positive";
+  }
+  if (isProfitFigure(normalized)) {
+    return step >= 3 ? "positive" : "interested";
   }
   if (/\boui\b/i.test(t) && step < 4) {
     return "positive";
@@ -97,6 +113,9 @@ export function isDepositTierChoice(text: string): boolean {
   const t = normalizeFrText(text);
   if (!t) {
     return false;
+  }
+  if (/^(1|2)\.?$/.test(t)) {
+    return true;
   }
   if (/^(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f)?\.?$/i.test(t)) {
     return true;
@@ -134,6 +153,21 @@ function normalizeFrText(text: string): string {
     .replace(/\p{M}/gu, "")
     .toLowerCase()
     .replace(/['’]/g, "'");
+}
+
+function isProfitFigure(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  return (
+    /^\d{1,3}(?:[\s.,]\d{3})+(?:\s*(?:cfa|frs?|f))?\.?$/i.test(t) ||
+    /^(?:10000|15000|19000|20000|25000|30000)\s*(?:cfa|frs?|f)?\.?$/i.test(t)
+  );
+}
+
+export function isCmProfitFigure(text: string): boolean {
+  return isProfitFigure(normalizeFrText(text)) || isProfitFigure(text);
 }
 
 function isCmTier1000Choice(t: string): boolean {
@@ -291,6 +325,9 @@ export function isReadyForRegistration(text: string): boolean {
     return false;
   }
   if (isDepositTierChoice(t)) {
+    return true;
+  }
+  if (isProfitFigure(t)) {
     return true;
   }
   if (/^(oui|ok|yes|d'accord)\.?$/i.test(t)) {
