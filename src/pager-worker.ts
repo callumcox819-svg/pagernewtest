@@ -145,10 +145,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
 
   freshState = hydrateOperatorState((await deps.stateStore.get(freshState.chatId)) ?? freshState);
 
-  if (
-    !collectEnabledChannelIdsFromState(freshState).length &&
-    hasEnabledStatusFolders(freshState)
-  ) {
+  if (!collectEnabledChannelIdsFromState(freshState).length) {
     freshState = (await seedEnabledChannelsFromYaml(deps, freshState)) ?? freshState;
     freshState = hydrateOperatorState(freshState);
     console.log(
@@ -1043,9 +1040,14 @@ async function seedEnabledChannelsFromYaml(
   }
 
   const liveIds = new Set(live.map((channel) => channel.id));
-  const enabledChannelIds = getConfigEnabledChannelIds(deps.config).filter((channelId) =>
+  let enabledChannelIds = getConfigEnabledChannelIds(deps.config).filter((channelId) =>
     liveIds.has(channelId),
   );
+  if (!enabledChannelIds.length) {
+    enabledChannelIds = deps.config.channels
+      .map((channel) => channel.id)
+      .filter((channelId) => liveIds.has(channelId));
+  }
   if (!enabledChannelIds.length) {
     return state;
   }
