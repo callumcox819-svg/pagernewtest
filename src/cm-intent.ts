@@ -23,6 +23,10 @@ const FR_REG_DONE =
 const FR_REG_PENDING =
   /\b(pas encore|pas fini|je m'inscris|j['']?inscris|en cours)\b/i;
 const POSITIVE_EMOJI = /[👍👌✅🔥❤️🙏😊🙂]/;
+const FR_LINK_BROKEN =
+  /\b(sa marche pas|ca marche pas|ne marche pas|marche pas|ne fonctionne pas|fonctionne pas|pas pu telecharger|pas pui telecharger|probleme de lien|lien.*pas|telecharg\w*.*pas)\b/i;
+const FR_HAS_ACCOUNT_OR_APP =
+  /\b(j'ai l'application|jai l'application|j'ai un compte|jai un compte|avec un compte|application deja|deja un compte|compte deja cree)\b/i;
 
 export function classifyCmIntent(
   text: string,
@@ -234,11 +238,16 @@ export function wantsRegistrationLink(text: string): boolean {
 }
 
 export function isRegistrationConfirmed(text: string): boolean {
-  return FR_REG_DONE.test((text || "").trim());
+  const t = (text || "").trim();
+  return FR_REG_DONE.test(t) || FR_HAS_ACCOUNT_OR_APP.test(t);
 }
 
 export function isRegistrationPending(text: string): boolean {
   return FR_REG_PENDING.test((text || "").trim());
+}
+
+export function isRegistrationBlocked(text: string): boolean {
+  return FR_LINK_BROKEN.test((text || "").trim());
 }
 
 export function isFunnelPositiveReaction(text: string, funnelStep: number): boolean {

@@ -3,6 +3,7 @@ import {
   type CmIntent,
   classifyCmIntent,
   isAgeAnswer,
+  isRegistrationBlocked,
   isClientReadyPhrase,
   isDepositTierChoice,
   isFunnelPositiveReaction,
@@ -317,10 +318,22 @@ export function resolveCmFunnelScripts(
     if (isRegistrationHelpRequest(t)) {
       return ["07_chrome", "06_link"];
     }
+    if (isRegistrationBlocked(t)) {
+      return ["07_chrome", "06_link"];
+    }
     if ((options?.hasImage || isRegistrationConfirmed(t)) && !depositSentInHistory(out)) {
       return ["09_deposit"];
     }
     if (isRegistrationConfirmed(t) && !depositSentInHistory(out)) {
+      return ["09_deposit"];
+    }
+    if (
+      !depositSentInHistory(out) &&
+      (intent === "positive" ||
+        intent === "ready" ||
+        isReadyForRegistration(t) ||
+        isClientReadyPhrase(t))
+    ) {
       return ["09_deposit"];
     }
     return [];
