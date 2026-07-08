@@ -15,7 +15,7 @@ export type CmIntent =
 const FR_POSITIVE =
   /\b(oui|ok|d'accord|dac|dacc|bien|super|parfait|merci|yes|yeah|yep)\b/i;
 const FR_INTERESTED =
-  /\b(je veux|interesse|intéressé|m'intéresse|ca m'intéresse|ça m'intéresse|comment|explique|details|détails|investir|gagner)\b/i;
+  /\b(je veux|interesse|intéressé|m'intéresse|ca m'intéresse|ça m'intéresse|comment|explique|details|détails|investir|gagner|j[' ]?ai vu votre publication|jai vu votre publication|j[' ]?ai vu votre pub|jai vu votre pub|publication)\b/i;
 const FR_DECLINED =
   /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b/i;
 const FR_REG_DONE =
