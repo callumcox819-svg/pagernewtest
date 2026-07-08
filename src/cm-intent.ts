@@ -19,7 +19,7 @@ const FR_GREETING =
 const FR_INTERESTED =
   /\b(je veux|interesse|interesse|interessee|interessee|m'interesse|ca m'interesse|comment|explique|details|details|investir|gagner|j[' ]?ai vu votre publication|jai vu votre publication|j[' ]?ai vu votre pub|jai vu votre pub|publication|je suis interesse|suis interesse|commen[cç]ons)\b/i;
 const FR_DECLINED =
-  /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b/i;
+  /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b|^non[.!]?$/i;
 const FR_REG_DONE =
   /(déjà|deja).{0,32}(connect|inscription|inscrit|enregistr|1xbet)|je me suis deja connecte|compte.{0,16}(ouvert|créé|cree)|j[' ]?ai (fini|créé|cree).{0,16}(inscription|compte)/i;
 const FR_REG_PENDING =

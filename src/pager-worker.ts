@@ -62,7 +62,6 @@ import { resolveCmTemplateFolderId, resolveScriptTextByKey, resolveTemplateText,
 import {
   countApiStatusFolders,
   expandEnabledFolderIds,
-  isInProgressStatusConversation,
   mergeStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
@@ -350,17 +349,8 @@ async function processCmConversation(
   }
 
   const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
-  if (
-    isInProgressStatusConversation(conv) &&
-    Number.isFinite(incomingAgeMs) &&
-    incomingAgeMs > 2 * 60 * 60 * 1000
-  ) {
-    if (convState.lastCustomerMessageId !== lastIncoming.id) {
-      await patchConversationState(deps.stateStore, state.chatId, convId, {
-        lastCustomerMessageId: lastIncoming.id,
-        lastCustomerMessageAt: lastIncoming.createdAt,
-      });
-    }
+  if (Number.isFinite(incomingAgeMs) && incomingAgeMs > MAX_CUSTOMER_MESSAGE_AGE_MS) {
+    await skipStaleCustomerMessage(deps, state.chatId, convId, convState, lastIncoming);
     return false;
   }
 
@@ -569,17 +559,8 @@ async function processZmConversation(
   }
 
   const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
-  if (
-    isInProgressStatusConversation(conv) &&
-    Number.isFinite(incomingAgeMs) &&
-    incomingAgeMs > 2 * 60 * 60 * 1000
-  ) {
-    if (convState.lastCustomerMessageId !== lastIncoming.id) {
-      await patchConversationState(deps.stateStore, state.chatId, convId, {
-        lastCustomerMessageId: lastIncoming.id,
-        lastCustomerMessageAt: lastIncoming.createdAt,
-      });
-    }
+  if (Number.isFinite(incomingAgeMs) && incomingAgeMs > MAX_CUSTOMER_MESSAGE_AGE_MS) {
+    await skipStaleCustomerMessage(deps, state.chatId, convId, convState, lastIncoming);
     return false;
   }
 
@@ -1103,6 +1084,24 @@ function hasDeliveredReplyAfter(messages: PagerMessage[], lastIncomingAt: string
     }
   }
   return false;
+}
+
+const MAX_CUSTOMER_MESSAGE_AGE_MS = 2 * 60 * 60 * 1000;
+
+async function skipStaleCustomerMessage(
+  deps: WorkerDeps,
+  chatId: number,
+  convId: string,
+  convState: ConversationRuntimeState,
+  lastIncoming: PagerMessage,
+): Promise<boolean> {
+  if (convState.lastCustomerMessageId !== lastIncoming.id) {
+    await patchConversationState(deps.stateStore, chatId, convId, {
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+    });
+  }
+  return true;
 }
 
 function inferCountryFromChannelName(name: string): "ZM" | "CM" | "EG" {
