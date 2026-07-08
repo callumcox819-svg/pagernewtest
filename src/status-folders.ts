@@ -73,6 +73,33 @@ export function getEnabledFolderIds(state: {
   return new Set(state.statusFolders.filter((folder) => folder.enabled).map((folder) => folder.id));
 }
 
+/** When operator only monitors «Без статусу», still follow chats moved to in-progress registration. */
+export function expandEnabledFolderIds(
+  state: { statusFolders?: StatusFolderState[] },
+  enabledFolderIds: Set<string> | null,
+): Set<string> | null {
+  if (!enabledFolderIds || enabledFolderIds.size === 0) {
+    return enabledFolderIds;
+  }
+  const onlyNoStatus =
+    enabledFolderIds.size === 1 && enabledFolderIds.has(NO_STATUS_FOLDER_ID);
+  if (!onlyNoStatus) {
+    return enabledFolderIds;
+  }
+
+  const expanded = new Set(enabledFolderIds);
+  for (const folder of state.statusFolders ?? []) {
+    if (folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
+      continue;
+    }
+    const name = folder.name.toLowerCase();
+    if (/в процес|процес|process|рега|реєстраці|en cours|inscription/i.test(name)) {
+      expanded.add(folder.id);
+    }
+  }
+  return expanded;
+}
+
 export function countApiStatusFolders(folders?: StatusFolderState[]): number {
   return folders?.filter((folder) => folder.id !== "" && folder.id !== "*").length ?? 0;
 }

@@ -176,6 +176,8 @@ playbooks:
       - "balance"
     noMoneyKeywords:
       - "pas d'argent"
+      - "pas l'argent"
+      - "ne pas l'argent"
       - "pas de money"
       - "pas d argent"
       - "j'ai pas"

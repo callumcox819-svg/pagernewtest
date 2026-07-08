@@ -61,6 +61,7 @@ import type {
 import { resolveCmTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import {
   countApiStatusFolders,
+  expandEnabledFolderIds,
   mergeStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
@@ -162,7 +163,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
-  const enabledFolderIds = getEnabledFolderIds(freshState);
+  const enabledFolderIds = expandEnabledFolderIds(freshState, getEnabledFolderIds(freshState));
   if (enabledFolderIds && enabledFolderIds.size === 0) {
     console.log(`Pager worker: chat ${freshState.chatId} — no status folders enabled`);
     return;

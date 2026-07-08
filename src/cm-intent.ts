@@ -21,7 +21,7 @@ const FR_INTERESTED =
 const FR_DECLINED =
   /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b/i;
 const FR_REG_DONE =
-  /(déjà|deja).{0,24}(inscription|inscrit|enregistr)|compte.{0,16}(ouvert|créé|cree)|j[' ]?ai (fini|créé|cree).{0,16}(inscription|compte)/i;
+  /(déjà|deja).{0,32}(connect|inscription|inscrit|enregistr|1xbet)|je me suis deja connecte|compte.{0,16}(ouvert|créé|cree)|j[' ]?ai (fini|créé|cree).{0,16}(inscription|compte)/i;
 const FR_REG_PENDING =
   /\b(pas encore|pas fini|je m'inscris|j['']?inscris|en cours)\b/i;
 const POSITIVE_EMOJI = /[👍👌✅🔥❤️🙏😊🙂]/;
@@ -85,7 +85,7 @@ export function classifyCmIntent(
   ) {
     return "positive";
   }
-  if (/\bje suis au cameroun\b|\bau cameroun\b/i.test(normalized)) {
+  if (/\bje suis (au|du) cameroun\b|\b(au|du) cameroun\b/i.test(normalized)) {
     return "positive";
   }
   if (isProfitFigure(normalized)) {

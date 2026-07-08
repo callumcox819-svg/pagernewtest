@@ -345,7 +345,8 @@ export function resolveCmFunnelScripts(
         intent === "ready" ||
         intent === "interested" ||
         isReadyForRegistration(t) ||
-        isClientReadyPhrase(t))
+        isClientReadyPhrase(t) ||
+        (effectiveStep >= 5 && intent === "unknown" && t.length > 0 && t.length <= 40))
     ) {
       return ["09_deposit"];
     }

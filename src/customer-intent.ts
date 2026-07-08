@@ -10,7 +10,7 @@ export type SpecialCustomerIntent =
   | "none";
 
 const FR_NO_MONEY =
-  /\b(pas d['']?argent|pas de argent|pas d argent|j['']?ai pas d['']?argent|je n['']?ai pas d['']?argent|je n ai pas d argent|sans argent|manque d['']?argent|pas les moyens|pas de sous|pas de fric|no money)\b/i;
+  /\b(pas d['']?argent|pas de argent|pas d argent|pas l['']?argent|ne pas l['']?argent|je ne pas l['']?argent|j['']?ai pas d['']?argent|je n['']?ai pas d['']?argent|je n ai pas d argent|sans argent|manque d['']?argent|pas les moyens|pas de sous|pas de fric|no money)\b/i;
 const FR_DEFERRAL =
   /\b(plus tard|pas maintenant|pas maintenant|demain|une autre fois|quand j['']?aurai|quand j aurai|je suis occupe|je suis occupé|trop occupe|trop occupé|pas le temps|je reviens)\b/i;
 const FR_DECLINED =
@@ -78,6 +78,9 @@ export function classifySpecialCustomerIntent(
     return "money_request";
   }
   if (FR_PHONE_REQUEST.test(t) || EN_PHONE_REQUEST.test(t) || AR_PHONE_REQUEST.test(t)) {
+    return "phone_request";
+  }
+  if (/^\d{9,12}$/.test(t.replace(/\s+/g, ""))) {
     return "phone_request";
   }
   if (FR_NO_MONEY.test(t) || EN_NO_MONEY.test(t) || AR_NO_MONEY.test(t)) {
