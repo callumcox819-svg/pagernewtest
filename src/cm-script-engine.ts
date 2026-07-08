@@ -187,6 +187,14 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("140 000 cfa") || t.includes("190 000 cfa") || t.includes("que vas-tu choisir")) {
     return 4;
   }
+  if (
+    t.includes("voici comment ça fonctionne") ||
+    t.includes("voici comment ca fonctionne") ||
+    t.includes("crée ton compte casino") ||
+    t.includes("cree ton compte casino")
+  ) {
+    return 3;
+  }
   if (t.includes("quel âge") || t.includes("mon équipe cumule")) {
     return 2;
   }
@@ -373,6 +381,14 @@ export function resolveCmFunnelScripts(
         signal
       ) {
         return ["03_steps"];
+      }
+    } else if (!tierSent) {
+      if (
+        ["positive", "ready", "interested", "question"].includes(intent) ||
+        signal ||
+        isReadyForRegistration(t)
+      ) {
+        return ["04_tier"];
       }
     }
     return [];
