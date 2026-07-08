@@ -331,6 +331,14 @@ export function resolveZmFunnelScripts(
     return [];
   }
 
+  if (
+    effectiveStep >= 7 &&
+    !zmScriptSentInHistory(out, "07_game_id") &&
+    (intent === "ready" || intent === "positive" || intent === "image_only")
+  ) {
+    return ["07_game_id"];
+  }
+
   if (effectiveStep < 8 && intent === "game_id_text") {
     if (!zmScriptSentInHistory(out, "07_game_id")) {
       return ["07_game_id"];

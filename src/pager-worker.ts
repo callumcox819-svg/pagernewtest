@@ -14,6 +14,7 @@ import { decideNextAction } from "./decision-engine.js";
 import {
   classifySpecialCustomerIntent,
   moneyRefusalText,
+  phoneChatOnlyText,
   specialIntentTemplateRole,
 } from "./customer-intent.js";
 import { ocrLangForCountry } from "./ocr-lang.js";
@@ -1242,6 +1243,9 @@ async function trySendSpecialCustomerResponse(
 
   if (special === "money_request") {
     replyText = moneyRefusalText(ctx.channel.country);
+    nextStage = "engaged";
+  } else if (special === "phone_request") {
+    replyText = phoneChatOnlyText(ctx.channel.country);
     nextStage = "engaged";
   } else {
     templateRole = specialIntentTemplateRole(special);

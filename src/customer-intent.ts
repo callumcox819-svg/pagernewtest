@@ -5,6 +5,7 @@ export type SpecialCustomerIntent =
   | "deferral"
   | "declined"
   | "money_request"
+  | "phone_request"
   | "scam_accusation"
   | "none";
 
@@ -34,6 +35,12 @@ const EN_MONEY_REQUEST =
   /\b(send(ing)?\s+me\s+(money|cash|funds)|give\s+me\s+(money|cash|funds)|lend\s+me|loan\s+me|need\s+money|want\s+money)\b/i;
 const AR_MONEY_REQUEST =
   /(فلوس|محتاج\s*فلوس|عايز\s*فلوس|عاوز\s*فلوس|ابعت(لي|ولي)\s*فلوس|ارسل(لي|ني)\s*فلوس|اديني\s*فلوس)/i;
+const EN_PHONE_REQUEST =
+  /\b(your|ur)\s+(phone\s*)?number\b|\b(send|give|share|drop)\s+(me\s+)?(your\s+)?(phone\s*)?number\b|\b(phone|mobile|cell)\s*number\b|\bcall\s+me\b|\bwhatsapp\s*(number|no\.?|line)?\b|\bnumber\s+please\b|\bmode of communication\b/i;
+const FR_PHONE_REQUEST =
+  /\b(envoy\w*|donn\w*|pass\w*|mets?)\b.{0,30}\b(ton|votre|ta)\s*(numéro|numero)\b|\b(numéro|numero)\s+(de\s+)?(téléphone|telephone|tel)\b|\b(ton|votre|ta)\s+(numéro|numero|tel)\b|\bappelle[- ]moi\b|\bwhatsapp\b/i;
+const AR_PHONE_REQUEST =
+  /(رقمك|رقم الهاتف|رقم التليفون|رقم الواتس|واتس|واتساب|اتصل(ي)?\s*بي|اتصل\s*معي|ابعت(لي)?\s*رقم|ارسل(لي)?\s*رقم)/i;
 
 export function normalizeCustomerText(value?: string): string {
   return (value || "")
@@ -70,6 +77,9 @@ export function classifySpecialCustomerIntent(
   if (FR_MONEY_REQUEST.test(t) || EN_MONEY_REQUEST.test(t) || AR_MONEY_REQUEST.test(t)) {
     return "money_request";
   }
+  if (FR_PHONE_REQUEST.test(t) || EN_PHONE_REQUEST.test(t) || AR_PHONE_REQUEST.test(t)) {
+    return "phone_request";
+  }
   if (FR_NO_MONEY.test(t) || EN_NO_MONEY.test(t) || AR_NO_MONEY.test(t)) {
     return "no_money";
   }
@@ -98,6 +108,17 @@ export function moneyRefusalText(country: CountryCode): string {
       return "نحن لا نُعطي أموالاً، بل نساعدك فقط على الكسب بالتكتيكات. عندما تكون جاهزاً للاستثمار، راسلني.";
     default:
       return "We don't give money — we only help you earn with our tactics. Message me when you're ready to invest.";
+  }
+}
+
+export function phoneChatOnlyText(country: CountryCode): string {
+  switch (country) {
+    case "CM":
+      return "Nous communiquons uniquement en ligne dans ce chat. Si vous êtes intéressé, écrivez-moi ici et on continue.";
+    case "EG":
+      return "نتواصل فقط أونلاين داخل هذه المحادثة. إذا كنت مهتماً، اكتب لي هنا ونكمل.";
+    default:
+      return "We only communicate online in this chat. If you're interested, text me here and we'll continue.";
   }
 }
 

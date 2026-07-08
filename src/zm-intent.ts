@@ -22,6 +22,8 @@ const GAME_ID = /\b(17\d{6,}|16\d{6,}|account\s*\d+)\b/i;
 const POSITIVE_EMOJI = /^[\s👍👌✅🔥❤️🙏😊🙂]+$/u;
 const EN_LINK_ASK =
   /\b(?:send|give|share|want|need|get|where|gimme).{0,28}\b(?:link|url)\b|\b(?:link|url)\b.{0,28}\b(?:please|pls|send|registration|register)\b|\bregistration\s+link\b|\bregister\s+link\b|\bneed\s+(?:the\s+)?link\b/i;
+const REGISTRATION_HELP =
+  /\b(your code|promo code|which code|what code|use that one|used that one|use this one|create the account|creat the account|create account|creat account|register with|how to register|what next|next step)\b/i;
 
 export function classifyZmIntent(
   text: string,
@@ -36,6 +38,9 @@ export function classifyZmIntent(
 
   if (DECLINED.test(t)) {
     return "declined";
+  }
+  if (/\b(no i am not|not yet|no not yet)\b/i.test(t)) {
+    return "unknown";
   }
   if (GAME_ID.test(t)) {
     return "game_id_text";
@@ -136,6 +141,9 @@ export function isReadyForRegistration(text: string): boolean {
   if (!t) {
     return false;
   }
+  if (/\bno i am not\b/i.test(t)) {
+    return false;
+  }
   if (/^yes\.?$/i.test(t)) {
     return true;
   }
@@ -171,7 +179,8 @@ export function isRegistrationHelpRequest(text: string): boolean {
   const t = (text || "").trim();
   return (
     /\b(problem|issue|error|help).{0,30}(registration|register|account)\b/i.test(t) ||
-    /\bscreenshot.{0,20}problem\b/i.test(t)
+    /\bscreenshot.{0,20}problem\b/i.test(t) ||
+    REGISTRATION_HELP.test(t)
   );
 }
 
