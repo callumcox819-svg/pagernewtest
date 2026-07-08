@@ -366,7 +366,7 @@ export function resolveCmFunnelScripts(
   }
 
   if (effectiveStep < 3) {
-    if (ageSent && !stepsSent) {
+    if (!stepsSent) {
       if (
         isAgeAnswer(t) ||
         ["positive", "ready", "interested", "question"].includes(intent) ||

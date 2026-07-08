@@ -219,6 +219,7 @@ export function isAgeAnswer(text: string): boolean {
 
 export function wantsRegistrationLink(text: string): boolean {
   const t = (text || "").trim();
+  const normalized = normalizeFrText(text);
   if (!t) {
     return false;
   }
@@ -226,6 +227,9 @@ export function wantsRegistrationLink(text: string): boolean {
     return false;
   }
   if (/^(?:le\s+)?(?:lien|link)(?:\s+please)?\s*[.!?]*$/i.test(t)) {
+    return true;
+  }
+  if (/\b(dacor|daccor|daccord|dacor)\b.*\b(lien|link)\b/i.test(normalized)) {
     return true;
   }
   if (/\benvoy\w*.*\blien\b|\blien\b.*\benvoy\w*\b/i.test(t)) {
@@ -238,16 +242,16 @@ export function wantsRegistrationLink(text: string): boolean {
 }
 
 export function isRegistrationConfirmed(text: string): boolean {
-  const t = (text || "").trim();
+  const t = normalizeFrText(text);
   return FR_REG_DONE.test(t) || FR_HAS_ACCOUNT_OR_APP.test(t);
 }
 
 export function isRegistrationPending(text: string): boolean {
-  return FR_REG_PENDING.test((text || "").trim());
+  return FR_REG_PENDING.test(normalizeFrText(text));
 }
 
 export function isRegistrationBlocked(text: string): boolean {
-  return FR_LINK_BROKEN.test((text || "").trim());
+  return FR_LINK_BROKEN.test(normalizeFrText(text));
 }
 
 export function isFunnelPositiveReaction(text: string, funnelStep: number): boolean {
