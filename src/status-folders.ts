@@ -73,6 +73,11 @@ export function getEnabledFolderIds(state: {
   return new Set(state.statusFolders.filter((folder) => folder.enabled).map((folder) => folder.id));
 }
 
+export function isInProgressStatusConversation(conv: PagerConversation): boolean {
+  const name = (conv.status?.name || "").trim().toLowerCase();
+  return /в процес|процес|process|рега|реєстраці|en cours/i.test(name);
+}
+
 /** When operator only monitors «Без статусу», still follow chats moved to in-progress registration. */
 export function expandEnabledFolderIds(
   state: { statusFolders?: StatusFolderState[] },

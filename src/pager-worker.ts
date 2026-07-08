@@ -62,6 +62,7 @@ import { resolveCmTemplateFolderId, resolveScriptTextByKey, resolveTemplateText,
 import {
   countApiStatusFolders,
   expandEnabledFolderIds,
+  isInProgressStatusConversation,
   mergeStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
@@ -348,6 +349,21 @@ async function processCmConversation(
     }
   }
 
+  const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
+  if (
+    isInProgressStatusConversation(conv) &&
+    Number.isFinite(incomingAgeMs) &&
+    incomingAgeMs > 2 * 60 * 60 * 1000
+  ) {
+    if (convState.lastCustomerMessageId !== lastIncoming.id) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+      });
+    }
+    return false;
+  }
+
   const threadStep = cmInferStepFromThread(messages);
   const gapStep = cmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
@@ -543,6 +559,21 @@ async function processZmConversation(
   }
 
   if (hasDeliveredReplyAfter(sorted, lastIncomingAt)) {
+    if (convState.lastCustomerMessageId !== lastIncoming.id) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+      });
+    }
+    return false;
+  }
+
+  const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
+  if (
+    isInProgressStatusConversation(conv) &&
+    Number.isFinite(incomingAgeMs) &&
+    incomingAgeMs > 2 * 60 * 60 * 1000
+  ) {
     if (convState.lastCustomerMessageId !== lastIncoming.id) {
       await patchConversationState(deps.stateStore, state.chatId, convId, {
         lastCustomerMessageId: lastIncoming.id,
