@@ -14,8 +14,9 @@ import { decideNextAction } from "./decision-engine.js";
 import {
   assessReplyEligibility,
   conversationPriorityScore,
-  isActionableCustomerConversation,
+  findLatestIncomingMessage,
   shouldOpenConversation,
+  shouldProcessConversation,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -93,7 +94,6 @@ type WorkerDeps = {
 
 const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 400;
-const MIN_CONVERSATIONS_PER_CHANNEL = 150;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -260,15 +260,12 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const folderScopedConversations = enabledFolderIds
     ? conversations.filter((conv) => conversationAllowedInFolders(conv, enabledFolderIds))
     : conversations;
-  const actionableCount = folderScopedConversations.filter(isActionableCustomerConversation).length;
-
-  const prioritizedConversations = prioritizeConversations(
-    folderScopedConversations,
-    enabledChannels.map((item) => item.channelId),
-    freshState.conversations,
-  ).slice(0, MAX_CONVERSATIONS_PER_ACCOUNT);
+  const workQueue = folderScopedConversations.filter(shouldProcessConversation);
+  const prioritizedConversations = [...workQueue]
+    .sort((left, right) => conversationPriorityScore(right) - conversationPriorityScore(left))
+    .slice(0, MAX_CONVERSATIONS_PER_ACCOUNT);
   console.log(
-    `Pager worker: chat ${freshState.chatId} — prioritized=${prioritizedConversations.length}/${folderScopedConversations.length}/${conversations.length} actionable=${actionableCount}`,
+    `Pager worker: chat ${freshState.chatId} — workQueue=${workQueue.length}/${folderScopedConversations.length}/${conversations.length} prioritized=${prioritizedConversations.length}`,
   );
 
   let checked = 0;
@@ -345,74 +342,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   );
 }
 
-function prioritizeConversations(
-  conversations: PagerConversation[],
-  channelIds: string[],
-  conversationStates?: Record<string, ConversationRuntimeState>,
-): PagerConversation[] {
-  const scored = conversations
-    .map((conv, index) => ({
-      conv,
-      index,
-      score: conversationPriorityScore(conv, conversationStates?.[conv.id]),
-      channelId: conv.channelId || conv.channel?.id || "",
-      actionable: isActionableCustomerConversation(conv),
-    }))
-    .sort((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
-      }
-      return left.index - right.index;
-    });
-
-  const selected = new Map<string, PagerConversation>();
-
-  for (const item of scored) {
-    if (!item.actionable) {
-      continue;
-    }
-    selected.set(item.conv.id, item.conv);
-    if (selected.size >= MAX_CONVERSATIONS_PER_ACCOUNT) {
-      return [...selected.values()];
-    }
-  }
-
-  const buckets = new Map<string, typeof scored>();
-  for (const channelId of channelIds) {
-    buckets.set(channelId, []);
-  }
-  for (const item of scored) {
-    if (!buckets.has(item.channelId)) {
-      buckets.set(item.channelId, []);
-    }
-    buckets.get(item.channelId)!.push(item);
-  }
-
-  for (const channelId of channelIds) {
-    const bucket = buckets.get(channelId) ?? [];
-    for (const item of bucket.slice(0, MIN_CONVERSATIONS_PER_CHANNEL)) {
-      selected.set(item.conv.id, item.conv);
-      if (selected.size >= MAX_CONVERSATIONS_PER_ACCOUNT) {
-        break;
-      }
-    }
-    if (selected.size >= MAX_CONVERSATIONS_PER_ACCOUNT) {
-      break;
-    }
-  }
-
-  for (const item of scored) {
-    if (selected.size >= MAX_CONVERSATIONS_PER_ACCOUNT) {
-      break;
-    }
-    selected.set(item.conv.id, item.conv);
-  }
-
-  return [...selected.values()].sort(
-    (left, right) =>
-      conversationPriorityScore(right, conversationStates?.[right.id]) -
-      conversationPriorityScore(left, conversationStates?.[left.id]),
-  );
+function findLatestIncomingFromThread(messages: PagerMessage[]): PagerMessage | undefined {
+  return findLatestIncomingMessage(messages);
 }
 
 async function processConversation(
@@ -464,12 +395,11 @@ async function processCmConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const latest = sorted[0];
-  if (!isIncomingDirection(latest.messageDirection)) {
+  const lastIncoming = findLatestIncomingFromThread(sorted);
+  if (!lastIncoming) {
     return false;
   }
 
-  const lastIncoming = latest;
   const outgoingTexts = collectCmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const awaitingRegAfterTierChoice =
@@ -674,12 +604,11 @@ async function processZmConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const latest = sorted[0];
-  if (!isIncomingDirection(latest.messageDirection)) {
+  const lastIncoming = findLatestIncomingFromThread(sorted);
+  if (!lastIncoming) {
     return false;
   }
 
-  const lastIncoming = latest;
   const outgoingTexts = collectZmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
 
@@ -903,17 +832,11 @@ async function processEgConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const latest = sorted[0];
-  if (!isIncomingDirection(latest.messageDirection)) {
-    if (isActionableCustomerConversation(conv)) {
-      console.log(
-        `Pager worker: skip ${convId.slice(0, 8)} EG — latest_not_incoming (list=${conv.lastMessageDirection ?? "?"})`,
-      );
-    }
+  const lastIncoming = findLatestIncomingFromThread(sorted);
+  if (!lastIncoming) {
     return false;
   }
 
-  const lastIncoming = latest;
   const outgoingTexts = collectEgOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
 
@@ -1095,6 +1018,8 @@ async function processGenericConversation(
     return false;
   }
 
+  await tryTakeConversationForProcessing(client, convId);
+
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const convState = getConversationState(currentState, convId, runtime.channelId);
 
@@ -1110,13 +1035,10 @@ async function processGenericConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const latest = sorted[0];
-
-  if (!isIncomingDirection(latest.messageDirection)) {
+  const lastIncoming = findLatestIncomingFromThread(sorted);
+  if (!lastIncoming) {
     return false;
   }
-
-  const lastIncoming = latest;
 
   if (
     !(await ensureCustomerMessageEligible(
