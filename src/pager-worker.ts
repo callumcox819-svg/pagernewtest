@@ -51,6 +51,7 @@ import {
   inferStepFromThread as zmInferStepFromThread,
   regLinkSentInHistory as zmRegLinkSentInHistory,
   regSendTriggersInProgress as zmRegSendTriggersInProgress,
+  statusMoveTriggersInProgress as zmStatusMoveTriggersInProgress,
   resolveZmFunnelScripts,
 } from "./zm-script-engine.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
@@ -79,6 +80,7 @@ import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptText
 import {
   countApiStatusFolders,
   expandEnabledFolderIds,
+  isFunnelFollowUpFolderName,
   mergeStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
@@ -448,14 +450,14 @@ async function buildWorkQueue(
     const queued = [...selected.values()].filter(
       (conv) => (conv.channelId || conv.channel?.id) === channel.channelId,
     ).length;
-    if (channel.runtime.country === "EG" || channel.runtime.country === "CM") {
+    if (channel.runtime.country === "EG" || channel.runtime.country === "CM" || channel.runtime.country === "ZM") {
       return queued < 10;
     }
     return queued === 0;
   });
 
   for (const channel of channelsNeedingScan) {
-    if (channel.runtime.country === "CM" || channel.runtime.country === "EG") {
+    if (channel.runtime.country === "CM" || channel.runtime.country === "EG" || channel.runtime.country === "ZM") {
       const inboxTop = (
         await client.listConversations({
           channelId: channel.channelId,
@@ -722,7 +724,7 @@ async function processCmConversation(
   }
 
   if (cmRegSendTriggersInProgress(scriptKeys)) {
-    const statusId = findInProgressStatusId(currentState);
+    const statusId = findFunnelFollowUpStatusId(currentState);
     const operatorId = await client.probeOperatorUserId();
     if (statusId && operatorId) {
       try {
@@ -946,8 +948,8 @@ async function processZmConversation(
     return false;
   }
 
-  if (zmRegSendTriggersInProgress(scriptKeys)) {
-    const statusId = findInProgressStatusId(currentState);
+  if (zmRegSendTriggersInProgress(scriptKeys) || zmStatusMoveTriggersInProgress(scriptKeys)) {
+    const statusId = findFunnelFollowUpStatusId(currentState);
     const operatorId = await client.probeOperatorUserId();
     if (statusId && operatorId) {
       try {
@@ -1149,7 +1151,7 @@ async function processEgConversation(
   }
 
   if (egRegSendTriggersInProgress(scriptKeys)) {
-    const statusId = findInProgressStatusId(currentState);
+    const statusId = findFunnelFollowUpStatusId(currentState);
     const operatorId = await client.probeOperatorUserId();
     if (statusId && operatorId) {
       try {
@@ -1318,10 +1320,9 @@ async function processGenericConversation(
   return true;
 }
 
-function findInProgressStatusId(state: ChatState): string | undefined {
+function findFunnelFollowUpStatusId(state: ChatState): string | undefined {
   for (const folder of state.statusFolders ?? []) {
-    const name = folder.name.toLowerCase();
-    if (/в процес|процес|process/i.test(name)) {
+    if (isFunnelFollowUpFolderName(folder.name)) {
       return folder.id;
     }
   }

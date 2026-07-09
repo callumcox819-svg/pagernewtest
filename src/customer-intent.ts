@@ -42,6 +42,12 @@ const FR_PHONE_REQUEST =
 const AR_PHONE_REQUEST =
   /(رقمك|رقم الهاتف|رقم التليفون|رقم الواتس|واتس|واتساب|اتصل(ي)?\s*بي|اتصل\s*معي|ابعت(لي)?\s*رقم|ارسل(لي)?\s*رقم)/i;
 
+/** Casino game IDs (16/17…) must not be treated as phone numbers. */
+export function isLikelyGameId(text: string): boolean {
+  const digits = (text || "").replace(/\s+/g, "");
+  return /^(16|17)\d{6,}$/.test(digits);
+}
+
 export function normalizeCustomerText(value?: string): string {
   return (value || "")
     .trim()
@@ -80,7 +86,8 @@ export function classifySpecialCustomerIntent(
   if (FR_PHONE_REQUEST.test(t) || EN_PHONE_REQUEST.test(t) || AR_PHONE_REQUEST.test(t)) {
     return "phone_request";
   }
-  if (/^\d{9,12}$/.test(t.replace(/\s+/g, ""))) {
+  const digitsOnly = t.replace(/\s+/g, "");
+  if (/^\d{9,12}$/.test(digitsOnly) && !isLikelyGameId(t)) {
     return "phone_request";
   }
   if (FR_NO_MONEY.test(t) || EN_NO_MONEY.test(t) || AR_NO_MONEY.test(t)) {

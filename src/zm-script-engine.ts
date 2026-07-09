@@ -47,6 +47,7 @@ export const ZM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
 
 export const ZM_FOLDER_NAME_HINTS = ["замб", "zamb", "zambia"];
 export const ZM_REG_SEND_KEYS = new Set(["04_registration", "05_link"]);
+export const ZM_STATUS_MOVE_KEYS = new Set(["04_registration", "05_link", "08_tg_invite", "09_tg_link"]);
 export const ZM_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works", "03_zmw_table"]);
 
 export function scriptSnippet(key: string): string {
@@ -185,6 +186,10 @@ export function collectOutgoingTexts(messages: PagerMessage[]): string[] {
 
 export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key));
+}
+
+export function statusMoveTriggersInProgress(scriptKeys: string[]): boolean {
+  return scriptKeys.some((key) => ZM_STATUS_MOVE_KEYS.has(key));
 }
 
 function shouldSendDepositScript(
@@ -371,22 +376,54 @@ export function resolveZmFunnelScripts(
 
   if (
     effectiveStep >= 7 &&
+    depositSentInHistory(out) &&
     !zmScriptSentInHistory(out, "07_game_id") &&
-    (intent === "ready" ||
+    (intent === "game_id_text" ||
+      intent === "ready" ||
       intent === "positive" ||
       intent === "interested" ||
       intent === "image_only" ||
+      intent === "question" ||
+      options?.hasImage ||
       signal ||
-      isReadyForRegistration(t) ||
-      hasUsableFollowUp(t))
+      hasUsableFollowUp(t) ||
+      t.length > 0)
   ) {
     return ["07_game_id"];
   }
 
-  if (effectiveStep < 8 && intent === "game_id_text") {
+  if (intent === "game_id_text") {
     if (!zmScriptSentInHistory(out, "07_game_id")) {
       return ["07_game_id"];
     }
+    const next: string[] = [];
+    if (!zmScriptSentInHistory(out, "08_tg_invite")) {
+      next.push("08_tg_invite");
+    }
+    if (!zmScriptSentInHistory(out, "09_tg_link")) {
+      next.push("09_tg_link");
+    }
+    return next;
+  }
+
+  if (
+    effectiveStep >= 7 &&
+    zmScriptSentInHistory(out, "07_game_id") &&
+    !zmScriptSentInHistory(out, "09_tg_link") &&
+    (intent === "positive" ||
+      intent === "ready" ||
+      intent === "question" ||
+      intent === "interested" ||
+      hasUsableFollowUp(t))
+  ) {
+    const next: string[] = [];
+    if (!zmScriptSentInHistory(out, "08_tg_invite")) {
+      next.push("08_tg_invite");
+    }
+    if (!zmScriptSentInHistory(out, "09_tg_link")) {
+      next.push("09_tg_link");
+    }
+    return next;
   }
 
   return [];
