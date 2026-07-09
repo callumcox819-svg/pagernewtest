@@ -1,5 +1,5 @@
 import type { PagerConversation, PagerMessage } from "./pager-client.js";
-import { isCustomerMessage, resolveLastMessageAt } from "./pager-client.js";
+import { isCustomerMessage, resolveLastMessageAt, enrichConversationFromThread } from "./pager-client.js";
 import type { ConversationRuntimeState } from "./state-store.js";
 
 /** Brand-new customer messages (always processed). */
@@ -142,8 +142,9 @@ export function findLatestIncomingMessage(
   conv?: PagerConversation,
   operatorUserId?: string,
 ): PagerMessage | undefined {
+  const enriched = conv ? enrichConversationFromThread(conv, messages, operatorUserId) : conv;
   return sortMessagesNewestFirst(messages).find((message) =>
-    isCustomerMessage(message, conv, operatorUserId),
+    isCustomerMessage(message, enriched, operatorUserId),
   );
 }
 

@@ -1779,6 +1779,22 @@ export function normalizePagerConversation(raw: unknown): PagerConversation {
     isUnread = false;
   }
 
+  const clientRecord =
+    record.client && typeof record.client === "object"
+      ? (record.client as Record<string, unknown>)
+      : undefined;
+  const clientPSID = firstString(
+    record.clientPSID,
+    record.client_psid,
+    record.psid,
+    record.recipientId,
+    record.recipient_id,
+    clientRecord?.psid,
+    clientRecord?.PSID,
+    clientRecord?.id,
+    base.clientPSID,
+  );
+
   return {
     ...base,
     id,
@@ -1788,6 +1804,8 @@ export function normalizePagerConversation(raw: unknown): PagerConversation {
     conversationState,
     unreadCount,
     isUnread,
+    clientPSID,
+    client: base.client ?? (clientPSID ? { psid: clientPSID } : undefined),
     channel: base.channel ?? (channelId ? { id: channelId, name: firstString(channelRecord?.name) } : undefined),
   };
 }
@@ -1846,12 +1864,57 @@ export function normalizePagerMessage(raw: unknown): PagerMessage {
   };
 }
 
+export function inferClientPsidFromMessages(
+  messages: PagerMessage[],
+  operatorUserId?: string,
+): string | undefined {
+  const counts = new Map<string, number>();
+  for (const message of messages) {
+    const author = (message.authorId ?? "").trim();
+    if (!author || author.startsWith("user_") || (operatorUserId && author === operatorUserId)) {
+      continue;
+    }
+    if (/^\d{5,}$/.test(author)) {
+      counts.set(author, (counts.get(author) ?? 0) + 1);
+    }
+  }
+
+  let best: string | undefined;
+  let bestCount = 0;
+  for (const [id, count] of counts) {
+    if (count > bestCount) {
+      best = id;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+export function enrichConversationFromThread(
+  conv: PagerConversation,
+  messages: PagerMessage[],
+  operatorUserId?: string,
+): PagerConversation {
+  const psid =
+    firstString(conv.clientPSID, conv.client?.psid, conv.client?.PSID) ??
+    inferClientPsidFromMessages(messages, operatorUserId);
+  if (!psid) {
+    return conv;
+  }
+  return {
+    ...conv,
+    clientPSID: psid,
+    client: { ...(conv.client ?? {}), psid },
+  };
+}
+
 export function isCustomerMessage(
   message: PagerMessage,
   conv?: PagerConversation,
   operatorUserId?: string,
 ): boolean {
   const author = (message.authorId ?? "").trim();
+  const text = (message.text || "").trim();
   if (operatorUserId && author === operatorUserId) {
     return false;
   }
@@ -1865,14 +1928,14 @@ export function isCustomerMessage(
   if (author && /^\d{5,}$/.test(author)) {
     return true;
   }
+  if (!author && text) {
+    return true;
+  }
   if (isOutgoingDirection(message.messageDirection)) {
     return false;
   }
   if (isIncomingDirection(message.messageDirection)) {
     return true;
-  }
-  if (!author) {
-    return Boolean((message.text || "").trim());
   }
   return false;
 }

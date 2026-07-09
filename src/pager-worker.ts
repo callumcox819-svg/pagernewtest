@@ -304,7 +304,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     : 80;
   const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
   const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit).sort(
-    (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+    (left, right) => {
+      const leftEg = egChannelIds.has(left.channelId || left.channel?.id || "");
+      const rightEg = egChannelIds.has(right.channelId || right.channel?.id || "");
+      if (leftEg !== rightEg) {
+        return leftEg ? -1 : 1;
+      }
+      return conversationPriorityScore(right) - conversationPriorityScore(left);
+    },
   );
   const egInWork = workQueue.filter((conv) =>
     egChannelIds.has(conv.channelId || conv.channel?.id || ""),
@@ -1035,6 +1042,9 @@ async function processEgConversation(
   );
   const lastIncoming = findLatestIncomingFromThread(sorted, conv);
   if (!lastIncoming) {
+    console.log(
+      `Pager worker: EG ${convId.slice(0, 8)} — no_customer_message (msgs=${messages.length}, dir=${sorted[0]?.messageDirection ?? "?"})`,
+    );
     return false;
   }
 

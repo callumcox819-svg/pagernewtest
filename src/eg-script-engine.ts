@@ -72,7 +72,14 @@ export function egScriptSentInHistory(outgoingTexts: string[], scriptKey: string
 }
 
 export function explainScriptsSentInHistory(outgoingTexts: string[]): boolean {
-  return egScriptSentInHistory(outgoingTexts, "02_how_it_works");
+  return (
+    egScriptSentInHistory(outgoingTexts, "02_how_it_works") ||
+    egScriptSentInHistory(outgoingTexts, "03_egp_table")
+  );
+}
+
+function explainScriptKeys(): string[] {
+  return ["02_how_it_works", "03_egp_table"];
 }
 
 export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
@@ -263,7 +270,7 @@ export function resolveEgFunnelScripts(
         return ["01_intro"];
       }
       if (!explainSent) {
-        return ["02_how_it_works"];
+        return explainScriptKeys();
       }
       return ["04_registration", "05_link"];
     }
@@ -281,7 +288,7 @@ export function resolveEgFunnelScripts(
   if (effectiveStep < 1) {
     if (introSent) {
       if (!explainSent && (wantsExplain(t, intent, effectiveStep) || t.length > 0)) {
-        return ["02_how_it_works"];
+        return explainScriptKeys();
       }
       if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
         return ["04_registration", "05_link"];
@@ -302,7 +309,7 @@ export function resolveEgFunnelScripts(
 
   if (effectiveStep < 3) {
     if (!explainSent && (wantsExplain(t, intent, effectiveStep) || t.length > 0)) {
-      return ["02_how_it_works"];
+      return explainScriptKeys();
     }
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
       return ["04_registration", "05_link"];
@@ -316,7 +323,7 @@ export function resolveEgFunnelScripts(
     }
 
     if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
-      return ["02_how_it_works"];
+      return explainScriptKeys();
     }
 
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep)) {
