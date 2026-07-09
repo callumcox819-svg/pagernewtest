@@ -29,6 +29,9 @@ export type PagerConversation = {
   statusId?: string | null;
   lastMessageDirection?: string;
   lastMessageAt?: string;
+  conversationState?: string;
+  unreadCount?: number;
+  isUnread?: boolean;
   clientPSID?: string;
   responsibleUserId?: string;
   responsibleuserId?: string;

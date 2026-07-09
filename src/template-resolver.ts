@@ -1,6 +1,7 @@
 import type { BotConfig, CountryCode, TemplateRole } from "./config.js";
 import { getTemplateBank } from "./config.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
+import { loadLocalEgScript } from "./eg-local-scripts.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import {
   CM_FOLDER_NAME_HINTS,
@@ -8,6 +9,12 @@ import {
   scriptSearchNeedles as cmScriptSearchNeedles,
   scriptSnippet as cmScriptSnippet,
 } from "./cm-script-engine.js";
+import {
+  EG_FOLDER_NAME_HINTS,
+  EG_SCRIPT_EXCLUDE_SNIPPETS,
+  scriptSearchNeedles as egScriptSearchNeedles,
+  scriptSnippet as egScriptSnippet,
+} from "./eg-script-engine.js";
 import {
   ZM_FOLDER_NAME_HINTS,
   ZM_SCRIPT_EXCLUDE_SNIPPETS,
@@ -112,6 +119,14 @@ export async function resolveZmTemplateFolderId(
   return resolveTemplateFolderId(client, ZM_FOLDER_NAME_HINTS, preferredId, liveBanks);
 }
 
+export async function resolveEgTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, EG_FOLDER_NAME_HINTS, preferredId, liveBanks);
+}
+
 export async function resolveScriptTextByKey(
   client: PagerClient,
   options: {
@@ -125,7 +140,9 @@ export async function resolveScriptTextByKey(
   const folderId =
     country === "ZM"
       ? await resolveZmTemplateFolderId(client, options.folderId, options.liveBanks)
-      : await resolveCmTemplateFolderId(client, options.folderId, options.liveBanks);
+      : country === "EG"
+        ? await resolveEgTemplateFolderId(client, options.folderId, options.liveBanks)
+        : await resolveCmTemplateFolderId(client, options.folderId, options.liveBanks);
 
   if (folderId) {
     const replies = await loadFolderReplies(client, folderId);
@@ -144,7 +161,12 @@ export async function resolveScriptTextByKey(
     }
   }
 
-  const local = country === "ZM" ? loadLocalZmScript(options.scriptKey) : loadLocalCmScript(options.scriptKey);
+  const local =
+    country === "ZM"
+      ? loadLocalZmScript(options.scriptKey)
+      : country === "EG"
+        ? loadLocalEgScript(options.scriptKey)
+        : loadLocalCmScript(options.scriptKey);
   if (local?.trim()) {
     console.log(`${country} script local fallback key=${options.scriptKey}`);
     return local;
@@ -193,12 +215,9 @@ function matchReplyByScriptKey(
   scriptKey: string,
   country: CountryCode,
 ): PagerSavedReply | undefined {
-  const snippetForCountry = country === "ZM" ? zmScriptSnippet : cmScriptSnippet;
-  const needlesForCountry = country === "ZM" ? zmScriptSearchNeedles : cmScriptSearchNeedles;
-  const excludes =
-    country === "ZM"
-      ? ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? []
-      : CM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [];
+  const snippetForCountry = scriptSnippetForCountry(country);
+  const needlesForCountry = scriptSearchNeedlesForCountry(country);
+  const excludes = scriptExcludesForCountry(country, scriptKey);
   const primary = snippetForCountry(scriptKey).trim().toLowerCase();
 
   const candidates = replies.filter((reply) => {
@@ -258,12 +277,39 @@ function pickBestScriptReply(replies: PagerSavedReply[], scriptKey: string): Pag
   return [...replies].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0];
 }
 
+function scriptSnippetForCountry(country: CountryCode): (key: string) => string {
+  if (country === "ZM") {
+    return zmScriptSnippet;
+  }
+  if (country === "EG") {
+    return egScriptSnippet;
+  }
+  return cmScriptSnippet;
+}
+
+function scriptSearchNeedlesForCountry(country: CountryCode): (key: string) => string[] {
+  if (country === "ZM") {
+    return zmScriptSearchNeedles;
+  }
+  if (country === "EG") {
+    return egScriptSearchNeedles;
+  }
+  return cmScriptSearchNeedles;
+}
+
+function scriptExcludesForCountry(country: CountryCode, scriptKey: string): string[] {
+  if (country === "ZM") {
+    return ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [];
+  }
+  if (country === "EG") {
+    return EG_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [];
+  }
+  return CM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [];
+}
+
 function isScriptReplyAcceptable(text: string, scriptKey: string, country: CountryCode): boolean {
-  const snippetForCountry = country === "ZM" ? zmScriptSnippet : cmScriptSnippet;
-  const excludes =
-    country === "ZM"
-      ? ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? []
-      : CM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [];
+  const snippetForCountry = scriptSnippetForCountry(country);
+  const excludes = scriptExcludesForCountry(country, scriptKey);
   const body = text.trim().toLowerCase();
   if (!body || hasExcludedSnippet(body, excludes)) {
     return false;
@@ -297,8 +343,16 @@ function isScriptReplyAcceptable(text: string, scriptKey: string, country: Count
     );
   }
 
+  if (scriptKey === "04_registration" && country === "EG") {
+    return body.includes("eg011") || body.includes("هبعتلك اللينك") || body.includes("google chrome");
+  }
+
   if (scriptKey === "05_link") {
-    return body.includes("tinyurl.com/zam577") || body.includes("tinyurl.com/camerun01");
+    return (
+      body.includes("tinyurl.com/zam577") ||
+      body.includes("tinyurl.com/camerun01") ||
+      body.includes("tinyurl.com/egypt0011")
+    );
   }
 
   return body.length >= 40;

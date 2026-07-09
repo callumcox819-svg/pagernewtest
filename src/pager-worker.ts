@@ -11,6 +11,7 @@ import {
   statusMapForCountry,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
+import { assessReplyEligibility } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
   moneyRefusalText,
@@ -29,6 +30,14 @@ import {
   tierSentInHistory,
 } from "./cm-script-engine.js";
 import {
+  classifyEgMessage,
+  collectOutgoingTexts as collectEgOutgoingTexts,
+  funnelStepFromScriptGaps as egFunnelStepFromScriptGaps,
+  inferStepFromThread as egInferStepFromThread,
+  regSendTriggersInProgress as egRegSendTriggersInProgress,
+  resolveEgFunnelScripts,
+} from "./eg-script-engine.js";
+import {
   classifyZmMessage,
   collectOutgoingTexts as collectZmOutgoingTexts,
   funnelStepFromScriptGaps as zmFunnelStepFromScriptGaps,
@@ -43,7 +52,6 @@ import { isDepositTierChoice, isRegistrationConfirmed } from "./cm-intent.js";
 import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
-  isOutgoingDirection,
   isPagerSessionError,
   PagerApiError,
   PagerClient,
@@ -58,7 +66,7 @@ import type {
   ConversationRuntimeState,
   StateStore,
 } from "./state-store.js";
-import { resolveCmTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
+import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import {
   countApiStatusFolders,
   expandEnabledFolderIds,
@@ -286,6 +294,9 @@ async function processConversation(
   if (channel.country === "ZM") {
     return processZmConversation(deps, state, client, conv, runtime, channel);
   }
+  if (channel.country === "EG") {
+    return processEgConversation(deps, state, client, conv, runtime, channel);
+  }
   return processGenericConversation(deps, state, client, conv, runtime, channel);
 }
 
@@ -322,7 +333,6 @@ async function processCmConversation(
   }
 
   const lastIncoming = latest;
-  const lastIncomingAt = lastIncoming.createdAt ?? "";
   const outgoingTexts = collectCmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const awaitingRegAfterTierChoice =
@@ -330,27 +340,18 @@ async function processCmConversation(
     !cmRegLinkSentInHistory(outgoingTexts) &&
     isDepositTierChoice(latestCustomerText);
 
-  if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
-    if (!awaitingRegAfterTierChoice) {
-      return false;
-    }
-  }
-
-  if (hasDeliveredReplyAfter(sorted, lastIncomingAt)) {
-    if (!awaitingRegAfterTierChoice) {
-      if (convState.lastCustomerMessageId !== lastIncoming.id) {
-        await patchConversationState(deps.stateStore, state.chatId, convId, {
-          lastCustomerMessageId: lastIncoming.id,
-          lastCustomerMessageAt: lastIncoming.createdAt,
-        });
-      }
-      return false;
-    }
-  }
-
-  const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
-  if (Number.isFinite(incomingAgeMs) && incomingAgeMs > MAX_CUSTOMER_MESSAGE_AGE_MS) {
-    await skipStaleCustomerMessage(deps, state.chatId, convId, convState, lastIncoming);
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      { bypass: awaitingRegAfterTierChoice, countryLabel: "CM" },
+    ))
+  ) {
     return false;
   }
 
@@ -540,27 +541,21 @@ async function processZmConversation(
   }
 
   const lastIncoming = latest;
-  const lastIncomingAt = lastIncoming.createdAt ?? "";
   const outgoingTexts = collectZmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
 
-  if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
-    return false;
-  }
-
-  if (hasDeliveredReplyAfter(sorted, lastIncomingAt)) {
-    if (convState.lastCustomerMessageId !== lastIncoming.id) {
-      await patchConversationState(deps.stateStore, state.chatId, convId, {
-        lastCustomerMessageId: lastIncoming.id,
-        lastCustomerMessageAt: lastIncoming.createdAt,
-      });
-    }
-    return false;
-  }
-
-  const incomingAgeMs = Date.now() - Date.parse(lastIncomingAt);
-  if (Number.isFinite(incomingAgeMs) && incomingAgeMs > MAX_CUSTOMER_MESSAGE_AGE_MS) {
-    await skipStaleCustomerMessage(deps, state.chatId, convId, convState, lastIncoming);
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      { countryLabel: "ZM" },
+    ))
+  ) {
     return false;
   }
 
@@ -740,6 +735,206 @@ async function processZmConversation(
   return true;
 }
 
+async function processEgConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
+  const convId = conv.id;
+  if (!isIncomingDirection(conv.lastMessageDirection)) {
+    return false;
+  }
+
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  if (!messages.length) {
+    return false;
+  }
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const latest = sorted[0];
+  if (!isIncomingDirection(latest.messageDirection)) {
+    return false;
+  }
+
+  const lastIncoming = latest;
+  const outgoingTexts = collectEgOutgoingTexts(messages);
+  const latestCustomerText = (lastIncoming.text || "").trim();
+
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      { countryLabel: "EG" },
+    ))
+  ) {
+    return false;
+  }
+
+  const threadStep = egInferStepFromThread(messages);
+  const gapStep = egFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const messageReaction = resolveMessageReaction(lastIncoming);
+  const playbook = getPlaybook(deps.config, channel.country);
+
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
+  if (imageUrl) {
+    const imageHandled = await tryHandleCustomerImage(deps, {
+      state,
+      client,
+      conv,
+      runtime,
+      channel,
+      convState,
+      convId,
+      lastIncoming,
+      text: latestCustomerText,
+      imageUrl,
+      playbook,
+      outgoingTexts,
+    });
+    if (imageHandled) {
+      return true;
+    }
+  }
+
+  const intent = classifyEgMessage(latestCustomerText, {
+    hasImage: Boolean(imageUrl),
+    funnelStep: effectiveStep,
+    messageReaction,
+  });
+
+  const scriptKeys = resolveEgFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    { hasImage: Boolean(imageUrl), messageReaction },
+  );
+
+  if (!scriptKeys.length) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} EG — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+    );
+    return false;
+  }
+
+  console.log(
+    `Pager worker: EG ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+  );
+
+  const folderId = await resolveEgTemplateFolderId(
+    client,
+    runtime.runtime.templateBankId,
+    currentState.pagerAccount?.liveTemplateBanks,
+  );
+
+  let sentAny = false;
+  for (const scriptKey of scriptKeys) {
+    const replyText = await resolveScriptTextByKey(client, {
+      folderId,
+      liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+      scriptKey,
+      country: "EG",
+    });
+    if (!replyText?.trim()) {
+      if (scriptKey === "05_link" && sentAny) {
+        const fallbackLink = "https://tinyurl.com/Egypt0011";
+        const sent = await client.sendMessageReliable(convId, fallbackLink, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          await sleep(500);
+        }
+        continue;
+      }
+      console.warn(
+        `EG script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${scriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
+      );
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText.trim(), {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      const failures = (convState.sendFailures ?? 0) + 1;
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: failures,
+      });
+      console.error(`Pager worker: EG send failed ${convId.slice(0, 8)} key=${scriptKey}`);
+      return sentAny;
+    }
+    sentAny = true;
+    await sleep(500);
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  if (egRegSendTriggersInProgress(scriptKeys)) {
+    const statusId = findInProgressStatusId(currentState);
+    const operatorId = await client.probeOperatorUserId();
+    if (statusId && operatorId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(`Pager worker: EG ${convId.slice(0, 8)} status -> in progress`);
+      } catch (error) {
+        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
+    funnelStep: Math.max(effectiveStep, scriptKeys.includes("06_deposit") ? 6 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: scriptKeys[scriptKeys.length - 1],
+    sendFailures: 0,
+  });
+
+  return true;
+}
+
 async function processGenericConversation(
   deps: WorkerDeps,
   state: ChatState,
@@ -776,19 +971,18 @@ async function processGenericConversation(
   }
 
   const lastIncoming = latest;
-  const lastIncomingAt = lastIncoming.createdAt ?? "";
 
-  if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
-    return false;
-  }
-
-  if (hasDeliveredReplyAfter(sorted, lastIncomingAt)) {
-    if (convState.lastCustomerMessageId !== lastIncoming.id) {
-      await patchConversationState(deps.stateStore, state.chatId, convId, {
-        lastCustomerMessageId: lastIncoming.id,
-        lastCustomerMessageAt: lastIncoming.createdAt,
-      });
-    }
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+    ))
+  ) {
     return false;
   }
 
@@ -1061,47 +1255,37 @@ async function seedEnabledChannelsFromYaml(
   });
 }
 
-function hasDeliveredReplyAfter(messages: PagerMessage[], lastIncomingAt: string): boolean {
-  const incomingTs = Date.parse(lastIncomingAt);
-  if (!Number.isFinite(incomingTs)) {
-    return false;
-  }
-
-  for (const message of messages) {
-    if (!isOutgoingDirection(message.messageDirection)) {
-      continue;
-    }
-    const outgoingTs = Date.parse(message.createdAt ?? "");
-    if (!Number.isFinite(outgoingTs) || outgoingTs <= incomingTs) {
-      continue;
-    }
-    const text = (message.text || "").trim();
-    if (!text) {
-      continue;
-    }
-    if (message.isDelivered || message.facebookMessageId) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const MAX_CUSTOMER_MESSAGE_AGE_MS = 2 * 60 * 60 * 1000;
-
-async function skipStaleCustomerMessage(
+async function ensureCustomerMessageEligible(
   deps: WorkerDeps,
-  chatId: number,
+  state: ChatState,
+  conv: PagerConversation,
   convId: string,
   convState: ConversationRuntimeState,
   lastIncoming: PagerMessage,
+  sorted: PagerMessage[],
+  options?: { bypass?: boolean; countryLabel?: string },
 ): Promise<boolean> {
-  if (convState.lastCustomerMessageId !== lastIncoming.id) {
-    await patchConversationState(deps.stateStore, chatId, convId, {
+  if (options?.bypass) {
+    return true;
+  }
+
+  const eligibility = assessReplyEligibility(conv, convState, lastIncoming, sorted);
+  if (eligibility.eligible) {
+    return true;
+  }
+
+  if (eligibility.markSeen) {
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
       lastCustomerMessageId: lastIncoming.id,
       lastCustomerMessageAt: lastIncoming.createdAt,
     });
   }
-  return true;
+
+  const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
+  console.log(
+    `Pager worker: skip ${convId.slice(0, 8)}${label} — ${eligibility.reason} (text=${truncate((lastIncoming.text || "").trim())})`,
+  );
+  return false;
 }
 
 function inferCountryFromChannelName(name: string): "ZM" | "CM" | "EG" {
