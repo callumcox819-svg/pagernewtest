@@ -26,6 +26,11 @@ export function isFreshCustomerMessage(createdAt?: string, nowMs = Date.now()): 
   return nowMs - ts <= FRESH_CUSTOMER_MESSAGE_MS;
 }
 
+function isExplicitlyRead(conv: PagerConversation): boolean {
+  const state = (conv.conversationState ?? "").trim().toLowerCase();
+  return state === "read" || conv.isUnread === false;
+}
+
 export function isConversationUnread(conv: PagerConversation): boolean {
   const state = (conv.conversationState ?? "").trim().toLowerCase();
   if (state === "unread") {
@@ -37,13 +42,10 @@ export function isConversationUnread(conv: PagerConversation): boolean {
   if (conv.isUnread === true) {
     return true;
   }
-  if (state === "read") {
+  if (isExplicitlyRead(conv)) {
     return false;
   }
-  if (conv.isUnread === false) {
-    return false;
-  }
-  if (isFreshCustomerMessage(conv.lastMessageAt) && isIncomingDirection(conv.lastMessageDirection)) {
+  if (isFreshCustomerMessage(conv.lastMessageAt)) {
     return true;
   }
   return false;
@@ -51,10 +53,13 @@ export function isConversationUnread(conv: PagerConversation): boolean {
 
 /** Process only new incoming messages or older still-unread inbox chats. */
 export function shouldProcessConversation(conv: PagerConversation): boolean {
+  if (isExplicitlyRead(conv)) {
+    return false;
+  }
   if (isConversationUnread(conv)) {
     return true;
   }
-  if (isFreshCustomerMessage(conv.lastMessageAt) && isIncomingDirection(conv.lastMessageDirection)) {
+  if (isFreshCustomerMessage(conv.lastMessageAt)) {
     return true;
   }
   return false;

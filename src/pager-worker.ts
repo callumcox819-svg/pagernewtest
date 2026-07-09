@@ -261,9 +261,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     ? conversations.filter((conv) => conversationAllowedInFolders(conv, enabledFolderIds))
     : conversations;
   const workQueue = folderScopedConversations.filter(shouldProcessConversation);
-  const prioritizedConversations = [...workQueue]
-    .sort((left, right) => conversationPriorityScore(right) - conversationPriorityScore(left))
-    .slice(0, MAX_CONVERSATIONS_PER_ACCOUNT);
+  const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, MAX_CONVERSATIONS_PER_ACCOUNT);
   console.log(
     `Pager worker: chat ${freshState.chatId} — workQueue=${workQueue.length}/${folderScopedConversations.length}/${conversations.length} prioritized=${prioritizedConversations.length}`,
   );
@@ -344,6 +342,44 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
 
 function findLatestIncomingFromThread(messages: PagerMessage[]): PagerMessage | undefined {
   return findLatestIncomingMessage(messages);
+}
+
+function prioritizeWorkQueue(
+  conversations: PagerConversation[],
+  channelIds: string[],
+  limit: number,
+): PagerConversation[] {
+  const scored = [...conversations].sort(
+    (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+  );
+  const selected = new Map<string, PagerConversation>();
+  const minPerChannel = Math.max(120, Math.floor(limit / Math.max(channelIds.length, 1)));
+
+  for (const channelId of channelIds) {
+    let picked = 0;
+    for (const conv of scored) {
+      const convChannelId = conv.channelId || conv.channel?.id;
+      if (convChannelId !== channelId || selected.has(conv.id)) {
+        continue;
+      }
+      selected.set(conv.id, conv);
+      picked += 1;
+      if (picked >= minPerChannel) {
+        break;
+      }
+    }
+  }
+
+  for (const conv of scored) {
+    if (selected.size >= limit) {
+      break;
+    }
+    selected.set(conv.id, conv);
+  }
+
+  return [...selected.values()].sort(
+    (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+  );
 }
 
 async function processConversation(

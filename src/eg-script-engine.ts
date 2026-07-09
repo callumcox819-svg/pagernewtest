@@ -280,7 +280,7 @@ export function resolveEgFunnelScripts(
 
   if (effectiveStep < 1) {
     if (introSent) {
-      if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
+      if (!explainSent && (wantsExplain(t, intent, effectiveStep) || t.length > 0)) {
         return ["02_how_it_works"];
       }
       if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
@@ -288,14 +288,20 @@ export function resolveEgFunnelScripts(
       }
       return [];
     }
-    if (intent === "interested" || intent === "ready" || intent === "question" || isGreeting(t) || hasUsableFollowUp(t)) {
+    if (
+      ["interested", "positive", "ready", "question", "unknown"].includes(intent) ||
+      signal ||
+      isGreeting(t) ||
+      hasUsableFollowUp(t) ||
+      t.length > 0
+    ) {
       return ["01_intro"];
     }
     return [];
   }
 
   if (effectiveStep < 3) {
-    if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
+    if (!explainSent && (wantsExplain(t, intent, effectiveStep) || t.length > 0)) {
       return ["02_how_it_works"];
     }
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
