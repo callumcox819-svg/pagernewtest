@@ -544,7 +544,9 @@ export class PagerClient {
       "/api/conversation",
       { method: "GET", params, referer: this.chatReferer() },
     );
-    const conversations = Array.isArray(payload) ? payload : [];
+    const conversations = Array.isArray(payload)
+      ? payload.map((item) => normalizePagerConversation(item))
+      : [];
     if (options?.channelId) {
       return conversations.filter((conv) => conv.channelId === options.channelId);
     }
@@ -629,7 +631,7 @@ export class PagerClient {
         params: { orgId },
         referer: this.chatReferer(convId),
       });
-      return payload;
+      return payload ? normalizePagerConversation(payload) : undefined;
     } catch {
       return undefined;
     }
@@ -1700,6 +1702,94 @@ function firstString(...values: unknown[]): string | undefined {
     }
   }
   return undefined;
+}
+
+export function resolveLastMessageAt(conv: PagerConversation): string | undefined {
+  const record = conv as PagerConversation & Record<string, unknown>;
+  return firstString(
+    conv.lastMessageAt,
+    record.lastMessageDate,
+    record.last_message_at,
+    record.lastMessageCreatedAt,
+    record.lastMessageTime,
+    record.updatedAt,
+    record.updated_at,
+  );
+}
+
+export function normalizePagerConversation(raw: unknown): PagerConversation {
+  if (!raw || typeof raw !== "object") {
+    return { id: "" };
+  }
+
+  const record = raw as Record<string, unknown>;
+  const base = raw as PagerConversation;
+  const channelRecord =
+    record.channel && typeof record.channel === "object"
+      ? (record.channel as Record<string, unknown>)
+      : undefined;
+
+  const id = firstString(record.id, record._id, record.conversationId, base.id) ?? "";
+  const lastMessageAt = firstString(
+    record.lastMessageAt,
+    record.lastMessageDate,
+    record.last_message_at,
+    record.lastMessageCreatedAt,
+    record.lastMessageTime,
+    record.updatedAt,
+    record.updated_at,
+    base.lastMessageAt,
+  );
+  const lastMessageDirection = firstString(
+    record.lastMessageDirection,
+    record.last_message_direction,
+    record.lastMessageDir,
+    record.direction,
+    base.lastMessageDirection,
+  );
+  const conversationState = firstString(
+    record.conversationState,
+    record.conversation_state,
+    record.state,
+    base.conversationState,
+  );
+  const channelId = firstString(
+    record.channelId,
+    record.channel_id,
+    channelRecord?.id,
+    base.channelId,
+    base.channel?.id,
+  );
+
+  const unreadRaw = record.unreadCount ?? record.unread_count ?? record.unreadMessagesCount;
+  let unreadCount = base.unreadCount;
+  if (typeof unreadRaw === "number" && Number.isFinite(unreadRaw)) {
+    unreadCount = unreadRaw;
+  } else if (typeof unreadRaw === "string" && unreadRaw.trim() && Number.isFinite(Number(unreadRaw))) {
+    unreadCount = Number(unreadRaw);
+  }
+
+  const unreadFlag = record.isUnread ?? record.is_unread ?? record.unread;
+  let isUnread = base.isUnread;
+  if (typeof unreadFlag === "boolean") {
+    isUnread = unreadFlag;
+  } else if (unreadFlag === 1 || unreadFlag === "1" || unreadFlag === "true") {
+    isUnread = true;
+  } else if (unreadFlag === 0 || unreadFlag === "0" || unreadFlag === "false") {
+    isUnread = false;
+  }
+
+  return {
+    ...base,
+    id,
+    channelId,
+    lastMessageAt,
+    lastMessageDirection,
+    conversationState,
+    unreadCount,
+    isUnread,
+    channel: base.channel ?? (channelId ? { id: channelId, name: firstString(channelRecord?.name) } : undefined),
+  };
 }
 
 function extractPayloadArray(payload: unknown): unknown[] {

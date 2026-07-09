@@ -1,4 +1,5 @@
 import type { PagerConversation, PagerMessage } from "./pager-client.js";
+import { resolveLastMessageAt } from "./pager-client.js";
 import type { ConversationRuntimeState } from "./state-store.js";
 
 /** Brand-new customer messages (always processed). */
@@ -26,12 +27,7 @@ export function isFreshCustomerMessage(createdAt?: string, nowMs = Date.now()): 
   return nowMs - ts <= FRESH_CUSTOMER_MESSAGE_MS;
 }
 
-function isExplicitlyRead(conv: PagerConversation): boolean {
-  const state = (conv.conversationState ?? "").trim().toLowerCase();
-  return state === "read" || conv.isUnread === false;
-}
-
-export function isConversationUnread(conv: PagerConversation): boolean {
+export function hasUnreadMarkers(conv: PagerConversation): boolean {
   const state = (conv.conversationState ?? "").trim().toLowerCase();
   if (state === "unread") {
     return true;
@@ -42,10 +38,18 @@ export function isConversationUnread(conv: PagerConversation): boolean {
   if (conv.isUnread === true) {
     return true;
   }
-  if (isExplicitlyRead(conv)) {
+  return false;
+}
+
+export function isConversationUnread(conv: PagerConversation): boolean {
+  if (hasUnreadMarkers(conv)) {
+    return true;
+  }
+  const state = (conv.conversationState ?? "").trim().toLowerCase();
+  if (state === "read") {
     return false;
   }
-  if (isFreshCustomerMessage(conv.lastMessageAt)) {
+  if (isFreshCustomerMessage(resolveLastMessageAt(conv))) {
     return true;
   }
   return false;
@@ -53,13 +57,23 @@ export function isConversationUnread(conv: PagerConversation): boolean {
 
 /** Process only new incoming messages or older still-unread inbox chats. */
 export function shouldProcessConversation(conv: PagerConversation): boolean {
-  if (isExplicitlyRead(conv)) {
-    return false;
-  }
-  if (isConversationUnread(conv)) {
+  if (isFreshCustomerMessage(resolveLastMessageAt(conv))) {
     return true;
   }
-  if (isFreshCustomerMessage(conv.lastMessageAt)) {
+  if (hasUnreadMarkers(conv)) {
+    return true;
+  }
+  return false;
+}
+
+export function shouldProcessIncomingMessage(lastIncomingAt?: string, conv?: PagerConversation): boolean {
+  if (isFreshCustomerMessage(lastIncomingAt)) {
+    return true;
+  }
+  if (conv && hasUnreadMarkers(conv)) {
+    return true;
+  }
+  if (conv && isConversationUnread(conv)) {
     return true;
   }
   return false;
@@ -72,8 +86,8 @@ export function shouldOpenConversation(conv: PagerConversation): boolean {
 export function conversationPriorityScore(conv: PagerConversation): number {
   const unread = isConversationUnread(conv);
   const incoming = isIncomingDirection(conv.lastMessageDirection);
-  const fresh = isFreshCustomerMessage(conv.lastMessageAt);
-  const lastAt = Date.parse(conv.lastMessageAt ?? "");
+  const fresh = isFreshCustomerMessage(resolveLastMessageAt(conv));
+  const lastAt = Date.parse(resolveLastMessageAt(conv) ?? "");
   return (
     (unread ? 2_000_000 : 0) +
     (fresh ? 1_000_000 : 0) +
@@ -130,11 +144,7 @@ export function assessReplyEligibility(
     return { eligible: false, reason: "replied_after_in_thread", markSeen: true };
   }
 
-  if (isFreshCustomerMessage(lastIncomingAt)) {
-    return { eligible: true };
-  }
-
-  if (isConversationUnread(conv)) {
+  if (shouldProcessIncomingMessage(lastIncomingAt, conv)) {
     return { eligible: true };
   }
 

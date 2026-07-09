@@ -15,8 +15,8 @@ import {
   assessReplyEligibility,
   conversationPriorityScore,
   findLatestIncomingMessage,
-  shouldOpenConversation,
   shouldProcessConversation,
+  shouldProcessIncomingMessage,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -64,6 +64,7 @@ import {
   PagerClient,
   type PagerConversation,
   type PagerMessage,
+  resolveLastMessageAt,
 } from "./pager-client.js";
 import { buildPagerAccountPatch, ensurePagerSession, refreshPagerSessionWithCredentials } from "./pager-session.js";
 import { classifyProofFromImage, classifyProofFromText } from "./proof-classifier.js";
@@ -260,10 +261,19 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const folderScopedConversations = enabledFolderIds
     ? conversations.filter((conv) => conversationAllowedInFolders(conv, enabledFolderIds))
     : conversations;
-  const workQueue = folderScopedConversations.filter(shouldProcessConversation);
+  const workQueue = await buildWorkQueue(
+    client,
+    folderScopedConversations,
+    enabledChannels,
+    channelIds,
+  );
   const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, MAX_CONVERSATIONS_PER_ACCOUNT);
+  const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
+  const egInWork = workQueue.filter((conv) =>
+    egChannelIds.has(conv.channelId || conv.channel?.id || ""),
+  ).length;
   console.log(
-    `Pager worker: chat ${freshState.chatId} — workQueue=${workQueue.length}/${folderScopedConversations.length}/${conversations.length} prioritized=${prioritizedConversations.length}`,
+    `Pager worker: chat ${freshState.chatId} — workQueue=${workQueue.length}/${folderScopedConversations.length}/${conversations.length} egWork=${egInWork} prioritized=${prioritizedConversations.length}`,
   );
 
   let checked = 0;
@@ -340,10 +350,6 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   );
 }
 
-function findLatestIncomingFromThread(messages: PagerMessage[]): PagerMessage | undefined {
-  return findLatestIncomingMessage(messages);
-}
-
 function prioritizeWorkQueue(
   conversations: PagerConversation[],
   channelIds: string[],
@@ -382,6 +388,82 @@ function prioritizeWorkQueue(
   );
 }
 
+function findLatestIncomingFromThread(messages: PagerMessage[]): PagerMessage | undefined {
+  return findLatestIncomingMessage(messages);
+}
+
+async function buildWorkQueue(
+  client: PagerClient,
+  folderScopedConversations: PagerConversation[],
+  enabledChannels: EnabledChannel[],
+  channelIds: string[],
+): Promise<PagerConversation[]> {
+  const selected = new Map<string, PagerConversation>();
+
+  for (const conv of folderScopedConversations) {
+    if (shouldProcessConversation(conv)) {
+      selected.set(conv.id, conv);
+    }
+  }
+
+  const channelsNeedingScan = enabledChannels.filter((channel) => {
+    const hasQueued = [...selected.values()].some(
+      (conv) => (conv.channelId || conv.channel?.id) === channel.channelId,
+    );
+    return !hasQueued;
+  });
+
+  for (const channel of channelsNeedingScan) {
+    const incomingHead = folderScopedConversations
+      .filter((conv) => (conv.channelId || conv.channel?.id) === channel.channelId)
+      .filter((conv) => isIncomingDirection(conv.lastMessageDirection))
+      .sort(
+        (left, right) =>
+          Date.parse(resolveLastMessageAt(right) ?? "") - Date.parse(resolveLastMessageAt(left) ?? ""),
+      )
+      .slice(0, 80);
+
+    for (const conv of incomingHead) {
+      if (selected.has(conv.id)) {
+        continue;
+      }
+
+      let enriched = conv;
+      try {
+        const fresh = await client.openConversation(conv.id);
+        if (fresh) {
+          enriched = { ...conv, ...fresh };
+        }
+      } catch {
+        // keep list snapshot
+      }
+
+      if (shouldProcessConversation(enriched)) {
+        selected.set(conv.id, enriched);
+        continue;
+      }
+
+      try {
+        const messages = await client.listMessages(conv.id, 1, 20);
+        const lastIncoming = findLatestIncomingFromThread(messages);
+        if (lastIncoming && shouldProcessIncomingMessage(lastIncoming.createdAt, enriched)) {
+          selected.set(conv.id, enriched);
+        }
+      } catch {
+        // skip candidate
+      }
+    }
+  }
+
+  if (!selected.size && channelIds.length) {
+    console.warn(
+      `Pager worker: no actionable conversations after inbox scan (channels=${channelIds.length})`,
+    );
+  }
+
+  return [...selected.values()];
+}
+
 async function processConversation(
   deps: WorkerDeps,
   state: ChatState,
@@ -411,11 +493,6 @@ async function processCmConversation(
   channel: ReturnType<typeof buildRuntimeChannelConfig>,
 ): Promise<boolean> {
   const convId = conv.id;
-  if (!shouldOpenConversation(conv)) {
-    return false;
-  }
-
-  await tryTakeConversationForProcessing(client, convId);
 
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const convState = getConversationState(currentState, convId, runtime.channelId);
@@ -457,6 +534,8 @@ async function processCmConversation(
   ) {
     return false;
   }
+
+  await tryTakeConversationForProcessing(client, convId);
 
   const threadStep = cmInferStepFromThread(messages);
   const gapStep = cmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
@@ -620,11 +699,6 @@ async function processZmConversation(
   channel: ReturnType<typeof buildRuntimeChannelConfig>,
 ): Promise<boolean> {
   const convId = conv.id;
-  if (!shouldOpenConversation(conv)) {
-    return false;
-  }
-
-  await tryTakeConversationForProcessing(client, convId);
 
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const convState = getConversationState(currentState, convId, runtime.channelId);
@@ -662,6 +736,8 @@ async function processZmConversation(
   ) {
     return false;
   }
+
+  await tryTakeConversationForProcessing(client, convId);
 
   const threadStep = zmInferStepFromThread(messages);
   const gapStep = zmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
@@ -848,11 +924,6 @@ async function processEgConversation(
   channel: ReturnType<typeof buildRuntimeChannelConfig>,
 ): Promise<boolean> {
   const convId = conv.id;
-  if (!shouldOpenConversation(conv)) {
-    return false;
-  }
-
-  await tryTakeConversationForProcessing(client, convId);
 
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const convState = getConversationState(currentState, convId, runtime.channelId);
@@ -890,6 +961,8 @@ async function processEgConversation(
   ) {
     return false;
   }
+
+  await tryTakeConversationForProcessing(client, convId, "EG");
 
   const threadStep = egInferStepFromThread(messages);
   const gapStep = egFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
@@ -1050,12 +1123,6 @@ async function processGenericConversation(
 ): Promise<boolean> {
   const convId = conv.id;
 
-  if (!shouldOpenConversation(conv)) {
-    return false;
-  }
-
-  await tryTakeConversationForProcessing(client, convId);
-
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const convState = getConversationState(currentState, convId, runtime.channelId);
 
@@ -1089,6 +1156,8 @@ async function processGenericConversation(
   ) {
     return false;
   }
+
+  await tryTakeConversationForProcessing(client, convId);
 
   const playbook = getPlaybook(deps.config, channel.country);
   const latestCustomerText = (lastIncoming.text || "").trim();
@@ -1388,13 +1457,18 @@ async function refreshLiveChannelsFromApi(
 async function tryTakeConversationForProcessing(
   client: PagerClient,
   convId: string,
+  countryLabel?: string,
 ): Promise<void> {
   const operatorId = await client.probeOperatorUserId();
   if (!operatorId) {
     return;
   }
   try {
-    await client.takeConversation(convId, operatorId);
+    const taken = await client.takeConversation(convId, operatorId);
+    if (taken) {
+      const label = countryLabel ? ` ${countryLabel}` : "";
+      console.log(`Pager worker: take ${convId.slice(0, 8)}${label} ok`);
+    }
   } catch (error) {
     console.warn(`Pager worker: take ${convId.slice(0, 8)} failed:`, formatError(error));
   }
