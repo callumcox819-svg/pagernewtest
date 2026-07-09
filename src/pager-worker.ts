@@ -17,6 +17,7 @@ import {
   findLatestIncomingMessage,
   hasDeliveredReplyAfter,
   shouldProcessConversation,
+  shouldProcessIncomingMessage,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -308,8 +309,10 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     (left, right) => {
       const leftEg = egChannelIds.has(left.channelId || left.channel?.id || "");
       const rightEg = egChannelIds.has(right.channelId || right.channel?.id || "");
-      if (leftEg !== rightEg) {
-        return leftEg ? -1 : 1;
+      const leftUnread = shouldProcessConversation(left);
+      const rightUnread = shouldProcessConversation(right);
+      if (leftEg && rightEg && leftUnread !== rightUnread) {
+        return leftUnread ? -1 : 1;
       }
       return conversationPriorityScore(right) - conversationPriorityScore(left);
     },
@@ -489,8 +492,13 @@ async function buildWorkQueue(
         });
         inboxTop = fallback.filter((conv) => isNoStatusConversation(conv));
       }
+      const actionableInbox = inboxTop
+        .filter((conv) => shouldProcessConversation(conv))
+        .sort(
+          (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+        );
       let addedForChannel = 0;
-      for (const conv of inboxTop.slice(0, EG_NO_STATUS_INBOX_TOP)) {
+      for (const conv of actionableInbox.slice(0, EG_NO_STATUS_INBOX_TOP)) {
         if (selected.has(conv.id)) {
           continue;
         }
@@ -1059,7 +1067,9 @@ async function processEgConversation(
   const egInboxBypass =
     isNoStatusConversation(conv) &&
     Boolean(latestCustomerText) &&
-    !hasDeliveredReplyAfter(sorted, lastIncoming.createdAt ?? "", conv);
+    !hasDeliveredReplyAfter(sorted, lastIncoming.createdAt ?? "", conv) &&
+    (shouldProcessConversation(conv) ||
+      shouldProcessIncomingMessage(lastIncoming.createdAt, conv));
 
   if (
     !(await ensureCustomerMessageEligible(

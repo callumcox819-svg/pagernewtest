@@ -363,12 +363,9 @@ export function resolveEgFunnelScripts(
     !egScriptSentInHistory(out, "07_game_id") &&
     (isDepositConfirmed(t) ||
       intent === "deposit_done" ||
-      intent === "ready" ||
-      intent === "positive" ||
       intent === "image_only" ||
-      options?.hasImage ||
-      signal ||
-      hasUsableFollowUp(t))
+      intent === "game_id_text" ||
+      options?.hasImage)
   ) {
     return ["07_game_id"];
   }
