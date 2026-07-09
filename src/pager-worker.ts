@@ -15,9 +15,8 @@ import {
   assessReplyEligibility,
   conversationPriorityScore,
   findLatestIncomingMessage,
-  isCustomerWaitingInThread,
   shouldProcessConversation,
-  shouldProcessIncomingMessage,
+  shouldQueueConversationFromThread,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -83,6 +82,8 @@ import {
   conversationAllowedInFolders,
   getEnabledFolderIds,
   hasEnabledStatusFolders,
+  NO_STATUS_FOLDER_ID,
+  normalizeEnabledFolders,
 } from "./status-folders.js";
 import type { TemplateRole } from "./config.js";
 import type { TelegramApi } from "./telegram-api.js";
@@ -291,6 +292,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     folderScopedConversations,
     enabledChannels,
     channelIds,
+    enabledFolderIds,
   );
   const accountLimit = enabledChannels.some(
     (item) => item.runtime.country === "EG" || item.runtime.country === "CM",
@@ -430,6 +432,7 @@ async function buildWorkQueue(
   folderScopedConversations: PagerConversation[],
   enabledChannels: EnabledChannel[],
   channelIds: string[],
+  enabledFolderIds: Set<string> | null,
 ): Promise<PagerConversation[]> {
   const selected = new Map<string, PagerConversation>();
 
@@ -444,22 +447,23 @@ async function buildWorkQueue(
       (conv) => (conv.channelId || conv.channel?.id) === channel.channelId,
     ).length;
     if (channel.runtime.country === "EG") {
-      return queued < 20;
+      return queued < 40;
     }
     return queued === 0;
   });
 
   for (const channel of channelsNeedingScan) {
-    const headLimit = channel.runtime.country === "EG" ? 120 : 80;
-    const recentHead = folderScopedConversations
-      .filter((conv) => (conv.channelId || conv.channel?.id) === channel.channelId)
-      .sort(
-        (left, right) =>
-          Date.parse(resolveLastMessageAt(right) ?? "") - Date.parse(resolveLastMessageAt(left) ?? ""),
-      )
-      .slice(0, headLimit);
+    const headLimit = channel.runtime.country === "EG" ? 200 : 80;
+    const recentHead = await fetchChannelConversationHead(
+      client,
+      channel.channelId,
+      enabledFolderIds,
+      headLimit,
+      channel.runtime.country === "EG",
+    );
 
     let addedForChannel = 0;
+    let inspected = 0;
     for (const conv of recentHead) {
       if (selected.has(conv.id)) {
         continue;
@@ -482,14 +486,11 @@ async function buildWorkQueue(
       }
 
       try {
-        const messages = await client.listMessages(conv.id, 1, 20);
-        if (isCustomerWaitingInThread(enriched, messages)) {
-          selected.set(conv.id, enriched);
-          addedForChannel += 1;
-          continue;
-        }
-        const lastIncoming = findLatestIncomingFromThread(messages, enriched);
-        if (lastIncoming && shouldProcessIncomingMessage(lastIncoming.createdAt, enriched)) {
+        inspected += 1;
+        const messages = await client.listMessages(conv.id, 1, 30);
+        if (
+          shouldQueueConversationFromThread(enriched, messages, channel.runtime.country)
+        ) {
           selected.set(conv.id, enriched);
           addedForChannel += 1;
         }
@@ -498,11 +499,9 @@ async function buildWorkQueue(
       }
     }
 
-    if (channel.runtime.country === "EG" || addedForChannel) {
-      console.log(
-        `Pager worker: channel ${channel.channelName}/${channel.runtime.country} scan head=${recentHead.length} added=${addedForChannel} queued=${[...selected.values()].filter((conv) => (conv.channelId || conv.channel?.id) === channel.channelId).length}`,
-      );
-    }
+    console.log(
+      `Pager worker: channel ${channel.channelName}/${channel.runtime.country} scan head=${recentHead.length} inspected=${inspected} added=${addedForChannel} queued=${[...selected.values()].filter((conv) => (conv.channelId || conv.channel?.id) === channel.channelId).length}`,
+    );
   }
 
   if (!selected.size && channelIds.length) {
@@ -512,6 +511,63 @@ async function buildWorkQueue(
   }
 
   return [...selected.values()];
+}
+
+async function fetchChannelConversationHead(
+  client: PagerClient,
+  channelId: string,
+  enabledFolderIds: Set<string> | null,
+  limit: number,
+  preferNoStatusApi: boolean,
+): Promise<PagerConversation[]> {
+  const collected = new Map<string, PagerConversation>();
+  const noStatusOnly =
+    preferNoStatusApi &&
+    enabledFolderIds &&
+    (() => {
+      const { specific, allInbox } = normalizeEnabledFolders(enabledFolderIds);
+      return !allInbox && specific.has(NO_STATUS_FOLDER_ID);
+    })();
+
+  const loadPages = async (statusId?: string) => {
+    for (let page = 1; page <= 4; page += 1) {
+      const batch = await client.listConversations({
+        channelId,
+        page,
+        pageSize: 100,
+        ...(statusId !== undefined ? { statusId } : {}),
+      });
+      if (!batch.length) {
+        break;
+      }
+      for (const conv of batch) {
+        if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
+          continue;
+        }
+        collected.set(conv.id, conv);
+        if (collected.size >= limit) {
+          return;
+        }
+      }
+      if (batch.length < 100) {
+        break;
+      }
+    }
+  };
+
+  if (noStatusOnly) {
+    await loadPages("");
+  }
+  if (collected.size < limit) {
+    await loadPages(undefined);
+  }
+
+  return [...collected.values()]
+    .sort(
+      (left, right) =>
+        Date.parse(resolveLastMessageAt(right) ?? "") - Date.parse(resolveLastMessageAt(left) ?? ""),
+    )
+    .slice(0, limit);
 }
 
 async function processConversation(
@@ -1006,7 +1062,7 @@ async function processEgConversation(
       convState,
       lastIncoming,
       sorted,
-      { countryLabel: "EG" },
+      { countryLabel: "EG", country: "EG" },
     ))
   ) {
     return false;
@@ -1645,13 +1701,15 @@ async function ensureCustomerMessageEligible(
   convState: ConversationRuntimeState,
   lastIncoming: PagerMessage,
   sorted: PagerMessage[],
-  options?: { bypass?: boolean; countryLabel?: string },
+  options?: { bypass?: boolean; countryLabel?: string; country?: "ZM" | "CM" | "EG" },
 ): Promise<boolean> {
   if (options?.bypass) {
     return true;
   }
 
-  const eligibility = assessReplyEligibility(conv, convState, lastIncoming, sorted);
+  const eligibility = assessReplyEligibility(conv, convState, lastIncoming, sorted, {
+    country: options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | undefined),
+  });
   if (eligibility.eligible) {
     return true;
   }

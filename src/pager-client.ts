@@ -1815,14 +1815,32 @@ export function normalizePagerMessage(raw: unknown): PagerMessage {
     record.type,
     base.messageDirection,
   );
-  const authorId = firstString(record.authorId, record.author_id, record.fromId, record.from_id, base.authorId);
+  const fromRecord =
+    record.from && typeof record.from === "object"
+      ? (record.from as Record<string, unknown>)
+      : undefined;
+  const authorId = firstString(
+    record.authorId,
+    record.author_id,
+    record.fromId,
+    record.from_id,
+    record.senderId,
+    record.sender_id,
+    fromRecord?.id,
+    base.authorId,
+  );
   const text = firstString(record.text, record.body, record.message, record.content, base.text);
+  const isEcho = record.is_echo === true || record.isEcho === true || record.is_echo === "true";
+  let resolvedDirection = messageDirection;
+  if (isEcho && !isIncomingDirection(resolvedDirection)) {
+    resolvedDirection = "outgoing";
+  }
 
   return {
     ...base,
     id,
     createdAt,
-    messageDirection,
+    messageDirection: resolvedDirection,
     authorId,
     text,
   };
@@ -1833,12 +1851,15 @@ export function isCustomerMessage(
   conv?: PagerConversation,
   operatorUserId?: string,
 ): boolean {
+  if (isOutgoingDirection(message.messageDirection)) {
+    return false;
+  }
   if (isIncomingDirection(message.messageDirection)) {
     return true;
   }
   const author = (message.authorId ?? "").trim();
   if (!author) {
-    return false;
+    return Boolean((message.text || "").trim()) && !isOutgoingDirection(message.messageDirection);
   }
   if (operatorUserId && author === operatorUserId) {
     return false;

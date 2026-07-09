@@ -1,13 +1,29 @@
 import type { PagerConversation, PagerMessage } from "./pager-client.js";
 import { isCustomerMessage, resolveLastMessageAt } from "./pager-client.js";
+import { isNoStatusConversation } from "./status-folders.js";
 import type { ConversationRuntimeState } from "./state-store.js";
 
 /** Brand-new customer messages (always processed). */
 export const FRESH_CUSTOMER_MESSAGE_MS = 30 * 60 * 1000;
+/** Egypt inbox without API unread flags — still act on recent customer-last threads. */
+export const EG_CUSTOMER_WAITING_MS = 48 * 60 * 60 * 1000;
 
 export type ReplyEligibility =
   | { eligible: true }
   | { eligible: false; reason: string; markSeen?: boolean };
+
+export function parseMessageTimestamp(value?: string): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/^\d{10,13}$/.test(trimmed)) {
+    const numeric = Number(trimmed);
+    const ms = trimmed.length <= 10 ? numeric * 1000 : numeric;
+    return new Date(ms).toISOString();
+  }
+  return trimmed;
+}
 
 export function isIncomingDirection(direction?: string): boolean {
   const value = (direction ?? "").trim().toLowerCase();
@@ -16,17 +32,25 @@ export function isIncomingDirection(direction?: string): boolean {
     value === "in" ||
     value === "received" ||
     value === "from_client" ||
-    value === "fromcustomer"
+    value === "fromcustomer" ||
+    value === "client" ||
+    value === "customer"
   );
 }
 
 export function isOutgoingDirection(direction?: string): boolean {
   const value = (direction ?? "").trim().toLowerCase();
-  return value === "outgoing" || value === "out";
+  return (
+    value === "outgoing" ||
+    value === "out" ||
+    value === "sent" ||
+    value === "from_page" ||
+    value === "echo"
+  );
 }
 
 export function isFreshCustomerMessage(createdAt?: string, nowMs = Date.now()): boolean {
-  const ts = Date.parse(createdAt ?? "");
+  const ts = Date.parse(parseMessageTimestamp(createdAt));
   if (!Number.isFinite(ts)) {
     return false;
   }
@@ -102,66 +126,110 @@ export function conversationPriorityScore(conv: PagerConversation): number {
   );
 }
 
+export function sortMessagesNewestFirst(messages: PagerMessage[]): PagerMessage[] {
+  return [...messages].sort(
+    (left, right) =>
+      Date.parse(parseMessageTimestamp(right.createdAt)) -
+      Date.parse(parseMessageTimestamp(left.createdAt)),
+  );
+}
+
 export function findLatestIncomingMessage(
   messages: PagerMessage[],
   conv?: PagerConversation,
+  operatorUserId?: string,
 ): PagerMessage | undefined {
-  const sorted = [...messages].sort(
-    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  return sortMessagesNewestFirst(messages).find((message) =>
+    isCustomerMessage(message, conv, operatorUserId),
   );
-  return sorted.find((message) => isCustomerMessage(message, conv));
+}
+
+export function hasOperatorReplyAfter(
+  messages: PagerMessage[],
+  afterCustomerAt: string,
+  conv?: PagerConversation,
+  operatorUserId?: string,
+): boolean {
+  const afterTs = Date.parse(parseMessageTimestamp(afterCustomerAt));
+  if (!Number.isFinite(afterTs)) {
+    return false;
+  }
+
+  for (const message of messages) {
+    if (isCustomerMessage(message, conv, operatorUserId)) {
+      continue;
+    }
+    const outgoingTs = Date.parse(parseMessageTimestamp(message.createdAt));
+    if (!Number.isFinite(outgoingTs) || outgoingTs <= afterTs) {
+      continue;
+    }
+    const text = (message.text || "").trim();
+    if (text || message.isDelivered || message.facebookMessageId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasDeliveredReplyAfter(
+  messages: PagerMessage[],
+  lastIncomingAt: string,
+  conv?: PagerConversation,
+  operatorUserId?: string,
+): boolean {
+  return hasOperatorReplyAfter(messages, lastIncomingAt, conv, operatorUserId);
 }
 
 export function isCustomerWaitingInThread(
   conv: PagerConversation,
   messages: PagerMessage[],
+  options?: { country?: "ZM" | "CM" | "EG" },
 ): boolean {
-  const sorted = [...messages].sort(
-    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
-  );
-  const latest = sorted[0];
-  if (!latest || !isCustomerMessage(latest, conv)) {
+  const latestCustomer = findLatestIncomingMessage(messages, conv);
+  if (!latestCustomer) {
     return false;
   }
-  if (hasDeliveredReplyAfter(sorted, latest.createdAt ?? "")) {
+
+  const customerAt = parseMessageTimestamp(latestCustomer.createdAt);
+  if (hasOperatorReplyAfter(messages, customerAt, conv)) {
     return false;
   }
-  if (shouldProcessIncomingMessage(latest.createdAt, conv)) {
+
+  if (shouldProcessIncomingMessage(customerAt, conv)) {
     return true;
   }
+
   if (hasUnreadMarkers(conv)) {
     return true;
   }
+
+  if (options?.country === "EG" && isNoStatusConversation(conv)) {
+    const customerTs = Date.parse(customerAt);
+    if (Number.isFinite(customerTs) && Date.now() - customerTs <= EG_CUSTOMER_WAITING_MS) {
+      const latest = sortMessagesNewestFirst(messages)[0];
+      if (latest && isCustomerMessage(latest, conv)) {
+        return true;
+      }
+    }
+  }
+
   const state = (conv.conversationState ?? "").trim().toLowerCase();
   if (state === "read" || conv.isUnread === false) {
     return false;
   }
+
   return false;
 }
 
-export function hasDeliveredReplyAfter(messages: PagerMessage[], lastIncomingAt: string): boolean {
-  const incomingTs = Date.parse(lastIncomingAt);
-  if (!Number.isFinite(incomingTs)) {
-    return false;
+export function shouldQueueConversationFromThread(
+  conv: PagerConversation,
+  messages: PagerMessage[],
+  country?: "ZM" | "CM" | "EG",
+): boolean {
+  if (shouldProcessConversation(conv)) {
+    return true;
   }
-
-  for (const message of messages) {
-    if (!isOutgoingDirection(message.messageDirection)) {
-      continue;
-    }
-    const outgoingTs = Date.parse(message.createdAt ?? "");
-    if (!Number.isFinite(outgoingTs) || outgoingTs <= incomingTs) {
-      continue;
-    }
-    const text = (message.text || "").trim();
-    if (!text) {
-      continue;
-    }
-    if (message.isDelivered || message.facebookMessageId) {
-      return true;
-    }
-  }
-  return false;
+  return isCustomerWaitingInThread(conv, messages, { country });
 }
 
 export function assessReplyEligibility(
@@ -169,14 +237,15 @@ export function assessReplyEligibility(
   convState: ConversationRuntimeState,
   lastIncoming: PagerMessage,
   sortedMessages: PagerMessage[],
+  options?: { country?: "ZM" | "CM" | "EG" },
 ): ReplyEligibility {
-  const lastIncomingAt = lastIncoming.createdAt ?? "";
+  const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
 
   if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
     return { eligible: false, reason: "already_replied_to_message" };
   }
 
-  if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt)) {
+  if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt, conv)) {
     return { eligible: false, reason: "replied_after_in_thread", markSeen: true };
   }
 
@@ -184,7 +253,7 @@ export function assessReplyEligibility(
     return { eligible: true };
   }
 
-  if (isCustomerWaitingInThread(conv, sortedMessages)) {
+  if (isCustomerWaitingInThread(conv, sortedMessages, { country: options?.country })) {
     return { eligible: true };
   }
 
