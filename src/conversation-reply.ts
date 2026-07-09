@@ -1,12 +1,9 @@
 import type { PagerConversation, PagerMessage } from "./pager-client.js";
 import { isCustomerMessage, resolveLastMessageAt } from "./pager-client.js";
-import { isNoStatusConversation } from "./status-folders.js";
 import type { ConversationRuntimeState } from "./state-store.js";
 
 /** Brand-new customer messages (always processed). */
 export const FRESH_CUSTOMER_MESSAGE_MS = 30 * 60 * 1000;
-/** Egypt inbox without API unread flags — still act on recent customer-last threads. */
-export const EG_CUSTOMER_WAITING_MS = 48 * 60 * 60 * 1000;
 
 export type ReplyEligibility =
   | { eligible: true }
@@ -203,16 +200,6 @@ export function isCustomerWaitingInThread(
     return true;
   }
 
-  if (options?.country === "EG" && isNoStatusConversation(conv)) {
-    const customerTs = Date.parse(customerAt);
-    if (Number.isFinite(customerTs) && Date.now() - customerTs <= EG_CUSTOMER_WAITING_MS) {
-      const latest = sortMessagesNewestFirst(messages)[0];
-      if (latest && isCustomerMessage(latest, conv)) {
-        return true;
-      }
-    }
-  }
-
   const state = (conv.conversationState ?? "").trim().toLowerCase();
   if (state === "read" || conv.isUnread === false) {
     return false;
@@ -241,12 +228,12 @@ export function assessReplyEligibility(
 ): ReplyEligibility {
   const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
 
-  if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
-    return { eligible: false, reason: "already_replied_to_message" };
-  }
-
   if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt, conv)) {
     return { eligible: false, reason: "replied_after_in_thread", markSeen: true };
+  }
+
+  if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
+    return { eligible: false, reason: "already_replied_to_message" };
   }
 
   if (shouldProcessIncomingMessage(lastIncomingAt, conv)) {
