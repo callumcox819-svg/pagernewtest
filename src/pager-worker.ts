@@ -99,6 +99,7 @@ type WorkerDeps = {
 const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 400;
 const INBOX_TOP = 25;
+const INBOX_TOP_EG_CM = 40;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -440,6 +441,35 @@ async function buildWorkQueue(
 ): Promise<PagerConversation[]> {
   const selected = new Map<string, PagerConversation>();
 
+  for (const channel of enabledChannels) {
+    if (channel.runtime.country !== "CM" && channel.runtime.country !== "EG") {
+      continue;
+    }
+    const inboxTop = (
+      await client.listConversations({
+        channelId: channel.channelId,
+        page: 1,
+        pageSize: 60,
+      })
+    ).sort(
+      (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+    );
+    let addedForChannel = 0;
+    for (const conv of inboxTop) {
+      if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
+        continue;
+      }
+      selected.set(conv.id, conv);
+      addedForChannel += 1;
+      if (addedForChannel >= INBOX_TOP_EG_CM) {
+        break;
+      }
+    }
+    console.log(
+      `Pager worker: channel ${channel.channelName}/${channel.runtime.country} inbox head=${addedForChannel}`,
+    );
+  }
+
   for (const conv of folderScopedConversations) {
     if (shouldProcessConversation(conv)) {
       selected.set(conv.id, conv);
@@ -447,17 +477,20 @@ async function buildWorkQueue(
   }
 
   const channelsNeedingScan = enabledChannels.filter((channel) => {
+    if (channel.runtime.country === "CM" || channel.runtime.country === "EG") {
+      return false;
+    }
     const queued = [...selected.values()].filter(
       (conv) => (conv.channelId || conv.channel?.id) === channel.channelId,
     ).length;
-    if (channel.runtime.country === "EG" || channel.runtime.country === "CM" || channel.runtime.country === "ZM") {
+    if (channel.runtime.country === "ZM") {
       return queued < 10;
     }
     return queued === 0;
   });
 
   for (const channel of channelsNeedingScan) {
-    if (channel.runtime.country === "CM" || channel.runtime.country === "EG" || channel.runtime.country === "ZM") {
+    if (channel.runtime.country === "ZM") {
       const inboxTop = (
         await client.listConversations({
           channelId: channel.channelId,
@@ -590,7 +623,7 @@ async function processCmConversation(
       convState,
       lastIncoming,
       sorted,
-      { bypass: awaitingRegAfterTierChoice, countryLabel: "CM" },
+      { bypass: awaitingRegAfterTierChoice, countryLabel: "CM", country: "CM" },
     ))
   ) {
     return false;
@@ -1021,7 +1054,7 @@ async function processEgConversation(
       convState,
       lastIncoming,
       sorted,
-      { bypass: awaitingRegAfterTierChoice, countryLabel: "EG" },
+      { bypass: awaitingRegAfterTierChoice, countryLabel: "EG", country: "EG" },
     ))
   ) {
     return false;

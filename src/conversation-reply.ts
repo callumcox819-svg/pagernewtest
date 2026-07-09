@@ -91,10 +91,10 @@ export function shouldProcessConversation(conv: PagerConversation): boolean {
     return true;
   }
   if (isIncomingDirection(conv.lastMessageDirection)) {
-    const state = (conv.conversationState ?? "").trim().toLowerCase();
-    if (state !== "read" && conv.isUnread !== false) {
-      return true;
+    if ((conv.conversationState ?? "").trim().toLowerCase() === "read") {
+      return false;
     }
+    return true;
   }
   return false;
 }
