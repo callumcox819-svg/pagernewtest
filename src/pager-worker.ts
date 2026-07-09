@@ -407,23 +407,27 @@ async function buildWorkQueue(
   }
 
   const channelsNeedingScan = enabledChannels.filter((channel) => {
-    const hasQueued = [...selected.values()].some(
+    const queued = [...selected.values()].filter(
       (conv) => (conv.channelId || conv.channel?.id) === channel.channelId,
-    );
-    return !hasQueued;
+    ).length;
+    if (channel.runtime.country === "EG") {
+      return queued < 20;
+    }
+    return queued === 0;
   });
 
   for (const channel of channelsNeedingScan) {
-    const incomingHead = folderScopedConversations
+    const headLimit = channel.runtime.country === "EG" ? 120 : 80;
+    const recentHead = folderScopedConversations
       .filter((conv) => (conv.channelId || conv.channel?.id) === channel.channelId)
-      .filter((conv) => isIncomingDirection(conv.lastMessageDirection))
       .sort(
         (left, right) =>
           Date.parse(resolveLastMessageAt(right) ?? "") - Date.parse(resolveLastMessageAt(left) ?? ""),
       )
-      .slice(0, 80);
+      .slice(0, headLimit);
 
-    for (const conv of incomingHead) {
+    let addedForChannel = 0;
+    for (const conv of recentHead) {
       if (selected.has(conv.id)) {
         continue;
       }
@@ -440,6 +444,7 @@ async function buildWorkQueue(
 
       if (shouldProcessConversation(enriched)) {
         selected.set(conv.id, enriched);
+        addedForChannel += 1;
         continue;
       }
 
@@ -448,10 +453,17 @@ async function buildWorkQueue(
         const lastIncoming = findLatestIncomingFromThread(messages);
         if (lastIncoming && shouldProcessIncomingMessage(lastIncoming.createdAt, enriched)) {
           selected.set(conv.id, enriched);
+          addedForChannel += 1;
         }
       } catch {
         // skip candidate
       }
+    }
+
+    if (channel.runtime.country === "EG" || addedForChannel) {
+      console.log(
+        `Pager worker: channel ${channel.channelName}/${channel.runtime.country} scan head=${recentHead.length} added=${addedForChannel} queued=${[...selected.values()].filter((conv) => (conv.channelId || conv.channel?.id) === channel.channelId).length}`,
+      );
     }
   }
 
