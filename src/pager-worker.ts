@@ -219,12 +219,16 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
+  const folderScopedConversations = enabledFolderIds
+    ? conversations.filter((conv) => conversationAllowedInFolders(conv, enabledFolderIds))
+    : conversations;
+
   const prioritizedConversations = prioritizeConversations(
-    conversations,
+    folderScopedConversations,
     enabledChannels.map((item) => item.channelId),
   ).slice(0, MAX_CONVERSATIONS_PER_ACCOUNT);
   console.log(
-    `Pager worker: chat ${freshState.chatId} — prioritized=${prioritizedConversations.length}/${conversations.length}`,
+    `Pager worker: chat ${freshState.chatId} — prioritized=${prioritizedConversations.length}/${folderScopedConversations.length}/${conversations.length}`,
   );
 
   let checked = 0;
@@ -240,11 +244,6 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
 
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
     if (!runtime) {
-      skipped += 1;
-      continue;
-    }
-
-    if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
       skipped += 1;
       continue;
     }
