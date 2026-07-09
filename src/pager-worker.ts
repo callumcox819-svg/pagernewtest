@@ -11,7 +11,11 @@ import {
   statusMapForCountry,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
-import { assessReplyEligibility } from "./conversation-reply.js";
+import {
+  assessReplyEligibility,
+  isConversationUnread,
+  isFreshCustomerMessage,
+} from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
   moneyRefusalText,
@@ -87,6 +91,7 @@ type WorkerDeps = {
 };
 
 const MAX_SEND_FAILURES = 5;
+const MAX_CONVERSATIONS_PER_ACCOUNT = 250;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -214,11 +219,19 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
+  const prioritizedConversations = prioritizeConversations(conversations).slice(
+    0,
+    MAX_CONVERSATIONS_PER_ACCOUNT,
+  );
+  console.log(
+    `Pager worker: chat ${freshState.chatId} — prioritized=${prioritizedConversations.length}/${conversations.length}`,
+  );
+
   let checked = 0;
   let replied = 0;
   let skipped = 0;
 
-  for (const conv of conversations) {
+  for (const conv of prioritizedConversations) {
     const channelId = conv.channelId || conv.channel?.id;
     if (!channelId) {
       skipped += 1;
@@ -279,6 +292,30 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   console.log(
     `Pager worker: chat ${freshState.chatId} — checked=${checked} replied=${replied} skipped=${skipped}`,
   );
+}
+
+function prioritizeConversations(conversations: PagerConversation[]): PagerConversation[] {
+  const scored = conversations.map((conv, index) => {
+    const unread = isConversationUnread(conv);
+    const incoming = isIncomingDirection(conv.lastMessageDirection);
+    const fresh = isFreshCustomerMessage(conv.lastMessageAt);
+    const lastAt = Date.parse(conv.lastMessageAt ?? "");
+    const score =
+      (unread ? 1_000_000 : 0) +
+      (incoming ? 100_000 : 0) +
+      (fresh ? 10_000 : 0) +
+      (Number.isFinite(lastAt) ? Math.floor(lastAt / 1000) : 0);
+    return { conv, index, score };
+  });
+
+  scored.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+    return left.index - right.index;
+  });
+
+  return scored.map((item) => item.conv);
 }
 
 async function processConversation(
