@@ -303,6 +303,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   )
     ? MAX_CONVERSATIONS_PER_ACCOUNT
     : 80;
+  const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
   const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit).sort(
     (left, right) => {
       const leftEg = egChannelIds.has(left.channelId || left.channel?.id || "");
@@ -313,7 +314,6 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       return conversationPriorityScore(right) - conversationPriorityScore(left);
     },
   );
-  const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
   const egInWork = workQueue.filter((conv) =>
     egChannelIds.has(conv.channelId || conv.channel?.id || ""),
   ).length;
