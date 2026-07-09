@@ -219,10 +219,10 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
-  const prioritizedConversations = prioritizeConversations(conversations).slice(
-    0,
-    MAX_CONVERSATIONS_PER_ACCOUNT,
-  );
+  const prioritizedConversations = prioritizeConversations(
+    conversations,
+    enabledChannels.map((item) => item.channelId),
+  ).slice(0, MAX_CONVERSATIONS_PER_ACCOUNT);
   console.log(
     `Pager worker: chat ${freshState.chatId} — prioritized=${prioritizedConversations.length}/${conversations.length}`,
   );
@@ -294,7 +294,10 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   );
 }
 
-function prioritizeConversations(conversations: PagerConversation[]): PagerConversation[] {
+function prioritizeConversations(
+  conversations: PagerConversation[],
+  channelIds: string[],
+): PagerConversation[] {
   const scored = conversations.map((conv, index) => {
     const unread = isConversationUnread(conv);
     const incoming = isIncomingDirection(conv.lastMessageDirection);
@@ -315,7 +318,49 @@ function prioritizeConversations(conversations: PagerConversation[]): PagerConve
     return left.index - right.index;
   });
 
-  return scored.map((item) => item.conv);
+  const buckets = new Map<string, typeof scored>();
+  for (const channelId of channelIds) {
+    buckets.set(channelId, []);
+  }
+  for (const item of scored) {
+    const channelId = item.conv.channelId || item.conv.channel?.id || "";
+    if (!buckets.has(channelId)) {
+      buckets.set(channelId, []);
+    }
+    buckets.get(channelId)!.push(item);
+  }
+
+  const ordered: PagerConversation[] = [];
+  let added = true;
+  while (added && ordered.length < MAX_CONVERSATIONS_PER_ACCOUNT) {
+    added = false;
+    for (const channelId of channelIds) {
+      const bucket = buckets.get(channelId);
+      if (!bucket?.length) {
+        continue;
+      }
+      ordered.push(bucket.shift()!.conv);
+      added = true;
+      if (ordered.length >= MAX_CONVERSATIONS_PER_ACCOUNT) {
+        break;
+      }
+    }
+  }
+
+  if (ordered.length >= MAX_CONVERSATIONS_PER_ACCOUNT) {
+    return ordered;
+  }
+
+  for (const bucket of buckets.values()) {
+    while (bucket.length && ordered.length < MAX_CONVERSATIONS_PER_ACCOUNT) {
+      ordered.push(bucket.shift()!.conv);
+    }
+    if (ordered.length >= MAX_CONVERSATIONS_PER_ACCOUNT) {
+      break;
+    }
+  }
+
+  return ordered;
 }
 
 async function processConversation(
