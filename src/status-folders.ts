@@ -75,7 +75,7 @@ export function getEnabledFolderIds(state: {
 
 export function isInProgressStatusConversation(conv: PagerConversation): boolean {
   const name = (conv.status?.name || "").trim().toLowerCase();
-  return /в процес|процес|process|рега|реєстраці|en cours/i.test(name);
+  return isActivePipelineFolderName(name);
 }
 
 /** When operator only monitors «Без статусу», still follow chats moved to in-progress registration. */
@@ -98,11 +98,23 @@ export function expandEnabledFolderIds(
       continue;
     }
     const name = folder.name.toLowerCase();
-    if (/в процес|процес|process|рега|реєстраці|en cours|inscription/i.test(name)) {
+    if (isActivePipelineFolderName(name)) {
       expanded.add(folder.id);
     }
   }
   return expanded;
+}
+
+function isActivePipelineFolderName(name: string): boolean {
+  if (!name) {
+    return false;
+  }
+  if (/заверш|completed|done|finish|closed/i.test(name)) {
+    return false;
+  }
+  return /в процес|процес|process|рега|реєстрац|registration|inscription|en cours|чекаю|waiting|attente|id/i.test(
+    name,
+  );
 }
 
 export function countApiStatusFolders(folders?: StatusFolderState[]): number {
