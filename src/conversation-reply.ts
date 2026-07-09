@@ -84,12 +84,16 @@ export function assessReplyEligibility(
   sortedMessages: PagerMessage[],
 ): ReplyEligibility {
   const lastIncomingAt = lastIncoming.createdAt ?? "";
+  const unread = isConversationUnread(conv);
 
   if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
     return { eligible: false, reason: "already_replied_to_message" };
   }
 
   if (convState.lastCustomerMessageId === lastIncoming.id && !convState.lastReplyAt) {
+    if (unread) {
+      return { eligible: true };
+    }
     return { eligible: false, reason: "already_skipped_message" };
   }
 
@@ -101,7 +105,7 @@ export function assessReplyEligibility(
     return { eligible: true };
   }
 
-  if (isConversationUnread(conv)) {
+  if (unread) {
     return { eligible: true };
   }
 
