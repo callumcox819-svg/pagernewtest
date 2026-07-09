@@ -240,23 +240,31 @@ export function resolveEgFunnelScripts(
 ): string[] {
   const t = (text || "").trim();
   const out = outgoingTexts;
+  const introSent = egScriptSentInHistory(out, "01_intro");
+  const explainSent = explainScriptsSentInHistory(out);
+  const linkSent = regLinkSentInHistory(out);
+  const signal = positiveSignal(t, intent, effectiveStep);
 
   if (intent === "declined") {
     return [];
   }
 
   if (isRegistrationHelpRequest(t)) {
+    if (!linkSent && effectiveStep < 3) {
+      if (!introSent) {
+        return ["01_intro"];
+      }
+      if (!explainSent) {
+        return ["02_how_it_works"];
+      }
+      return ["04_registration", "05_link"];
+    }
     return [...registrationHelpScriptKeys("EG")];
   }
 
   if (wantsRegistrationLink(t)) {
     return registrationLinkScriptKeys("EG", regLinkSentInHistory(out));
   }
-
-  const introSent = egScriptSentInHistory(out, "01_intro");
-  const explainSent = explainScriptsSentInHistory(out);
-  const linkSent = regLinkSentInHistory(out);
-  const signal = positiveSignal(t, intent, effectiveStep);
 
   if ((explainSent || effectiveStep >= 2) && isEgDepositTierChoice(t) && !linkSent) {
     return ["04_registration", "05_link"];
