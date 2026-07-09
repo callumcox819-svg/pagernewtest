@@ -15,6 +15,7 @@ import {
   assessReplyEligibility,
   conversationPriorityScore,
   findLatestIncomingMessage,
+  hasDeliveredReplyAfter,
   shouldProcessConversation,
 } from "./conversation-reply.js";
 import {
@@ -83,6 +84,7 @@ import {
   hasEnabledStatusFolders,
   NO_STATUS_FOLDER_ID,
   normalizeEnabledFolders,
+  isNoStatusConversation,
 } from "./status-folders.js";
 import type { TemplateRole } from "./config.js";
 import type { TelegramApi } from "./telegram-api.js";
@@ -301,7 +303,16 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   )
     ? MAX_CONVERSATIONS_PER_ACCOUNT
     : 80;
-  const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit);
+  const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit).sort(
+    (left, right) => {
+      const leftEg = egChannelIds.has(left.channelId || left.channel?.id || "");
+      const rightEg = egChannelIds.has(right.channelId || right.channel?.id || "");
+      if (leftEg !== rightEg) {
+        return leftEg ? -1 : 1;
+      }
+      return conversationPriorityScore(right) - conversationPriorityScore(left);
+    },
+  );
   const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
   const egInWork = workQueue.filter((conv) =>
     egChannelIds.has(conv.channelId || conv.channel?.id || ""),
@@ -464,12 +475,20 @@ async function buildWorkQueue(
       })();
 
     if (noStatusEgInbox) {
-      const inboxTop = await client.listConversations({
+      let inboxTop = await client.listConversations({
         channelId: channel.channelId,
         statusId: "",
         page: 1,
         pageSize: 50,
       });
+      if (!inboxTop.length) {
+        const fallback = await client.listConversations({
+          channelId: channel.channelId,
+          page: 1,
+          pageSize: 50,
+        });
+        inboxTop = fallback.filter((conv) => isNoStatusConversation(conv));
+      }
       let addedForChannel = 0;
       for (const conv of inboxTop.slice(0, EG_NO_STATUS_INBOX_TOP)) {
         if (selected.has(conv.id)) {
@@ -479,7 +498,7 @@ async function buildWorkQueue(
         addedForChannel += 1;
       }
       console.log(
-        `Pager worker: channel ${channel.channelName}/EG inbox top=${Math.min(inboxTop.length, EG_NO_STATUS_INBOX_TOP)} added=${addedForChannel} (page1 status=none)`,
+        `Pager worker: channel ${channel.channelName}/EG inbox top=${Math.min(inboxTop.length, EG_NO_STATUS_INBOX_TOP)} added=${addedForChannel} (bez statusu)`,
       );
       continue;
     }
@@ -1017,6 +1036,7 @@ async function processEgConversation(
 
   const messages = await client.listMessages(convId, 1, 80);
   if (!messages.length) {
+    console.log(`Pager worker: EG ${convId.slice(0, 8)} — empty_thread`);
     return false;
   }
 
@@ -1025,11 +1045,21 @@ async function processEgConversation(
   );
   const lastIncoming = findLatestIncomingFromThread(sorted, conv);
   if (!lastIncoming) {
+    console.log(
+      `Pager worker: EG ${convId.slice(0, 8)} — no_customer_message (msgs=${messages.length})`,
+    );
     return false;
   }
 
+  await tryTakeConversationForProcessing(client, convId, "EG");
+
   const outgoingTexts = collectEgOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
+
+  const egInboxBypass =
+    isNoStatusConversation(conv) &&
+    Boolean(latestCustomerText) &&
+    !hasDeliveredReplyAfter(sorted, lastIncoming.createdAt ?? "", conv);
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -1040,13 +1070,11 @@ async function processEgConversation(
       convState,
       lastIncoming,
       sorted,
-      { countryLabel: "EG", country: "EG" },
+      { countryLabel: "EG", country: "EG", bypass: egInboxBypass },
     ))
   ) {
     return false;
   }
-
-  await tryTakeConversationForProcessing(client, convId, "EG");
 
   const threadStep = egInferStepFromThread(messages);
   const gapStep = egFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);

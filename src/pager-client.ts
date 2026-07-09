@@ -1851,16 +1851,7 @@ export function isCustomerMessage(
   conv?: PagerConversation,
   operatorUserId?: string,
 ): boolean {
-  if (isOutgoingDirection(message.messageDirection)) {
-    return false;
-  }
-  if (isIncomingDirection(message.messageDirection)) {
-    return true;
-  }
   const author = (message.authorId ?? "").trim();
-  if (!author) {
-    return Boolean((message.text || "").trim()) && !isOutgoingDirection(message.messageDirection);
-  }
   if (operatorUserId && author === operatorUserId) {
     return false;
   }
@@ -1868,10 +1859,22 @@ export function isCustomerMessage(
     return false;
   }
   const psid = firstString(conv?.clientPSID, conv?.client?.psid, conv?.client?.PSID);
-  if (psid && author === psid) {
+  if (psid && author && author === psid) {
     return true;
   }
-  return /^\d{5,}$/.test(author);
+  if (author && /^\d{5,}$/.test(author)) {
+    return true;
+  }
+  if (isOutgoingDirection(message.messageDirection)) {
+    return false;
+  }
+  if (isIncomingDirection(message.messageDirection)) {
+    return true;
+  }
+  if (!author) {
+    return Boolean((message.text || "").trim());
+  }
+  return false;
 }
 
 function extractPayloadArray(payload: unknown): unknown[] {
