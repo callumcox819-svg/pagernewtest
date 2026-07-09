@@ -329,7 +329,8 @@ async function handleCallback(
     }
 
     if (value === "all_on" || value === "all_off") {
-      const folders = setAllStatusFolders(state.statusFolders ?? [], value === "all_on");
+      const baseFolders = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+      const folders = setAllStatusFolders(baseFolders, value === "all_on");
       let nextState =
         (await stateStore.patch(chatId, {
           statusFolders: folders,
@@ -343,7 +344,8 @@ async function handleCallback(
 
   if (kind === "folder_toggle" && value) {
     const index = Number(value);
-    const folders = toggleStatusFolder(state.statusFolders ?? [], index);
+    const baseFolders = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+    const folders = toggleStatusFolder(baseFolders, index);
     let nextState =
       (await stateStore.patch(chatId, {
         statusFolders: folders,
