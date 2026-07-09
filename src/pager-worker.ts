@@ -13,8 +13,8 @@ import {
 import { decideNextAction } from "./decision-engine.js";
 import {
   assessReplyEligibility,
-  isConversationUnread,
-  isFreshCustomerMessage,
+  conversationPriorityScore,
+  shouldOpenConversation,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -91,7 +91,8 @@ type WorkerDeps = {
 };
 
 const MAX_SEND_FAILURES = 5;
-const MAX_CONVERSATIONS_PER_ACCOUNT = 250;
+const MAX_CONVERSATIONS_PER_ACCOUNT = 400;
+const MIN_CONVERSATIONS_PER_CHANNEL = 150;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -270,6 +271,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   let checked = 0;
   let replied = 0;
   let skipped = 0;
+  let egChecked = 0;
+  let egReplied = 0;
 
   for (const conv of prioritizedConversations) {
     const channelId = conv.channelId || conv.channel?.id;
@@ -285,10 +288,17 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     }
 
     checked += 1;
+    const isEg = runtime.runtime.country === "EG";
+    if (isEg) {
+      egChecked += 1;
+    }
     try {
       const didReply = await processConversation(deps, freshState, client, conv, runtime);
       if (didReply) {
         replied += 1;
+        if (isEg) {
+          egReplied += 1;
+        }
       } else {
         skipped += 1;
       }
@@ -305,6 +315,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
             const didReply = await processConversation(deps, freshState, client, conv, runtime);
             if (didReply) {
               replied += 1;
+              if (isEg) {
+                egReplied += 1;
+              }
             } else {
               skipped += 1;
             }
@@ -325,7 +338,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   console.log(
-    `Pager worker: chat ${freshState.chatId} — checked=${checked} replied=${replied} skipped=${skipped}`,
+    `Pager worker: chat ${freshState.chatId} — checked=${checked} replied=${replied} skipped=${skipped} egChecked=${egChecked} egReplied=${egReplied}`,
   );
 }
 
@@ -333,69 +346,55 @@ function prioritizeConversations(
   conversations: PagerConversation[],
   channelIds: string[],
 ): PagerConversation[] {
-  const scored = conversations.map((conv, index) => {
-    const unread = isConversationUnread(conv);
-    const incoming = isIncomingDirection(conv.lastMessageDirection);
-    const fresh = isFreshCustomerMessage(conv.lastMessageAt);
-    const lastAt = Date.parse(conv.lastMessageAt ?? "");
-    const score =
-      (unread ? 1_000_000 : 0) +
-      (incoming ? 100_000 : 0) +
-      (fresh ? 10_000 : 0) +
-      (Number.isFinite(lastAt) ? Math.floor(lastAt / 1000) : 0);
-    return { conv, index, score };
-  });
-
-  scored.sort((left, right) => {
-    if (right.score !== left.score) {
-      return right.score - left.score;
-    }
-    return left.index - right.index;
-  });
+  const scored = conversations
+    .map((conv, index) => ({
+      conv,
+      index,
+      score: conversationPriorityScore(conv),
+      channelId: conv.channelId || conv.channel?.id || "",
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return left.index - right.index;
+    });
 
   const buckets = new Map<string, typeof scored>();
   for (const channelId of channelIds) {
     buckets.set(channelId, []);
   }
   for (const item of scored) {
-    const channelId = item.conv.channelId || item.conv.channel?.id || "";
-    if (!buckets.has(channelId)) {
-      buckets.set(channelId, []);
+    if (!buckets.has(item.channelId)) {
+      buckets.set(item.channelId, []);
     }
-    buckets.get(channelId)!.push(item);
+    buckets.get(item.channelId)!.push(item);
   }
 
-  const ordered: PagerConversation[] = [];
-  let added = true;
-  while (added && ordered.length < MAX_CONVERSATIONS_PER_ACCOUNT) {
-    added = false;
-    for (const channelId of channelIds) {
-      const bucket = buckets.get(channelId);
-      if (!bucket?.length) {
-        continue;
-      }
-      ordered.push(bucket.shift()!.conv);
-      added = true;
-      if (ordered.length >= MAX_CONVERSATIONS_PER_ACCOUNT) {
+  const selected = new Map<string, PagerConversation>();
+  for (const channelId of channelIds) {
+    const bucket = buckets.get(channelId) ?? [];
+    for (const item of bucket.slice(0, MIN_CONVERSATIONS_PER_CHANNEL)) {
+      selected.set(item.conv.id, item.conv);
+      if (selected.size >= MAX_CONVERSATIONS_PER_ACCOUNT) {
         break;
       }
     }
-  }
-
-  if (ordered.length >= MAX_CONVERSATIONS_PER_ACCOUNT) {
-    return ordered;
-  }
-
-  for (const bucket of buckets.values()) {
-    while (bucket.length && ordered.length < MAX_CONVERSATIONS_PER_ACCOUNT) {
-      ordered.push(bucket.shift()!.conv);
-    }
-    if (ordered.length >= MAX_CONVERSATIONS_PER_ACCOUNT) {
+    if (selected.size >= MAX_CONVERSATIONS_PER_ACCOUNT) {
       break;
     }
   }
 
-  return ordered;
+  for (const item of scored) {
+    if (selected.size >= MAX_CONVERSATIONS_PER_ACCOUNT) {
+      break;
+    }
+    selected.set(item.conv.id, item.conv);
+  }
+
+  return [...selected.values()].sort(
+    (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+  );
 }
 
 async function processConversation(
@@ -427,7 +426,7 @@ async function processCmConversation(
   channel: ReturnType<typeof buildRuntimeChannelConfig>,
 ): Promise<boolean> {
   const convId = conv.id;
-  if (!isIncomingDirection(conv.lastMessageDirection)) {
+  if (!shouldOpenConversation(conv)) {
     return false;
   }
 
@@ -637,7 +636,7 @@ async function processZmConversation(
   channel: ReturnType<typeof buildRuntimeChannelConfig>,
 ): Promise<boolean> {
   const convId = conv.id;
-  if (!isIncomingDirection(conv.lastMessageDirection)) {
+  if (!shouldOpenConversation(conv)) {
     return false;
   }
 
@@ -866,7 +865,7 @@ async function processEgConversation(
   channel: ReturnType<typeof buildRuntimeChannelConfig>,
 ): Promise<boolean> {
   const convId = conv.id;
-  if (!isIncomingDirection(conv.lastMessageDirection)) {
+  if (!shouldOpenConversation(conv)) {
     return false;
   }
 
@@ -1069,7 +1068,7 @@ async function processGenericConversation(
 ): Promise<boolean> {
   const convId = conv.id;
 
-  if (!isIncomingDirection(conv.lastMessageDirection)) {
+  if (!shouldOpenConversation(conv)) {
     return false;
   }
 
@@ -1847,7 +1846,7 @@ async function pollConversations(
 ): Promise<{ conversations: PagerConversation[]; client: PagerClient }> {
   try {
     await client.syncOrgIdFromChannels();
-    const conversations = await client.collectConversationsForChannels(channelIds);
+    const conversations = await client.collectConversationsForChannels(channelIds, 10);
     return { conversations, client };
   } catch (error) {
     if (!isRecoverablePagerError(error) || !state.pagerAccount?.password) {
@@ -1858,7 +1857,7 @@ async function pollConversations(
     if (!refreshed) {
       throw error;
     }
-    const conversations = await refreshed.client.collectConversationsForChannels(channelIds);
+    const conversations = await refreshed.client.collectConversationsForChannels(channelIds, 10);
     return { conversations, client: refreshed.client };
   }
 }

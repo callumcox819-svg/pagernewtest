@@ -46,12 +46,41 @@ export function hasDeliveredReplyAfter(messages: PagerMessage[], lastIncomingAt:
   return false;
 }
 
+export function shouldOpenConversation(conv: PagerConversation): boolean {
+  if (isIncomingDirection(conv.lastMessageDirection)) {
+    return true;
+  }
+  if (isConversationUnread(conv)) {
+    return true;
+  }
+  if (isFreshCustomerMessage(conv.lastMessageAt)) {
+    return true;
+  }
+  return false;
+}
+
+export function conversationPriorityScore(conv: PagerConversation): number {
+  const unread = isConversationUnread(conv);
+  const incoming = isIncomingDirection(conv.lastMessageDirection);
+  const fresh = isFreshCustomerMessage(conv.lastMessageAt);
+  const lastAt = Date.parse(conv.lastMessageAt ?? "");
+  return (
+    (unread ? 1_000_000 : 0) +
+    (incoming ? 100_000 : 0) +
+    (fresh ? 10_000 : 0) +
+    (Number.isFinite(lastAt) ? Math.floor(lastAt / 1000) : 0)
+  );
+}
+
 export function isConversationUnread(conv: PagerConversation): boolean {
   const state = (conv.conversationState ?? "").trim().toLowerCase();
   if (state === "unread") {
     return true;
   }
   if (state === "read") {
+    if (isIncomingDirection(conv.lastMessageDirection) && isFreshCustomerMessage(conv.lastMessageAt)) {
+      return true;
+    }
     return false;
   }
   if (typeof conv.unreadCount === "number") {
