@@ -593,7 +593,9 @@ export class PagerClient {
     };
 
     for (const channelId of channelIds) {
-      for (let page = 1; page <= maxPages; page += 1) {
+      const head = await this.listConversations({ channelId, page: 1, pageSize: 200 });
+      addBatch(head);
+      for (let page = 2; page <= maxPages; page += 1) {
         const batch = await this.listConversations({ channelId, page, pageSize: 100 });
         if (!batch.length) {
           break;

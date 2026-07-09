@@ -14,6 +14,7 @@ import { decideNextAction } from "./decision-engine.js";
 import {
   assessReplyEligibility,
   conversationPriorityScore,
+  isActionableCustomerConversation,
   shouldOpenConversation,
 } from "./conversation-reply.js";
 import {
@@ -259,13 +260,15 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const folderScopedConversations = enabledFolderIds
     ? conversations.filter((conv) => conversationAllowedInFolders(conv, enabledFolderIds))
     : conversations;
+  const actionableCount = folderScopedConversations.filter(isActionableCustomerConversation).length;
 
   const prioritizedConversations = prioritizeConversations(
     folderScopedConversations,
     enabledChannels.map((item) => item.channelId),
+    freshState.conversations,
   ).slice(0, MAX_CONVERSATIONS_PER_ACCOUNT);
   console.log(
-    `Pager worker: chat ${freshState.chatId} — prioritized=${prioritizedConversations.length}/${folderScopedConversations.length}/${conversations.length}`,
+    `Pager worker: chat ${freshState.chatId} — prioritized=${prioritizedConversations.length}/${folderScopedConversations.length}/${conversations.length} actionable=${actionableCount}`,
   );
 
   let checked = 0;
@@ -345,13 +348,15 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
 function prioritizeConversations(
   conversations: PagerConversation[],
   channelIds: string[],
+  conversationStates?: Record<string, ConversationRuntimeState>,
 ): PagerConversation[] {
   const scored = conversations
     .map((conv, index) => ({
       conv,
       index,
-      score: conversationPriorityScore(conv),
+      score: conversationPriorityScore(conv, conversationStates?.[conv.id]),
       channelId: conv.channelId || conv.channel?.id || "",
+      actionable: isActionableCustomerConversation(conv),
     }))
     .sort((left, right) => {
       if (right.score !== left.score) {
@@ -359,6 +364,18 @@ function prioritizeConversations(
       }
       return left.index - right.index;
     });
+
+  const selected = new Map<string, PagerConversation>();
+
+  for (const item of scored) {
+    if (!item.actionable) {
+      continue;
+    }
+    selected.set(item.conv.id, item.conv);
+    if (selected.size >= MAX_CONVERSATIONS_PER_ACCOUNT) {
+      return [...selected.values()];
+    }
+  }
 
   const buckets = new Map<string, typeof scored>();
   for (const channelId of channelIds) {
@@ -371,7 +388,6 @@ function prioritizeConversations(
     buckets.get(item.channelId)!.push(item);
   }
 
-  const selected = new Map<string, PagerConversation>();
   for (const channelId of channelIds) {
     const bucket = buckets.get(channelId) ?? [];
     for (const item of bucket.slice(0, MIN_CONVERSATIONS_PER_CHANNEL)) {
@@ -393,7 +409,9 @@ function prioritizeConversations(
   }
 
   return [...selected.values()].sort(
-    (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+    (left, right) =>
+      conversationPriorityScore(right, conversationStates?.[right.id]) -
+      conversationPriorityScore(left, conversationStates?.[left.id]),
   );
 }
 
@@ -429,6 +447,8 @@ async function processCmConversation(
   if (!shouldOpenConversation(conv)) {
     return false;
   }
+
+  await tryTakeConversationForProcessing(client, convId);
 
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const convState = getConversationState(currentState, convId, runtime.channelId);
@@ -471,8 +491,6 @@ async function processCmConversation(
   ) {
     return false;
   }
-
-  await tryTakeConversationForProcessing(client, convId);
 
   const threadStep = cmInferStepFromThread(messages);
   const gapStep = cmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
@@ -640,6 +658,8 @@ async function processZmConversation(
     return false;
   }
 
+  await tryTakeConversationForProcessing(client, convId);
+
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const convState = getConversationState(currentState, convId, runtime.channelId);
   if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
@@ -677,8 +697,6 @@ async function processZmConversation(
   ) {
     return false;
   }
-
-  await tryTakeConversationForProcessing(client, convId);
 
   const threadStep = zmInferStepFromThread(messages);
   const gapStep = zmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
@@ -869,6 +887,8 @@ async function processEgConversation(
     return false;
   }
 
+  await tryTakeConversationForProcessing(client, convId);
+
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const convState = getConversationState(currentState, convId, runtime.channelId);
   if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
@@ -885,6 +905,11 @@ async function processEgConversation(
   );
   const latest = sorted[0];
   if (!isIncomingDirection(latest.messageDirection)) {
+    if (isActionableCustomerConversation(conv)) {
+      console.log(
+        `Pager worker: skip ${convId.slice(0, 8)} EG — latest_not_incoming (list=${conv.lastMessageDirection ?? "?"})`,
+      );
+    }
     return false;
   }
 
@@ -906,8 +931,6 @@ async function processEgConversation(
   ) {
     return false;
   }
-
-  await tryTakeConversationForProcessing(client, convId);
 
   const threadStep = egInferStepFromThread(messages);
   const gapStep = egFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);

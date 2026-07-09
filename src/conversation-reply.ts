@@ -59,17 +59,38 @@ export function shouldOpenConversation(conv: PagerConversation): boolean {
   return false;
 }
 
-export function conversationPriorityScore(conv: PagerConversation): number {
+export function isActionableCustomerConversation(conv: PagerConversation): boolean {
+  const incoming = isIncomingDirection(conv.lastMessageDirection);
+  if (!incoming) {
+    return false;
+  }
+  return isConversationUnread(conv) || isFreshCustomerMessage(conv.lastMessageAt);
+}
+
+export function conversationPriorityScore(
+  conv: PagerConversation,
+  convState?: ConversationRuntimeState,
+): number {
   const unread = isConversationUnread(conv);
   const incoming = isIncomingDirection(conv.lastMessageDirection);
   const fresh = isFreshCustomerMessage(conv.lastMessageAt);
   const lastAt = Date.parse(conv.lastMessageAt ?? "");
-  return (
+  let score =
     (unread ? 1_000_000 : 0) +
     (incoming ? 100_000 : 0) +
     (fresh ? 10_000 : 0) +
-    (Number.isFinite(lastAt) ? Math.floor(lastAt / 1000) : 0)
-  );
+    (Number.isFinite(lastAt) ? Math.floor(lastAt / 1000) : 0);
+
+  if (isActionableCustomerConversation(conv)) {
+    score += 5_000_000;
+  }
+  if (convState?.lastCustomerMessageId && !convState?.lastReplyAt) {
+    score -= 100_000_000;
+  } else if (convState?.lastReplyAt) {
+    score -= 50_000_000;
+  }
+
+  return score;
 }
 
 export function isConversationUnread(conv: PagerConversation): boolean {
@@ -120,6 +141,10 @@ export function assessReplyEligibility(
 
   if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
     return { eligible: false, reason: "already_replied_to_message" };
+  }
+
+  if (isFreshCustomerMessage(lastIncomingAt) && isIncomingDirection(conv.lastMessageDirection)) {
+    return { eligible: true };
   }
 
   if (convState.lastCustomerMessageId === lastIncoming.id && !convState.lastReplyAt) {
