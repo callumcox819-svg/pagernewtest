@@ -2,7 +2,10 @@ import type { PagerConversation, PagerMessage } from "./pager-client.js";
 import type { ConversationRuntimeState } from "./state-store.js";
 
 /** Incoming customer messages newer than this are always eligible. */
-export const FRESH_CUSTOMER_MESSAGE_MS = 15 * 60 * 1000;
+export const FRESH_CUSTOMER_MESSAGE_MS = 6 * 60 * 60 * 1000;
+
+/** Retry previously skipped messages for this long when the chat never got a bot reply. */
+export const RETRY_SKIPPED_MESSAGE_MS = 24 * 60 * 60 * 1000;
 
 export type ReplyEligibility =
   | { eligible: true }
@@ -91,7 +94,10 @@ export function assessReplyEligibility(
   }
 
   if (convState.lastCustomerMessageId === lastIncoming.id && !convState.lastReplyAt) {
-    if (unread) {
+    const incomingTs = Date.parse(lastIncomingAt);
+    const withinRetry =
+      Number.isFinite(incomingTs) && Date.now() - incomingTs <= RETRY_SKIPPED_MESSAGE_MS;
+    if (unread || isFreshCustomerMessage(lastIncomingAt) || withinRetry) {
       return { eligible: true };
     }
     return { eligible: false, reason: "already_skipped_message" };
@@ -109,5 +115,9 @@ export function assessReplyEligibility(
     return { eligible: true };
   }
 
-  return { eligible: false, reason: "stale_read_conversation", markSeen: true };
+  return {
+    eligible: false,
+    reason: "stale_read_conversation",
+    markSeen: Boolean(convState.lastReplyAt),
+  };
 }

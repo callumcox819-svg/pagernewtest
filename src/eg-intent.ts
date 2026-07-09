@@ -15,7 +15,7 @@ export type EgIntent =
 const AR_POSITIVE = /(تمام|اوك|أوك|حاضر|ماشي|نعم|اه|آه|طيب|موافق|ok|okay|yes)/i;
 const AR_GREETING = /^(اهلا|أهلا|اهلاً|أهلاً|مرحبا|مرحباً|السلام|سلام|هاي|هلو|hello|hi)([\s,!.]|$)/i;
 const AR_INTERESTED =
-  /(أنا مهتم|انا مهتم|مهتم|مهتمة|عايز|عاوز|عايزه|عاوزه|أريد|اريد|اشرح|اشرحلي|ازاي|كيف|تفاصيل|نعم|ايوه|أيوه|مهتمين|حابب|حابة|محتاج|محتاجة|مساعدة|مساعده|تساعد|بتساعد|ابا|أبا|ابي|أبي|ابغى|ابغي|كلمني|اتكلم|نتكلم)/i;
+  /(أنا مهتم|انا مهتم|مهتم|مهتمة|عايز|عاوز|عايزه|عاوزه|عايزه اعرف|عايز اعرف|أريد|اريد|اشرح|اشرحلي|ازاي|كيف|تفاصيل|ممكن تفاصيل|ممكن|هل ذلك|هل ده|نعم|ايوه|أيوه|مهتمين|حابب|حابة|محتاج|محتاجة|مساعدة|مساعده|تساعد|بتساعد|ابا|أبا|ابي|أبي|ابغى|ابغي|كلمني|اتكلم|نتكلم|أنا بحاجة|انا بحاجة|بحاجة الى|بحاجة إلى|كيف اربح|كيف أربح|معاك|معك|مثير لاهتمامي|اهتمامي|مثير)/i;
 const AR_DECLINED = /(مش مهتم|مش مهتمة|مش عايز|مش عاوز|لا شكرا|لا شكراً|سيبني|بطل|stop|scam)/i;
 const AR_READY = /(جاهز|جاهزة|يلا|يلّا|ابدأ|ابدأوا|مستعد|مستعدة|خلاص|هنبدأ)/i;
 const AR_JOINED =
@@ -28,7 +28,7 @@ const POSITIVE_EMOJI = /^[\s👍👌✅🔥❤️🙏😊🙂]+$/u;
 const AR_LINK_ASK =
   /(اللينك|الرابط|ابعت.*لينك|ابعت.*رابط|وين اللينك|فين اللينك|محتاج اللينك|عايز اللينك|عاوز اللينك|link|url)/i;
 const AR_REG_HELP =
-  /(مش عارف|مش فاهم|مش شغال|مش راضي|مش راضية|sms|الرسالة|الكود|مش واصل|مش واصلة|مشكلة|مساعدة|help|problem)/i;
+  /(مش عارف|مش فاهم|مش شغال|مش راضي|مش راضية|sms|الرسالة|الكود|مش واصل|مش واصلة|مشكلة|problem)/i;
 
 export function classifyEgIntent(
   text: string,
@@ -120,7 +120,7 @@ export function wantsDetailsAfterIntro(text: string): boolean {
   if (!t) {
     return false;
   }
-  return /(تفاصيل|تفاصيل أكثر|قولي تفاصيل|اشرح|اشرحلي|ازاي|كيف|تداول|يعني|أكثر|اكثر|how|explain|details|more)/i.test(
+  return /(تفاصيل|تفاصيل أكثر|ممكن تفاصيل|قولي تفاصيل|اشرح|اشرحلي|ازاي|كيف|تداول|يعني|أكثر|اكثر|ممكن|how|explain|details|more)/i.test(
     t,
   );
 }
@@ -179,9 +179,14 @@ export function isRegistrationPending(text: string): boolean {
 
 export function isRegistrationHelpRequest(text: string): boolean {
   const t = (text || "").trim();
+  if (AR_INTERESTED.test(t) && !/(تسجيل|حساب|لينك|رابط|كود|sms)/i.test(t)) {
+    return false;
+  }
   return (
     AR_REG_HELP.test(t) ||
-    /\b(problem|issue|error|help).{0,30}(registration|register|account)\b/i.test(t)
+    /\b(problem|issue|error|help).{0,30}(registration|register|account)\b/i.test(t) ||
+    /مساعد(ة|ه).{0,24}(تسجيل|حساب|لينك|رابط|كود)/i.test(t) ||
+    /(تسجيل|حساب|لينك|رابط|كود).{0,24}مساعد(ة|ه)/i.test(t)
   );
 }
 

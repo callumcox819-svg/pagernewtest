@@ -149,6 +149,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   freshState = hydrateOperatorState(sessionResult.state);
   let client = sessionResult.client;
 
+  freshState = (await refreshLiveChannelsFromApi(deps, freshState, client)) ?? freshState;
+  freshState = hydrateOperatorState(freshState);
+
   freshState = (await normalizeEnabledChannelsToConfig(deps, freshState)) ?? freshState;
   freshState = hydrateOperatorState(freshState);
 
@@ -168,6 +171,17 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   const enabledChannels = getEnabledChannels(deps.config, freshState);
+  const liveCoverage = getLiveChannelCoverage(deps.config, freshState);
+  const enabledEgChannels = enabledChannels.filter((item) => item.runtime.country === "EG");
+  const enabledEgInState = collectEnabledChannelIdsFromState(freshState).filter((channelId) => {
+    const country =
+      freshState.channels?.[channelId]?.country ??
+      getChannelConfig(deps.config, channelId)?.country ??
+      inferCountryFromChannelName(
+        freshState.pagerAccount?.liveChannels?.find((channel) => channel.id === channelId)?.name ?? "",
+      );
+    return country === "EG";
+  });
 
   if (!enabledChannels.length) {
     const liveCount = freshState.pagerAccount?.liveChannels?.length ?? 0;
@@ -177,7 +191,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
-  const enabledFolderIds = expandEnabledFolderIds(freshState, getEnabledFolderIds(freshState));
+  if (enabledEgInState.length && !enabledEgChannels.length) {
+    console.error(
+      `Pager worker: chat ${freshState.chatId} — Egypt channel enabled in settings but missing from poll list (${enabledEgInState.join(", ")}). Re-open «Каналы» and toggle Mahmoud Fathy.`,
+    );
+  }
+
+  const operatorFolderIds = getEnabledFolderIds(freshState);
+  const enabledFolderIds = expandEnabledFolderIds(freshState, operatorFolderIds);
   if (enabledFolderIds && enabledFolderIds.size === 0) {
     console.log(`Pager worker: chat ${freshState.chatId} — no status folders enabled`);
     return;
@@ -188,11 +209,23 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       .filter((folder) => folder.enabled)
       .map((folder) => folder.name)
       .join(", ");
-    console.log(`Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}]`);
+    const followUpFolderCount =
+      operatorFolderIds && enabledFolderIds
+        ? [...enabledFolderIds].filter((id) => !operatorFolderIds.has(id)).length
+        : 0;
+    console.log(
+      `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}]` +
+        (followUpFolderCount ? ` +funnel=${followUpFolderCount}` : ""),
+    );
   }
 
   const channelIds = enabledChannels.map((item) => item.channelId);
   const channelNames = enabledChannels.map((item) => item.channelName).join(", ");
+  if (liveCoverage.missingFromLive.length) {
+    console.warn(
+      `Pager worker: chat ${freshState.chatId} — enabled channels missing from live session: ${liveCoverage.missingFromLive.join(", ")}`,
+    );
+  }
 
   let conversations: PagerConversation[] = [];
   try {
@@ -212,8 +245,11 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       `Pager worker: chat ${freshState.chatId}`,
       `channels=[${channelNames}]`,
       `fetched=${conversations.length} conversations`,
+      `egPoll=${enabledEgChannels.map((item) => item.channelName).join(",") || "none"}`,
     ].join(" | "),
   );
+
+  logConversationCountsByChannel(enabledChannels, conversations, freshState.chatId);
 
   if (!conversations.length) {
     return;
@@ -437,6 +473,8 @@ async function processCmConversation(
     return false;
   }
 
+  await tryTakeConversationForProcessing(client, convId);
+
   const threadStep = cmInferStepFromThread(messages);
   const gapStep = cmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
@@ -640,6 +678,8 @@ async function processZmConversation(
   ) {
     return false;
   }
+
+  await tryTakeConversationForProcessing(client, convId);
 
   const threadStep = zmInferStepFromThread(messages);
   const gapStep = zmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
@@ -867,6 +907,8 @@ async function processEgConversation(
   ) {
     return false;
   }
+
+  await tryTakeConversationForProcessing(client, convId);
 
   const threadStep = egInferStepFromThread(messages);
   const gapStep = egFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
@@ -1197,6 +1239,7 @@ function getEnabledChannels(config: BotConfig, state: ChatState): EnabledChannel
   const enabled: EnabledChannel[] = [];
 
   if (liveChannels.length) {
+    const added = new Set<string>();
     for (const channel of liveChannels) {
       if (!enabledIds.has(channel.id)) {
         continue;
@@ -1220,22 +1263,175 @@ function getEnabledChannels(config: BotConfig, state: ChatState): EnabledChannel
         channelName: channel.name,
         runtime,
       });
+      added.add(channel.id);
+    }
+    for (const channelId of enabledIds) {
+      if (added.has(channelId)) {
+        continue;
+      }
+      const yamlChannel = getChannelConfig(config, channelId);
+      const liveChannel = liveChannels.find((channel) => channel.id === channelId);
+      const country =
+        state.channels?.[channelId]?.country ??
+        yamlChannel?.country ??
+        inferCountryFromChannelName(liveChannel?.name ?? yamlChannel?.name ?? "");
+      const bank = pickLiveTemplateBank(state, country);
+      const runtime =
+        state.channels?.[channelId] ??
+        ({
+          enabled: true,
+          country,
+          templateBank: yamlChannel?.templateBank ?? bank?.name,
+          templateBankId: bank?.id,
+        } satisfies ChannelRuntimeState);
+      enabled.push({
+        channelId,
+        channelName: liveChannel?.name ?? yamlChannel?.name ?? channelId.slice(0, 8),
+        runtime,
+      });
     }
     return enabled;
   }
 
   for (const channelId of enabledIds) {
-    const runtime = state.channels?.[channelId];
-    if (!runtime) {
-      continue;
-    }
+    const yamlChannel = getChannelConfig(config, channelId);
+    const country =
+      state.channels?.[channelId]?.country ??
+      yamlChannel?.country ??
+      inferCountryFromChannelName(yamlChannel?.name ?? "");
+    const bank = pickLiveTemplateBank(state, country);
+    const runtime =
+      state.channels?.[channelId] ??
+      ({
+        enabled: true,
+        country,
+        templateBank: yamlChannel?.templateBank ?? bank?.name,
+        templateBankId: bank?.id,
+      } satisfies ChannelRuntimeState);
     enabled.push({
       channelId,
-      channelName: channelId.slice(0, 8),
+      channelName: yamlChannel?.name ?? channelId.slice(0, 8),
       runtime,
     });
   }
   return enabled;
+}
+
+function logConversationCountsByChannel(
+  enabledChannels: EnabledChannel[],
+  conversations: PagerConversation[],
+  chatId: number,
+): void {
+  const counts = new Map<string, number>();
+  for (const conv of conversations) {
+    const channelId = conv.channelId || conv.channel?.id;
+    if (!channelId) {
+      continue;
+    }
+    counts.set(channelId, (counts.get(channelId) ?? 0) + 1);
+  }
+
+  const parts = enabledChannels.map((channel) => {
+    const count = counts.get(channel.channelId) ?? 0;
+    return `${channel.channelName}/${channel.runtime.country}=${count}`;
+  });
+  console.log(`Pager worker: chat ${chatId} — perChannel=[${parts.join(", ")}]`);
+}
+
+async function refreshLiveChannelsFromApi(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+): Promise<ChatState | undefined> {
+  try {
+    const liveChannels = await client.getChannels();
+    if (!liveChannels.length) {
+      return state;
+    }
+
+    const liveTemplateBanks = await client.getTemplateBanks().catch(() => []);
+    const channels: Record<string, ChannelRuntimeState> = { ...(state.channels ?? {}) };
+    for (const channel of liveChannels) {
+      const existing = channels[channel.id];
+      const yamlChannel = getChannelConfig(deps.config, channel.id);
+      const country =
+        existing?.country ??
+        yamlChannel?.country ??
+        inferCountryFromChannelName(channel.name);
+      const bank = pickLiveTemplateBank(
+        {
+          ...state,
+          pagerAccount: {
+            ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: state.updatedAt }),
+            liveTemplateBanks: liveTemplateBanks.map((item) => ({
+              id: item.id,
+              name: item.name,
+              replyCount: item.replyCount,
+            })),
+          },
+        },
+        country,
+      );
+      channels[channel.id] = {
+        enabled: existing?.enabled ?? collectEnabledChannelIdsFromState(state).includes(channel.id),
+        country,
+        templateBank: existing?.templateBank ?? yamlChannel?.templateBank ?? bank?.name,
+        templateBankId: existing?.templateBankId ?? bank?.id,
+      };
+    }
+
+    return deps.stateStore.patch(state.chatId, {
+      channels,
+      pagerAccount: {
+        ...(state.pagerAccount ?? { authMode: "cookies", connectedAt: state.updatedAt }),
+        liveChannels: liveChannels.map((channel) => ({
+          id: channel.id,
+          name: channel.name,
+          channelSource: channel.channelSource,
+        })),
+        liveTemplateBanks: liveTemplateBanks.map((bank) => ({
+          id: bank.id,
+          name: bank.name,
+          replyCount: bank.replyCount,
+        })),
+      },
+    });
+  } catch (error) {
+    console.warn(
+      `Pager worker: chat ${state.chatId} — live channel refresh failed:`,
+      formatError(error),
+    );
+    return state;
+  }
+}
+
+async function tryTakeConversationForProcessing(
+  client: PagerClient,
+  convId: string,
+): Promise<void> {
+  const operatorId = await client.probeOperatorUserId();
+  if (!operatorId) {
+    return;
+  }
+  try {
+    await client.takeConversation(convId, operatorId);
+  } catch (error) {
+    console.warn(`Pager worker: take ${convId.slice(0, 8)} failed:`, formatError(error));
+  }
+}
+
+function getLiveChannelCoverage(config: BotConfig, state: ChatState): {
+  enabledIds: string[];
+  missingFromLive: string[];
+} {
+  const enabledIds = collectEnabledChannelIdsFromState(state).filter((channelId) =>
+    isChannelAllowed(config, state, channelId),
+  );
+  const liveIds = new Set((state.pagerAccount?.liveChannels ?? []).map((channel) => channel.id));
+  return {
+    enabledIds,
+    missingFromLive: enabledIds.filter((channelId) => !liveIds.has(channelId)),
+  };
 }
 
 function collectEnabledChannelIdsFromState(state: ChatState): string[] {

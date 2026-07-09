@@ -280,14 +280,6 @@ function positiveSignal(
   );
 }
 
-function hasUsableFollowUp(text: string): boolean {
-  const t = (text || "").trim();
-  if (!t) {
-    return false;
-  }
-  return !/\b(arnaque|escroc|stop|non merci|je ne veux pas|je vais choisir ta maman)\b/i.test(t);
-}
-
 export function resolveCmFunnelScripts(
   effectiveStep: number,
   text: string,
@@ -305,6 +297,12 @@ export function resolveCmFunnelScripts(
   if (isRegistrationHelpRequest(t)) {
     if (regLinkSentInHistory(out)) {
       return ["07_chrome", "06_link"];
+    }
+    if (effectiveStep < 3) {
+      if (!cmScriptSentInHistory(out, "01_intro")) {
+        return ["01_intro", "01_intro_2"];
+      }
+      return [];
     }
     return [...registrationHelpScriptKeys("CM")];
   }
@@ -467,12 +465,11 @@ export function resolveCmFunnelScripts(
         wantsRegistrationLink(t) ||
         ["ready", "interested", "positive", "question"].includes(intent) ||
         signal ||
-        isClientReadyPhrase(t) ||
-        hasUsableFollowUp(t))
+        isClientReadyPhrase(t))
     ) {
       return [...CM_REG_BUNDLE];
     }
-    if (linkSent && !depositSentInHistory(out) && (signal || hasUsableFollowUp(t) || options?.hasImage)) {
+    if (linkSent && !depositSentInHistory(out) && (signal || options?.hasImage)) {
       return ["09_deposit"];
     }
     return [];
@@ -486,8 +483,13 @@ function isRegistrationHelpRequest(text: string): boolean {
   if (!t) {
     return false;
   }
+  if (/\b(vous voulez m'aide|veux m'aide|m'aider|aidez[- ]?moi|besoin d'aide)\b/i.test(t)) {
+    return false;
+  }
   return (
-    /\b(je ne sais pas|je sais pas|sais pas faire|pas faire|aide|help|comment faire)\b/i.test(t) ||
+    /\b(je ne sais pas|je sais pas|sais pas faire|pas faire|comment faire)\b/i.test(t) ||
+    /\b(aide|help).{0,24}(inscri|enregistr|compte|plateforme|lien|telecharg)\b/i.test(t) ||
+    /\b(inscri|enregistr|compte|plateforme|lien|telecharg).{0,24}(aide|help)\b/i.test(t) ||
     /\b(je connais pas|connais pas)\b/i.test(t) ||
     /\b(je ne vois pas|je vois pas|pas de plate ?forme|plateforme|telecharg|m[' ]inscrit|je fais comment)\b/i.test(
       t,

@@ -309,9 +309,6 @@ export function resolveZmFunnelScripts(
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
       return ["04_registration", "05_link"];
     }
-    if (hasUsableFollowUp(t) && explainSent && !linkSent) {
-      return ["04_registration", "05_link"];
-    }
     return [];
   }
 
@@ -335,9 +332,6 @@ export function resolveZmFunnelScripts(
     }
     if (linkSent && !depositSentInHistory(out) && (signal || intent === "joined")) {
       return ["06_deposit"];
-    }
-    if (explainSent && !linkSent && hasUsableFollowUp(t)) {
-      return ["04_registration", "05_link"];
     }
     return [];
   }

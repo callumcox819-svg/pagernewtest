@@ -27,7 +27,7 @@ export const EG_SCRIPT_SNIPPETS: Record<string, string> = {
 };
 
 export const EG_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
-  "01_intro": ["إنت من مصر", "انت من مصر", "أهلاً", "اهلا", "دخل إضافي"],
+  "01_intro": ["إنت من مصر", "انت من مصر", "أهلاً", "اهلا", "دخل إضافي", "أنا بساعد"],
   "02_how_it_works": ["الشغل بيمشي", "كود eg011", "365", "1100", "5%"],
   "03_egp_table": ["55 جنيه", "110 جنيه", "إيه اللي يناسبك"],
   "04_registration": ["eg011", "لينك التسجيل", "اختار الدولة", "مصر", "egp"],
@@ -288,7 +288,7 @@ export function resolveEgFunnelScripts(
       }
       return [];
     }
-    if (intent === "interested" || intent === "ready" || isGreeting(t) || hasUsableFollowUp(t)) {
+    if (intent === "interested" || intent === "ready" || intent === "question" || isGreeting(t) || hasUsableFollowUp(t)) {
       return ["01_intro"];
     }
     return [];
@@ -299,9 +299,6 @@ export function resolveEgFunnelScripts(
       return ["02_how_it_works"];
     }
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
-      return ["04_registration", "05_link"];
-    }
-    if (hasUsableFollowUp(t) && explainSent && !linkSent) {
       return ["04_registration", "05_link"];
     }
     return [];

@@ -17,7 +17,7 @@ const FR_POSITIVE =
 const FR_GREETING =
   /^(bonjour|bonsoir|salut|saluu+t|bjr|slt|hello|hi)([\s,!.]|$)/i;
 const FR_INTERESTED =
-  /\b(je veux|interesse|interesse|interessee|interessee|m'interesse|ca m'interesse|comment|explique|details|details|investir|gagner|j[' ]?ai vu votre publication|jai vu votre publication|j[' ]?ai vu votre pub|jai vu votre pub|publication|je suis interesse|suis interesse|commen[cç]ons)\b/i;
+  /\b(je veux|interesse|interesse|interessee|interessee|m'interesse|ca m'interesse|comment|explique|details|details|investir|gagner|j[' ]?ai vu votre publication|jai vu votre publication|j[' ]?ai vu votre pub|jai vu votre pub|publication|je suis interesse|suis interesse|commen[cç]ons|vous voulez m'aide|veux m'aide|m'aider|aidez[- ]?moi|besoin d'aide)\b/i;
 const FR_DECLINED =
   /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b|^non[.!]?$/i;
 const FR_REG_DONE =

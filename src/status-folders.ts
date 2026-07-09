@@ -75,14 +75,33 @@ export function getEnabledFolderIds(state: {
 
 export function isInProgressStatusConversation(conv: PagerConversation): boolean {
   const name = (conv.status?.name || "").trim().toLowerCase();
-  return /в процес|процес|process|рега|реєстраці|en cours/i.test(name);
+  return isFunnelFollowUpFolderName(name);
+}
+
+/** Status folders the bot moves chats into mid-funnel — must still receive follow-up replies. */
+export function isFunnelFollowUpFolderName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return /в процес|процес|process|рега|реєстраці|чекаю id|не заверш|en cours/i.test(normalized);
 }
 
 export function expandEnabledFolderIds(
-  _state: { statusFolders?: StatusFolderState[] },
+  state: { statusFolders?: StatusFolderState[] },
   enabledFolderIds: Set<string> | null,
 ): Set<string> | null {
-  return enabledFolderIds;
+  if (!enabledFolderIds) {
+    return null;
+  }
+  if (enabledFolderIds.has(ALL_INBOX_FOLDER_ID)) {
+    return enabledFolderIds;
+  }
+
+  const expanded = new Set(enabledFolderIds);
+  for (const folder of state.statusFolders ?? []) {
+    if (folder.id && isFunnelFollowUpFolderName(folder.name)) {
+      expanded.add(folder.id);
+    }
+  }
+  return expanded;
 }
 
 export function countApiStatusFolders(folders?: StatusFolderState[]): number {
