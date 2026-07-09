@@ -648,7 +648,7 @@ export class PagerClient {
         pageSize: String(pageSize),
       },
     });
-    return Array.isArray(payload) ? (payload as PagerMessage[]) : [];
+    return Array.isArray(payload) ? payload.map((item) => normalizePagerMessage(item)) : [];
   }
 
   async resolveSessionUserId(): Promise<string> {
@@ -1792,6 +1792,67 @@ export function normalizePagerConversation(raw: unknown): PagerConversation {
   };
 }
 
+export function normalizePagerMessage(raw: unknown): PagerMessage {
+  if (!raw || typeof raw !== "object") {
+    return { id: "" };
+  }
+
+  const record = raw as Record<string, unknown>;
+  const base = raw as PagerMessage;
+  const id = firstString(record.id, record._id, record.messageId, base.id) ?? "";
+  const createdAt = firstString(
+    record.createdAt,
+    record.created_at,
+    record.sentAt,
+    record.sent_at,
+    record.timestamp,
+    base.createdAt,
+  );
+  const messageDirection = firstString(
+    record.messageDirection,
+    record.message_direction,
+    record.direction,
+    record.type,
+    base.messageDirection,
+  );
+  const authorId = firstString(record.authorId, record.author_id, record.fromId, record.from_id, base.authorId);
+  const text = firstString(record.text, record.body, record.message, record.content, base.text);
+
+  return {
+    ...base,
+    id,
+    createdAt,
+    messageDirection,
+    authorId,
+    text,
+  };
+}
+
+export function isCustomerMessage(
+  message: PagerMessage,
+  conv?: PagerConversation,
+  operatorUserId?: string,
+): boolean {
+  if (isIncomingDirection(message.messageDirection)) {
+    return true;
+  }
+  const author = (message.authorId ?? "").trim();
+  if (!author) {
+    return false;
+  }
+  if (operatorUserId && author === operatorUserId) {
+    return false;
+  }
+  if (author.startsWith("user_")) {
+    return false;
+  }
+  const psid = firstString(conv?.clientPSID, conv?.client?.psid, conv?.client?.PSID);
+  if (psid && author === psid) {
+    return true;
+  }
+  return /^\d{5,}$/.test(author);
+}
+
 function extractPayloadArray(payload: unknown): unknown[] {
   if (Array.isArray(payload)) {
     return payload;
@@ -2162,7 +2223,13 @@ function formatError(error: unknown): string {
 
 export function isIncomingDirection(direction?: string): boolean {
   const normalized = (direction || "").toLowerCase();
-  return normalized === "incoming" || normalized === "in";
+  return (
+    normalized === "incoming" ||
+    normalized === "in" ||
+    normalized === "received" ||
+    normalized === "from_client" ||
+    normalized === "fromcustomer"
+  );
 }
 
 export function isOutgoingDirection(direction?: string): boolean {

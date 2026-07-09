@@ -15,6 +15,7 @@ import {
   assessReplyEligibility,
   conversationPriorityScore,
   findLatestIncomingMessage,
+  isCustomerWaitingInThread,
   shouldProcessConversation,
   shouldProcessIncomingMessage,
 } from "./conversation-reply.js";
@@ -125,9 +126,33 @@ async function processPagerAccounts(deps: WorkerDeps): Promise<void> {
     return;
   }
 
-  for (const state of connected) {
+  const ordered = [...connected].sort((left, right) => {
+    const leftEgCm = accountHasEgOrCm(left, deps.config);
+    const rightEgCm = accountHasEgOrCm(right, deps.config);
+    if (leftEgCm !== rightEgCm) {
+      return leftEgCm ? -1 : 1;
+    }
+    return 0;
+  });
+
+  for (const state of ordered) {
     await processOperatorAccount(deps, state);
   }
+}
+
+function accountHasEgOrCm(state: ChatState, config: BotConfig): boolean {
+  for (const channelId of collectEnabledChannelIdsFromState(state)) {
+    const country =
+      state.channels?.[channelId]?.country ??
+      getChannelConfig(config, channelId)?.country ??
+      inferCountryFromChannelName(
+        state.pagerAccount?.liveChannels?.find((channel) => channel.id === channelId)?.name ?? "",
+      );
+    if (country === "EG" || country === "CM") {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promise<void> {
@@ -267,7 +292,12 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     enabledChannels,
     channelIds,
   );
-  const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, MAX_CONVERSATIONS_PER_ACCOUNT);
+  const accountLimit = enabledChannels.some(
+    (item) => item.runtime.country === "EG" || item.runtime.country === "CM",
+  )
+    ? MAX_CONVERSATIONS_PER_ACCOUNT
+    : 80;
+  const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit);
   const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
   const egInWork = workQueue.filter((conv) =>
     egChannelIds.has(conv.channelId || conv.channel?.id || ""),
@@ -388,8 +418,11 @@ function prioritizeWorkQueue(
   );
 }
 
-function findLatestIncomingFromThread(messages: PagerMessage[]): PagerMessage | undefined {
-  return findLatestIncomingMessage(messages);
+function findLatestIncomingFromThread(
+  messages: PagerMessage[],
+  conv?: PagerConversation,
+): PagerMessage | undefined {
+  return findLatestIncomingMessage(messages, conv);
 }
 
 async function buildWorkQueue(
@@ -450,7 +483,12 @@ async function buildWorkQueue(
 
       try {
         const messages = await client.listMessages(conv.id, 1, 20);
-        const lastIncoming = findLatestIncomingFromThread(messages);
+        if (isCustomerWaitingInThread(enriched, messages)) {
+          selected.set(conv.id, enriched);
+          addedForChannel += 1;
+          continue;
+        }
+        const lastIncoming = findLatestIncomingFromThread(messages, enriched);
         if (lastIncoming && shouldProcessIncomingMessage(lastIncoming.createdAt, enriched)) {
           selected.set(conv.id, enriched);
           addedForChannel += 1;
@@ -520,7 +558,7 @@ async function processCmConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const lastIncoming = findLatestIncomingFromThread(sorted);
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv);
   if (!lastIncoming) {
     return false;
   }
@@ -726,7 +764,7 @@ async function processZmConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const lastIncoming = findLatestIncomingFromThread(sorted);
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv);
   if (!lastIncoming) {
     return false;
   }
@@ -951,7 +989,7 @@ async function processEgConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const lastIncoming = findLatestIncomingFromThread(sorted);
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv);
   if (!lastIncoming) {
     return false;
   }
@@ -1150,7 +1188,7 @@ async function processGenericConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const lastIncoming = findLatestIncomingFromThread(sorted);
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv);
   if (!lastIncoming) {
     return false;
   }

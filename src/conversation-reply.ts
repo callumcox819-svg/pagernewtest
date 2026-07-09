@@ -1,5 +1,5 @@
 import type { PagerConversation, PagerMessage } from "./pager-client.js";
-import { resolveLastMessageAt } from "./pager-client.js";
+import { isCustomerMessage, resolveLastMessageAt } from "./pager-client.js";
 import type { ConversationRuntimeState } from "./state-store.js";
 
 /** Brand-new customer messages (always processed). */
@@ -11,7 +11,13 @@ export type ReplyEligibility =
 
 export function isIncomingDirection(direction?: string): boolean {
   const value = (direction ?? "").trim().toLowerCase();
-  return value === "incoming" || value === "in";
+  return (
+    value === "incoming" ||
+    value === "in" ||
+    value === "received" ||
+    value === "from_client" ||
+    value === "fromcustomer"
+  );
 }
 
 export function isOutgoingDirection(direction?: string): boolean {
@@ -96,11 +102,41 @@ export function conversationPriorityScore(conv: PagerConversation): number {
   );
 }
 
-export function findLatestIncomingMessage(messages: PagerMessage[]): PagerMessage | undefined {
+export function findLatestIncomingMessage(
+  messages: PagerMessage[],
+  conv?: PagerConversation,
+): PagerMessage | undefined {
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  return sorted.find((message) => isIncomingDirection(message.messageDirection));
+  return sorted.find((message) => isCustomerMessage(message, conv));
+}
+
+export function isCustomerWaitingInThread(
+  conv: PagerConversation,
+  messages: PagerMessage[],
+): boolean {
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const latest = sorted[0];
+  if (!latest || !isCustomerMessage(latest, conv)) {
+    return false;
+  }
+  if (hasDeliveredReplyAfter(sorted, latest.createdAt ?? "")) {
+    return false;
+  }
+  if (shouldProcessIncomingMessage(latest.createdAt, conv)) {
+    return true;
+  }
+  if (hasUnreadMarkers(conv)) {
+    return true;
+  }
+  const state = (conv.conversationState ?? "").trim().toLowerCase();
+  if (state === "read" || conv.isUnread === false) {
+    return false;
+  }
+  return false;
 }
 
 export function hasDeliveredReplyAfter(messages: PagerMessage[], lastIncomingAt: string): boolean {
@@ -145,6 +181,10 @@ export function assessReplyEligibility(
   }
 
   if (shouldProcessIncomingMessage(lastIncomingAt, conv)) {
+    return { eligible: true };
+  }
+
+  if (isCustomerWaitingInThread(conv, sortedMessages)) {
     return { eligible: true };
   }
 
