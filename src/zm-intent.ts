@@ -13,12 +13,12 @@ export type ZmIntent =
   | "image_only";
 
 const INTERESTED =
-  /\b(interested|i'?m interested|i am interested|tell me more|teach me|need help|go ahead|very interested|want to learn|i want to invest|would like to join|count me in)\b/i;
+  /\b(interested|i'?m interested|i am interested|tell me more|teach me|need help|go ahead|very interested|want to learn|i want to invest|would like to join|count me in|assist me|kindly help|financial help|i want to know|tell me)\b/i;
 const POSITIVE =
-  /\b(yes|yess?|ok|okay|sure|alright|got it|i am|how can i start|how do i start|continue|proceed)\b/i;
+  /\b(yes|yess?|ok|okay|sure|alright|got it|i am|how can i start|how do i start|continue|proceed|yh|yeah|yea|yep|yez|yaah|cool|next|please)\b/i;
 const READY =
-  /\b(i'?m ready|am ready|let'?s start|start today|ready to start|i'?m in|i am ready|lets start|let us start)\b/i;
-const GREETING = /^(hi|hello|hey|good morning|good evening|morning|yo)([\s,!.]|$)/i;
+  /\b(i'?m ready|am ready|let'?s start|start today|ready to start|i'?m in|i am ready|lets start|let us start|much ready|me i'?m always ready|yes i am ready)\b/i;
+const GREETING = /^(hi|hello|hey|heyy|good morning|good evening|morning|yo)([\s,!.]|$)/i;
 const JOINED = /\b(have joined|joined|i joined|registered already|done registering|account created)\b/i;
 const DECLINED = /\b(not interested|no thanks|stop|scam|leave me alone)\b/i;
 const GAME_ID = /\b(17\d{6,}|16\d{6,}|account\s*\d+)\b/i;
@@ -81,7 +81,7 @@ export function classifyZmIntent(
   if (/^(ok|okay|yes|sure|alright)\.?$/i.test(t)) {
     return step >= 4 ? "ready" : "positive";
   }
-  if (/\?/.test(t) || /\b(what|how|why|when|explain)\b/i.test(t)) {
+  if (/\?/.test(t) || /\b(what|how|why|when|where|explain)\b/i.test(t)) {
     return "question";
   }
   if (options?.hasImage && !t) {
@@ -184,7 +184,7 @@ export function isRegistrationConfirmed(text: string): boolean {
 
 export function isRegistrationPending(text: string): boolean {
   const t = (text || "").trim();
-  return /\b(not yet|still registering|in progress|trying to register)\b/i.test(t);
+  return /\b(not yet|still registering|in progress|trying to register|its not registering|it'?s not registering|failing to register|couldn'?t manage|it refusing)\b/i.test(t);
 }
 
 export function isRegistrationHelpRequest(text: string): boolean {
@@ -192,7 +192,10 @@ export function isRegistrationHelpRequest(text: string): boolean {
   return (
     /\b(problem|issue|error|help).{0,30}(registration|register|account)\b/i.test(t) ||
     /\bscreenshot.{0,20}problem\b/i.test(t) ||
-    REGISTRATION_HELP.test(t)
+    REGISTRATION_HELP.test(t) ||
+    /\b(it'?s taking me to 1xbet|i already have a 1xbet account|already have a 1xbet account|it refusing|failing to register|couldn'?t manage|with registration)\b/i.test(
+      t,
+    )
   );
 }
 

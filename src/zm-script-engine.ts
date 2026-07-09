@@ -243,6 +243,14 @@ function isGreeting(text: string): boolean {
   );
 }
 
+function hasUsableFollowUp(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  return !/\b(fuck|scam|leave me alone|stop texting|not interested|no thanks|get out)\b/i.test(t);
+}
+
 export function resolveZmFunnelScripts(
   effectiveStep: number,
   text: string,
@@ -258,6 +266,14 @@ export function resolveZmFunnelScripts(
   }
 
   if (isRegistrationHelpRequest(t)) {
+    if (!regLinkSentInHistory(out) && effectiveStep < 3) {
+      if (!zmScriptSentInHistory(out, "01_intro")) {
+        return ["01_intro"];
+      }
+      if (!explainScriptsSentInHistory(out)) {
+        return ["02_how_it_works", "03_zmw_table"];
+      }
+    }
     return [...registrationHelpScriptKeys("ZM")];
   }
 
@@ -280,7 +296,7 @@ export function resolveZmFunnelScripts(
       }
       return [];
     }
-    if (intent === "interested" || signal || intent === "question" || isGreeting(t)) {
+    if (intent === "interested" || signal || intent === "question" || isGreeting(t) || hasUsableFollowUp(t)) {
       return ["01_intro"];
     }
     return [];
@@ -291,6 +307,9 @@ export function resolveZmFunnelScripts(
       return ["02_how_it_works", "03_zmw_table"];
     }
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
+      return ["04_registration", "05_link"];
+    }
+    if (hasUsableFollowUp(t) && explainSent && !linkSent) {
       return ["04_registration", "05_link"];
     }
     return [];
@@ -316,6 +335,9 @@ export function resolveZmFunnelScripts(
     }
     if (linkSent && !depositSentInHistory(out) && (signal || intent === "joined")) {
       return ["06_deposit"];
+    }
+    if (explainSent && !linkSent && hasUsableFollowUp(t)) {
+      return ["04_registration", "05_link"];
     }
     return [];
   }
@@ -345,7 +367,8 @@ export function resolveZmFunnelScripts(
         intent === "positive" ||
         intent === "interested" ||
         intent === "question" ||
-        isReadyForRegistration(t))
+        isReadyForRegistration(t) ||
+        hasUsableFollowUp(t))
     ) {
       return ["06_deposit"];
     }
@@ -360,7 +383,8 @@ export function resolveZmFunnelScripts(
       intent === "interested" ||
       intent === "image_only" ||
       signal ||
-      isReadyForRegistration(t))
+      isReadyForRegistration(t) ||
+      hasUsableFollowUp(t))
   ) {
     return ["07_game_id"];
   }

@@ -280,6 +280,14 @@ function positiveSignal(
   );
 }
 
+function hasUsableFollowUp(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  return !/\b(arnaque|escroc|stop|non merci|je ne veux pas|je vais choisir ta maman)\b/i.test(t);
+}
+
 export function resolveCmFunnelScripts(
   effectiveStep: number,
   text: string,
@@ -459,9 +467,13 @@ export function resolveCmFunnelScripts(
         wantsRegistrationLink(t) ||
         ["ready", "interested", "positive", "question"].includes(intent) ||
         signal ||
-        isClientReadyPhrase(t))
+        isClientReadyPhrase(t) ||
+        hasUsableFollowUp(t))
     ) {
       return [...CM_REG_BUNDLE];
+    }
+    if (linkSent && !depositSentInHistory(out) && (signal || hasUsableFollowUp(t) || options?.hasImage)) {
+      return ["09_deposit"];
     }
     return [];
   }

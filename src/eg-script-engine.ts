@@ -231,6 +231,14 @@ function isGreeting(text: string): boolean {
   );
 }
 
+function hasUsableFollowUp(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  return !/(مش مهتم|مش مهتمة|مش عايز|مش عاوز|لا شكرا|لا شكراً|سيبني|بطل|stop|scam)/i.test(t);
+}
+
 export function resolveEgFunnelScripts(
   effectiveStep: number,
   text: string,
@@ -280,7 +288,7 @@ export function resolveEgFunnelScripts(
       }
       return [];
     }
-    if (intent === "interested" || isGreeting(t)) {
+    if (intent === "interested" || intent === "ready" || isGreeting(t) || hasUsableFollowUp(t)) {
       return ["01_intro"];
     }
     return [];
@@ -291,6 +299,9 @@ export function resolveEgFunnelScripts(
       return ["02_how_it_works"];
     }
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
+      return ["04_registration", "05_link"];
+    }
+    if (hasUsableFollowUp(t) && explainSent && !linkSent) {
       return ["04_registration", "05_link"];
     }
     return [];
@@ -353,7 +364,8 @@ export function resolveEgFunnelScripts(
       intent === "positive" ||
       intent === "image_only" ||
       options?.hasImage ||
-      signal)
+      signal ||
+      hasUsableFollowUp(t))
   ) {
     return ["07_game_id"];
   }
