@@ -15,12 +15,14 @@ export type EgIntent =
 const AR_POSITIVE = /(تمام|اوك|أوك|حاضر|ماشي|نعم|اه|آه|طيب|موافق|ok|okay|yes)/i;
 const AR_GREETING = /^(اهلا|أهلا|اهلاً|أهلاً|مرحبا|مرحباً|السلام|سلام|هاي|هلو|hello|hi)([\s,!.]|$)/i;
 const AR_INTERESTED =
-  /(مهتم|مهتمة|عايز|عاوز|عايزه|عاوزه|أريد|اريد|اشرح|اشرحلي|ازاي|كيف|تفاصيل|نعم|ايوه|أيوه|مهتمين|حابب|حابة)/i;
+  /(أنا مهتم|انا مهتم|مهتم|مهتمة|عايز|عاوز|عايزه|عاوزه|أريد|اريد|اشرح|اشرحلي|ازاي|كيف|تفاصيل|نعم|ايوه|أيوه|مهتمين|حابب|حابة)/i;
 const AR_DECLINED = /(مش مهتم|مش مهتمة|مش عايز|مش عاوز|لا شكرا|لا شكراً|سيبني|بطل|stop|scam)/i;
 const AR_READY = /(جاهز|جاهزة|يلا|يلّا|ابدأ|ابدأوا|مستعد|مستعدة|خلاص|هنبدأ)/i;
 const AR_JOINED =
-  /(سجلت|سجلت حساب|عملت حساب|خلصت التسجيل|تم التسجيل|سجلت بالفعل|عملت التسجيل|registered|account created)/i;
-const AR_REG_PENDING = /(لسه|لسا|مش خلصت|بحاول|جاري التسجيل|not yet|still registering)/i;
+  /(سجلت|سجلت حساب|عملت حساب|خلصت التسجيل|تم التسجيل|سجلت بالفعل|عملت التسجيل|هسجل|هسجل وأبعتلك|هسجل وابعتلك|أسجل|اسجل|registered|account created)/i;
+const AR_REG_PENDING = /(لسه|لسا|مش خلصت|بحاول|جاري التسجيل|not yet|still registering|هسجل|أسجل|اسجل)/i;
+const AR_DEPOSIT_DONE =
+  /(عملت إيداع|عملت ايداع|عملت الإيداع|منتظر التأكيد|ايداع|إيداع|deposit|funded)/i;
 const GAME_ID = /\b(17\d{6,}|16\d{6,})\b/;
 const POSITIVE_EMOJI = /^[\s👍👌✅🔥❤️🙏😊🙂]+$/u;
 const AR_LINK_ASK =
@@ -45,6 +47,9 @@ export function classifyEgIntent(
   if (GAME_ID.test(t)) {
     return "game_id_text";
   }
+  if (isDepositConfirmed(t)) {
+    return "deposit_done";
+  }
   if (isRegistrationConfirmed(t)) {
     return "joined";
   }
@@ -58,7 +63,7 @@ export function classifyEgIntent(
     return "positive";
   }
   if (!t && options?.hasImage) {
-    return step < 5 ? "positive" : "image_only";
+    return step < 6 ? "positive" : "image_only";
   }
   if (POSITIVE_EMOJI.test(t) && t.length <= 4) {
     return "positive";
@@ -82,7 +87,7 @@ export function classifyEgIntent(
     return "question";
   }
   if (options?.hasImage && !t) {
-    return step < 5 ? "positive" : "image_only";
+    return step < 6 ? "positive" : "image_only";
   }
   if (AR_JOINED.test(t)) {
     return "joined";
@@ -115,9 +120,17 @@ export function wantsDetailsAfterIntro(text: string): boolean {
   if (!t) {
     return false;
   }
-  return (
-    /(اشرح|اشرحلي|ازاي|كيف|تفاصيل|عايز اعرف|عاوز اعرف|how|explain|details)/i.test(t)
+  return /(تفاصيل|تفاصيل أكثر|قولي تفاصيل|اشرح|اشرحلي|ازاي|كيف|تداول|يعني|أكثر|اكثر|how|explain|details|more)/i.test(
+    t,
   );
+}
+
+export function isDepositConfirmed(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  return AR_DEPOSIT_DONE.test(t);
 }
 
 export function wantsRegistrationLink(text: string): boolean {

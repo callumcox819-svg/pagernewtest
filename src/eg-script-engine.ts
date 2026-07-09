@@ -2,6 +2,7 @@ import type { PagerMessage } from "./pager-client.js";
 import {
   type EgIntent,
   classifyEgIntent,
+  isDepositConfirmed,
   isEgDepositTierChoice,
   isFunnelPositiveReaction,
   isReadyForRegistration,
@@ -26,10 +27,10 @@ export const EG_SCRIPT_SNIPPETS: Record<string, string> = {
 };
 
 export const EG_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
-  "01_intro": ["إنت من مصر", "انت من مصر", "أهلاً", "اهلا"],
-  "02_how_it_works": ["تمام كده", "الشغل بيمشي", "كود eg011"],
+  "01_intro": ["إنت من مصر", "انت من مصر", "أهلاً", "اهلا", "دخل إضافي"],
+  "02_how_it_works": ["الشغل بيمشي", "كود eg011", "365", "1100", "5%"],
   "03_egp_table": ["55 جنيه", "110 جنيه", "إيه اللي يناسبك"],
-  "04_registration": ["eg011", "هبعتلك اللينك", "google chrome", "اختار مصر"],
+  "04_registration": ["eg011", "لينك التسجيل", "اختار الدولة", "مصر", "egp"],
   "05_link": ["tinyurl.com", "egypt0011"],
   "06_deposit": ["إيداع", "الزر الأخضر", "الأخضر"],
   "07_game_id": ["يبدأ ب 17", "رقم العميل", "17"],
@@ -71,10 +72,7 @@ export function egScriptSentInHistory(outgoingTexts: string[], scriptKey: string
 }
 
 export function explainScriptsSentInHistory(outgoingTexts: string[]): boolean {
-  return (
-    egScriptSentInHistory(outgoingTexts, "02_how_it_works") &&
-    egScriptSentInHistory(outgoingTexts, "03_egp_table")
-  );
+  return egScriptSentInHistory(outgoingTexts, "02_how_it_works");
 }
 
 export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
@@ -110,10 +108,7 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("tinyurl.com") || t.includes("eg011") || t.includes("egypt0011")) {
     return 4;
   }
-  if (t.includes("55 جنيه") || t.includes("110 جنيه") || t.includes("إيه اللي يناسبك")) {
-    return 3;
-  }
-  if (t.includes("تمام كده") || t.includes("الشغل بيمشي")) {
+  if (t.includes("الشغل بيمشي") || t.includes("365") || t.includes("1100")) {
     return 2;
   }
   if (t.includes("إنت من مصر") || t.includes("انت من مصر") || t.includes("أهلاً") || t.includes("اهلا")) {
@@ -151,13 +146,13 @@ export function funnelStepFromScriptGaps(outgoingTexts: string[], storedStep = 0
   }
   step = Math.max(step, 1);
   if (!explainScriptsSentInHistory(outgoingTexts)) {
+    return Math.min(step, 1);
+  }
+  step = Math.max(step, 2);
+  if (!regLinkSentInHistory(outgoingTexts)) {
     return Math.min(step, 2);
   }
   step = Math.max(step, 3);
-  if (!regLinkSentInHistory(outgoingTexts)) {
-    return Math.min(step, 3);
-  }
-  step = Math.max(step, 4);
   if (!depositSentInHistory(outgoingTexts)) {
     return Math.min(step, 5);
   }
@@ -189,14 +184,15 @@ function shouldSendDepositScript(
   text: string,
   effectiveStep: number,
   outgoingTexts: string[],
+  options?: { hasImage?: boolean },
 ): boolean {
   if (!regLinkSentInHistory(outgoingTexts)) {
     return false;
   }
-  if (isRegistrationConfirmed(text) || isRegistrationPending(text)) {
+  if (isRegistrationConfirmed(text) || isRegistrationPending(text) || options?.hasImage) {
     return true;
   }
-  return effectiveStep >= 4 && !depositSentInHistory(outgoingTexts);
+  return effectiveStep >= 3 && !depositSentInHistory(outgoingTexts);
 }
 
 function positiveSignal(text: string, intent: EgIntent, effectiveStep: number): boolean {
@@ -211,9 +207,9 @@ function positiveSignal(text: string, intent: EgIntent, effectiveStep: number): 
 function wantsExplain(text: string, intent: EgIntent, effectiveStep: number): boolean {
   return (
     wantsDetailsAfterIntro(text) ||
-    ["interested", "positive", "ready", "question"].includes(intent) ||
-    positiveSignal(text, intent, effectiveStep) ||
-    isReadyForRegistration(text)
+    intent === "question" ||
+    (intent === "interested" && effectiveStep >= 1) ||
+    positiveSignal(text, intent, effectiveStep)
   );
 }
 
@@ -223,7 +219,8 @@ function wantsRegistrationNow(text: string, intent: EgIntent, effectiveStep: num
     isReadyForRegistration(text) ||
     isRegistrationPending(text) ||
     isEgDepositTierChoice(text) ||
-    ["ready", "interested", "positive", "question"].includes(intent) ||
+    intent === "ready" ||
+    intent === "positive" ||
     positiveSignal(text, intent, effectiveStep)
   );
 }
@@ -261,21 +258,21 @@ export function resolveEgFunnelScripts(
   const linkSent = regLinkSentInHistory(out);
   const signal = positiveSignal(t, intent, effectiveStep);
 
-  if ((explainSent || effectiveStep >= 3) && isEgDepositTierChoice(t) && !linkSent) {
+  if ((explainSent || effectiveStep >= 2) && isEgDepositTierChoice(t) && !linkSent) {
     return ["04_registration", "05_link"];
   }
 
   if (effectiveStep < 1) {
     if (introSent) {
       if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
-        return ["02_how_it_works", "03_egp_table"];
+        return ["02_how_it_works"];
       }
       if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
         return ["04_registration", "05_link"];
       }
       return [];
     }
-    if (intent === "interested" || signal || intent === "question" || isGreeting(t)) {
+    if (intent === "interested" || isGreeting(t)) {
       return ["01_intro"];
     }
     return [];
@@ -283,7 +280,7 @@ export function resolveEgFunnelScripts(
 
   if (effectiveStep < 3) {
     if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
-      return ["02_how_it_works", "03_egp_table"];
+      return ["02_how_it_works"];
     }
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
       return ["04_registration", "05_link"];
@@ -293,23 +290,23 @@ export function resolveEgFunnelScripts(
 
   if (effectiveStep < 4) {
     if (isRegistrationConfirmed(t) && linkSent) {
-      return shouldSendDepositScript(t, effectiveStep, out) ? ["06_deposit"] : [];
+      return shouldSendDepositScript(t, effectiveStep, out, options) ? ["06_deposit"] : [];
     }
 
     if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
-      return ["02_how_it_works", "03_egp_table"];
+      return ["02_how_it_works"];
     }
 
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep)) {
       if (linkSent) {
-        if (shouldSendDepositScript(t, effectiveStep, out) || signal || intent === "ready") {
+        if (shouldSendDepositScript(t, effectiveStep, out, options) || signal || intent === "ready") {
           return depositSentInHistory(out) ? [] : ["06_deposit"];
         }
         return [];
       }
       return ["04_registration", "05_link"];
     }
-    if (linkSent && !depositSentInHistory(out) && (signal || intent === "joined")) {
+    if (linkSent && !depositSentInHistory(out) && (signal || intent === "joined" || options?.hasImage)) {
       return ["06_deposit"];
     }
     return [];
@@ -320,39 +317,35 @@ export function resolveEgFunnelScripts(
   }
 
   if (effectiveStep < 7) {
-    if (isRegistrationConfirmed(t) || intent === "joined" || options?.hasImage) {
-      if (shouldSendDepositScript(t, effectiveStep, out)) {
-        return ["06_deposit"];
-      }
-    }
-    if (!linkSent && wantsRegistrationNow(t, intent, effectiveStep)) {
-      return ["04_registration", "05_link"];
-    }
     if (
       linkSent &&
       !depositSentInHistory(out) &&
-      (signal ||
+      (isRegistrationConfirmed(t) ||
+        isRegistrationPending(t) ||
+        intent === "joined" ||
+        options?.hasImage ||
+        signal ||
         intent === "ready" ||
-        intent === "positive" ||
-        intent === "interested" ||
-        intent === "question" ||
-        isReadyForRegistration(t))
+        intent === "positive")
     ) {
       return ["06_deposit"];
+    }
+    if (!linkSent && wantsRegistrationNow(t, intent, effectiveStep)) {
+      return ["04_registration", "05_link"];
     }
     return [];
   }
 
   if (
-    effectiveStep >= 7 &&
+    depositSentInHistory(out) &&
     !egScriptSentInHistory(out, "07_game_id") &&
-    (intent === "ready" ||
+    (isDepositConfirmed(t) ||
+      intent === "deposit_done" ||
+      intent === "ready" ||
       intent === "positive" ||
-      intent === "interested" ||
       intent === "image_only" ||
-      signal ||
-      isReadyForRegistration(t) ||
-      options?.hasImage)
+      options?.hasImage ||
+      signal)
   ) {
     return ["07_game_id"];
   }

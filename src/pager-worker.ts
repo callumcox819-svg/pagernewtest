@@ -34,6 +34,7 @@ import {
   collectOutgoingTexts as collectEgOutgoingTexts,
   funnelStepFromScriptGaps as egFunnelStepFromScriptGaps,
   inferStepFromThread as egInferStepFromThread,
+  regLinkSentInHistory as egRegLinkSentInHistory,
   regSendTriggersInProgress as egRegSendTriggersInProgress,
   resolveEgFunnelScripts,
 } from "./eg-script-engine.js";
@@ -1507,7 +1508,9 @@ async function tryHandleCustomerImage(
     const regLinkSent =
       ctx.channel.country === "ZM"
         ? zmRegLinkSentInHistory(ctx.outgoingTexts)
-        : cmRegLinkSentInHistory(ctx.outgoingTexts);
+        : ctx.channel.country === "EG"
+          ? egRegLinkSentInHistory(ctx.outgoingTexts)
+          : cmRegLinkSentInHistory(ctx.outgoingTexts);
     if (!regLinkSent) {
       return false;
     }
