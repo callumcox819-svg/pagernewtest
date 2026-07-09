@@ -16,7 +16,6 @@ import {
   conversationPriorityScore,
   findLatestIncomingMessage,
   shouldProcessConversation,
-  shouldQueueConversationFromThread,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -97,6 +96,9 @@ type WorkerDeps = {
 
 const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 400;
+/** Pager inbox page 1 for Egypt «Без статусу» — unread sit at the top. */
+const EG_NO_STATUS_INBOX_TOP = 30;
+const CM_INBOX_TOP = 25;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -446,62 +448,95 @@ async function buildWorkQueue(
     const queued = [...selected.values()].filter(
       (conv) => (conv.channelId || conv.channel?.id) === channel.channelId,
     ).length;
-    if (channel.runtime.country === "EG") {
-      return queued < 40;
+    if (channel.runtime.country === "EG" || channel.runtime.country === "CM") {
+      return queued < 10;
     }
     return queued === 0;
   });
 
   for (const channel of channelsNeedingScan) {
-    const headLimit = channel.runtime.country === "EG" ? 200 : 80;
-    const recentHead = await fetchChannelConversationHead(
-      client,
-      channel.channelId,
-      enabledFolderIds,
-      headLimit,
-      channel.runtime.country === "EG",
-    );
+    const noStatusEgInbox =
+      channel.runtime.country === "EG" &&
+      enabledFolderIds &&
+      (() => {
+        const { specific, allInbox } = normalizeEnabledFolders(enabledFolderIds);
+        return !allInbox && specific.has(NO_STATUS_FOLDER_ID);
+      })();
+
+    if (noStatusEgInbox) {
+      const inboxTop = await client.listConversations({
+        channelId: channel.channelId,
+        statusId: "",
+        page: 1,
+        pageSize: 50,
+      });
+      let addedForChannel = 0;
+      for (const conv of inboxTop.slice(0, EG_NO_STATUS_INBOX_TOP)) {
+        if (selected.has(conv.id)) {
+          continue;
+        }
+        selected.set(conv.id, conv);
+        addedForChannel += 1;
+      }
+      console.log(
+        `Pager worker: channel ${channel.channelName}/EG inbox top=${Math.min(inboxTop.length, EG_NO_STATUS_INBOX_TOP)} added=${addedForChannel} (page1 status=none)`,
+      );
+      continue;
+    }
+
+    if (channel.runtime.country === "CM") {
+      const inboxTop = await client.listConversations({
+        channelId: channel.channelId,
+        page: 1,
+        pageSize: 50,
+      });
+      let addedForChannel = 0;
+      for (const conv of inboxTop) {
+        if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
+          continue;
+        }
+        if (selected.has(conv.id)) {
+          continue;
+        }
+        if (shouldProcessConversation(conv)) {
+          selected.set(conv.id, conv);
+          addedForChannel += 1;
+        }
+        if (addedForChannel >= CM_INBOX_TOP) {
+          break;
+        }
+      }
+      if (addedForChannel) {
+        console.log(
+          `Pager worker: channel ${channel.channelName}/CM inbox top added=${addedForChannel}`,
+        );
+      }
+      continue;
+    }
+
+    const recentHead = folderScopedConversations
+      .filter((conv) => (conv.channelId || conv.channel?.id) === channel.channelId)
+      .sort(
+        (left, right) =>
+          Date.parse(resolveLastMessageAt(right) ?? "") - Date.parse(resolveLastMessageAt(left) ?? ""),
+      )
+      .slice(0, 30);
 
     let addedForChannel = 0;
-    let inspected = 0;
     for (const conv of recentHead) {
       if (selected.has(conv.id)) {
         continue;
       }
-
-      let enriched = conv;
-      try {
-        const fresh = await client.openConversation(conv.id);
-        if (fresh) {
-          enriched = { ...conv, ...fresh };
-        }
-      } catch {
-        // keep list snapshot
-      }
-
-      if (shouldProcessConversation(enriched)) {
-        selected.set(conv.id, enriched);
+      if (shouldProcessConversation(conv)) {
+        selected.set(conv.id, conv);
         addedForChannel += 1;
-        continue;
-      }
-
-      try {
-        inspected += 1;
-        const messages = await client.listMessages(conv.id, 1, 30);
-        if (
-          shouldQueueConversationFromThread(enriched, messages, channel.runtime.country)
-        ) {
-          selected.set(conv.id, enriched);
-          addedForChannel += 1;
-        }
-      } catch {
-        // skip candidate
       }
     }
-
-    console.log(
-      `Pager worker: channel ${channel.channelName}/${channel.runtime.country} scan head=${recentHead.length} inspected=${inspected} added=${addedForChannel} queued=${[...selected.values()].filter((conv) => (conv.channelId || conv.channel?.id) === channel.channelId).length}`,
-    );
+    if (addedForChannel) {
+      console.log(
+        `Pager worker: channel ${channel.channelName}/${channel.runtime.country} cached head added=${addedForChannel}`,
+      );
+    }
   }
 
   if (!selected.size && channelIds.length) {
@@ -511,63 +546,6 @@ async function buildWorkQueue(
   }
 
   return [...selected.values()];
-}
-
-async function fetchChannelConversationHead(
-  client: PagerClient,
-  channelId: string,
-  enabledFolderIds: Set<string> | null,
-  limit: number,
-  preferNoStatusApi: boolean,
-): Promise<PagerConversation[]> {
-  const collected = new Map<string, PagerConversation>();
-  const noStatusOnly =
-    preferNoStatusApi &&
-    enabledFolderIds &&
-    (() => {
-      const { specific, allInbox } = normalizeEnabledFolders(enabledFolderIds);
-      return !allInbox && specific.has(NO_STATUS_FOLDER_ID);
-    })();
-
-  const loadPages = async (statusId?: string) => {
-    for (let page = 1; page <= 4; page += 1) {
-      const batch = await client.listConversations({
-        channelId,
-        page,
-        pageSize: 100,
-        ...(statusId !== undefined ? { statusId } : {}),
-      });
-      if (!batch.length) {
-        break;
-      }
-      for (const conv of batch) {
-        if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
-          continue;
-        }
-        collected.set(conv.id, conv);
-        if (collected.size >= limit) {
-          return;
-        }
-      }
-      if (batch.length < 100) {
-        break;
-      }
-    }
-  };
-
-  if (noStatusOnly) {
-    await loadPages("");
-  }
-  if (collected.size < limit) {
-    await loadPages(undefined);
-  }
-
-  return [...collected.values()]
-    .sort(
-      (left, right) =>
-        Date.parse(resolveLastMessageAt(right) ?? "") - Date.parse(resolveLastMessageAt(left) ?? ""),
-    )
-    .slice(0, limit);
 }
 
 async function processConversation(
