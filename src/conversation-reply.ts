@@ -82,13 +82,19 @@ export function isConversationUnread(conv: PagerConversation): boolean {
   return false;
 }
 
-/** Process only new incoming messages or older still-unread inbox chats. */
+/** Process chats where the customer spoke last and the thread still needs a reply. */
 export function shouldProcessConversation(conv: PagerConversation): boolean {
   if (isFreshCustomerMessage(resolveLastMessageAt(conv))) {
     return true;
   }
   if (hasUnreadMarkers(conv)) {
     return true;
+  }
+  if (isIncomingDirection(conv.lastMessageDirection)) {
+    const state = (conv.conversationState ?? "").trim().toLowerCase();
+    if (state !== "read" && conv.isUnread !== false) {
+      return true;
+    }
   }
   return false;
 }
@@ -205,6 +211,11 @@ export function isCustomerWaitingInThread(
     return false;
   }
 
+  const latest = sortMessagesNewestFirst(messages)[0];
+  if (latest && isCustomerMessage(latest, conv)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -230,10 +241,6 @@ export function assessReplyEligibility(
 
   if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt, conv)) {
     return { eligible: false, reason: "replied_after_in_thread", markSeen: true };
-  }
-
-  if (convState.lastCustomerMessageId === lastIncoming.id && convState.lastReplyAt) {
-    return { eligible: false, reason: "already_replied_to_message" };
   }
 
   if (shouldProcessIncomingMessage(lastIncomingAt, conv)) {

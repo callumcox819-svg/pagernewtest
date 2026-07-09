@@ -456,11 +456,15 @@ async function buildWorkQueue(
 
   for (const channel of channelsNeedingScan) {
     if (channel.runtime.country === "CM" || channel.runtime.country === "EG") {
-      const inboxTop = await client.listConversations({
-        channelId: channel.channelId,
-        page: 1,
-        pageSize: 50,
-      });
+      const inboxTop = (
+        await client.listConversations({
+          channelId: channel.channelId,
+          page: 1,
+          pageSize: 50,
+        })
+      ).sort(
+        (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+      );
       let addedForChannel = 0;
       for (const conv of inboxTop) {
         if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
