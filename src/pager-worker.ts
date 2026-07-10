@@ -37,6 +37,7 @@ import {
 import {
   classifyEgMessage,
   collectOutgoingTexts as collectEgOutgoingTexts,
+  egScriptSentInHistory,
   explainScriptsSentInHistory,
   funnelStepFromScriptGaps as egFunnelStepFromScriptGaps,
   inferStepFromThread as egInferStepFromThread,
@@ -85,6 +86,7 @@ import {
   conversationAllowedInFolders,
   getEnabledFolderIds,
   hasEnabledStatusFolders,
+  isNoStatusConversation,
 } from "./status-folders.js";
 import type { TemplateRole } from "./config.js";
 import type { TelegramApi } from "./telegram-api.js";
@@ -99,7 +101,7 @@ type WorkerDeps = {
 const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 400;
 const INBOX_TOP = 25;
-const INBOX_TOP_EG_CM = 40;
+const INBOX_TOP_EG_CM = 80;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -1054,6 +1056,10 @@ async function processEgConversation(
     explainScriptsSentInHistory(outgoingTexts) &&
     !egRegLinkSentInHistory(outgoingTexts) &&
     isEgDepositTierChoice(latestCustomerText);
+  const egNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !egScriptSentInHistory(outgoingTexts, "01_intro") &&
+    Boolean(latestCustomerText);
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -1064,7 +1070,11 @@ async function processEgConversation(
       convState,
       lastIncoming,
       sorted,
-      { bypass: awaitingRegAfterTierChoice, countryLabel: "EG", country: "EG" },
+      {
+        bypass: awaitingRegAfterTierChoice || egNewLeadBypass,
+        countryLabel: "EG",
+        country: "EG",
+      },
     ))
   ) {
     return false;

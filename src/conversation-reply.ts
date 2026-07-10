@@ -207,11 +207,6 @@ export function isCustomerWaitingInThread(
     return true;
   }
 
-  const state = (conv.conversationState ?? "").trim().toLowerCase();
-  if (state === "read" || conv.isUnread === false) {
-    return false;
-  }
-
   const latest = sortMessagesNewestFirst(messages)[0];
   if (latest && isCustomerMessage(latest, conv)) {
     return true;
