@@ -36,6 +36,8 @@ import {
   regLinkSentInHistory as cmRegLinkSentInHistory,
   regSendTriggersInProgress as cmRegSendTriggersInProgress,
   resolveCmFunnelScripts,
+  limitCmScriptsForCustomerTurn,
+  CM_REG_SEND_KEYS,
   tierSentInHistory,
 } from "./cm-script-engine.js";
 import {
@@ -48,6 +50,8 @@ import {
   regLinkSentInHistory as egRegLinkSentInHistory,
   regSendTriggersInProgress as egRegSendTriggersInProgress,
   resolveEgFunnelScripts,
+  limitEgScriptsForCustomerTurn,
+  EG_REG_SEND_KEYS,
 } from "./eg-script-engine.js";
 import {
   classifyZmMessage,
@@ -60,6 +64,9 @@ import {
   statusMoveTriggersInProgress as zmStatusMoveTriggersInProgress,
   resolveZmFunnelScripts,
   zmScriptSentInHistory,
+  limitZmScriptsForCustomerTurn,
+  ZM_EXPLAIN_SEND_KEYS,
+  ZM_REG_SEND_KEYS,
 } from "./zm-script-engine.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
 import { extractProofImageUrl, resolveMessageReaction } from "./message-attachments.js";
@@ -110,8 +117,24 @@ type WorkerDeps = {
 
 const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 400;
+const MAX_CONVERSATIONS_ZM_ACCOUNT = 30;
 const INBOX_TOP = 25;
 const INBOX_TOP_EG_CM = 30;
+
+/** Prevents double-reply to the same customer line within one worker cycle. */
+const handledCustomerTurns = new Set<string>();
+
+function customerTurnKey(convId: string, customerMessageId: string): string {
+  return `${convId}:${customerMessageId}`;
+}
+
+function markCustomerTurnHandled(convId: string, customerMessageId: string): void {
+  handledCustomerTurns.add(customerTurnKey(convId, customerMessageId));
+}
+
+function isCustomerTurnHandled(convId: string, customerMessageId: string): boolean {
+  return handledCustomerTurns.has(customerTurnKey(convId, customerMessageId));
+}
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -151,9 +174,13 @@ async function processPagerAccounts(deps: WorkerDeps): Promise<void> {
     return 0;
   });
 
-  for (const state of ordered) {
-    await processOperatorAccount(deps, state);
-  }
+  await Promise.all(
+    ordered.map((state) =>
+      processOperatorAccount(deps, state).catch((error) => {
+        console.error(`Pager worker: account ${state.chatId} failed:`, formatError(error));
+      }),
+    ),
+  );
 }
 
 function accountHasEgOrCm(state: ChatState, config: BotConfig): boolean {
@@ -172,6 +199,7 @@ function accountHasEgOrCm(state: ChatState, config: BotConfig): boolean {
 }
 
 async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promise<void> {
+  handledCustomerTurns.clear();
   let freshState = hydrateOperatorState((await deps.stateStore.get(state.chatId)) ?? state);
 
   if (freshState.paused) {
@@ -308,18 +336,30 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     (item) => item.runtime.country === "EG" || item.runtime.country === "CM",
   )
     ? MAX_CONVERSATIONS_PER_ACCOUNT
-    : 80;
-  const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
-  const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit).sort(
-    (left, right) => {
-      const leftEg = egChannelIds.has(left.channelId || left.channel?.id || "");
-      const rightEg = egChannelIds.has(right.channelId || right.channel?.id || "");
-      if (leftEg !== rightEg) {
-        return leftEg ? -1 : 1;
-      }
-      return conversationPriorityScore(right) - conversationPriorityScore(left);
-    },
+    : MAX_CONVERSATIONS_ZM_ACCOUNT;
+  const egChannelIds = new Set(
+    enabledChannels.filter((item) => item.runtime.country === "EG").map((item) => item.channelId),
   );
+  const cmChannelIds = new Set(
+    enabledChannels.filter((item) => item.runtime.country === "CM").map((item) => item.channelId),
+  );
+  const prioritizedConversations = prioritizeWorkQueue(
+    workQueue,
+    channelIds,
+    accountLimit,
+    enabledChannels.some((item) => item.runtime.country === "EG" || item.runtime.country === "CM"),
+  ).sort((left, right) => {
+    const leftChannelId = left.channelId || left.channel?.id || "";
+    const rightChannelId = right.channelId || right.channel?.id || "";
+    const score = (channelId: string) =>
+      egChannelIds.has(channelId) ? 0 : cmChannelIds.has(channelId) ? 1 : 2;
+    const leftScore = score(leftChannelId);
+    const rightScore = score(rightChannelId);
+    if (leftScore !== rightScore) {
+      return leftScore - rightScore;
+    }
+    return conversationPriorityScore(right) - conversationPriorityScore(left);
+  });
   const egInWork = workQueue.filter((conv) =>
     egChannelIds.has(conv.channelId || conv.channel?.id || ""),
   ).length;
@@ -405,12 +445,15 @@ function prioritizeWorkQueue(
   conversations: PagerConversation[],
   channelIds: string[],
   limit: number,
+  egCmAccount = false,
 ): PagerConversation[] {
   const scored = [...conversations].sort(
     (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
   );
   const selected = new Map<string, PagerConversation>();
-  const minPerChannel = Math.max(120, Math.floor(limit / Math.max(channelIds.length, 1)));
+  const minPerChannel = egCmAccount
+    ? Math.max(20, Math.floor(limit / Math.max(channelIds.length, 1)))
+    : Math.min(25, Math.max(8, Math.floor(limit / Math.max(channelIds.length, 1))));
 
   for (const channelId of channelIds) {
     let picked = 0;
@@ -662,6 +705,8 @@ async function processCmConversation(
       isRegistrationAccountQuestion(latestCustomerText) ||
       isCmRegistrationHelpRequest(latestCustomerText));
 
+  const operatorUserId = await client.probeOperatorUserId();
+
   if (
     !(await ensureCustomerMessageEligible(
       deps,
@@ -673,11 +718,17 @@ async function processCmConversation(
       sorted,
       {
         bypass: awaitingRegAfterTierChoice,
+        forceContinuation: awaitingRegAfterTierChoice,
+        operatorUserId,
         countryLabel: "CM",
         country: "CM",
       },
     ))
   ) {
+    return false;
+  }
+
+  if (isCustomerTurnHandled(convId, lastIncoming.id) && !awaitingRegAfterTierChoice) {
     return false;
   }
 
@@ -732,13 +783,14 @@ async function processCmConversation(
     messageReaction,
   });
 
-  const scriptKeys = resolveCmFunnelScripts(
+  let scriptKeys = resolveCmFunnelScripts(
     effectiveStep,
     latestCustomerText,
     intent,
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
+  scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
 
   if (!scriptKeys.length) {
     console.log(
@@ -758,6 +810,8 @@ async function processCmConversation(
   );
 
   let sentAny = false;
+  const allowMultiSend =
+    scriptKeys.includes("01_intro") || scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -801,7 +855,20 @@ async function processCmConversation(
       return sentAny;
     }
     sentAny = true;
+    markCustomerTurnHandled(convId, lastIncoming.id);
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
     await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
   }
 
   if (!sentAny) {
@@ -868,6 +935,7 @@ async function processZmConversation(
   const outgoingTexts = collectZmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const operatorUserId = await client.probeOperatorUserId();
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -879,11 +947,16 @@ async function processZmConversation(
       lastIncoming,
       sorted,
       {
+        operatorUserId,
         countryLabel: "ZM",
         country: "ZM",
       },
     ))
   ) {
+    return false;
+  }
+
+  if (isCustomerTurnHandled(convId, lastIncoming.id)) {
     return false;
   }
 
@@ -938,13 +1011,14 @@ async function processZmConversation(
     messageReaction,
   });
 
-  const scriptKeys = resolveZmFunnelScripts(
+  let scriptKeys = resolveZmFunnelScripts(
     effectiveStep,
     latestCustomerText,
     intent,
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
+  scriptKeys = limitZmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
 
   if (!scriptKeys.length) {
     console.log(
@@ -964,6 +1038,10 @@ async function processZmConversation(
   );
 
   let sentAny = false;
+  const allowMultiSend =
+    scriptKeys.includes("01_intro") ||
+    scriptKeys.some((key) => ZM_EXPLAIN_SEND_KEYS.has(key)) ||
+    scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key));
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1003,6 +1081,16 @@ async function processZmConversation(
       return sentAny;
     }
     sentAny = true;
+    markCustomerTurnHandled(convId, lastIncoming.id);
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
     if (scriptKey === "07_game_id") {
       const attachment = resolveScriptAttachment("ZM", scriptKey);
       if (attachment) {
@@ -1031,6 +1119,9 @@ async function processZmConversation(
       }
     }
     await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
   }
 
   if (!sentAny) {
@@ -1106,13 +1197,7 @@ async function processEgConversation(
     !egRegLinkSentInHistory(outgoingTexts) &&
     (isEgDepositTierChoice(latestCustomerText) || tierChosenRecently);
 
-  if (
-    convState.lastCustomerMessageId === lastIncoming.id &&
-    convState.lastReplyAt &&
-    !awaitingRegAfterTierChoice
-  ) {
-    return false;
-  }
+  const operatorUserId = await client.probeOperatorUserId();
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -1125,11 +1210,17 @@ async function processEgConversation(
       sorted,
       {
         bypass: awaitingRegAfterTierChoice,
+        forceContinuation: awaitingRegAfterTierChoice,
+        operatorUserId,
         countryLabel: "EG",
         country: "EG",
       },
     ))
   ) {
+    return false;
+  }
+
+  if (isCustomerTurnHandled(convId, lastIncoming.id) && !awaitingRegAfterTierChoice) {
     return false;
   }
 
@@ -1184,13 +1275,14 @@ async function processEgConversation(
     messageReaction,
   });
 
-  const scriptKeys = resolveEgFunnelScripts(
+  let scriptKeys = resolveEgFunnelScripts(
     effectiveStep,
     latestCustomerText,
     intent,
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
+  scriptKeys = limitEgScriptsForCustomerTurn(scriptKeys, outgoingTexts);
 
   if (!scriptKeys.length) {
     console.log(
@@ -1210,6 +1302,10 @@ async function processEgConversation(
   );
 
   let sentAny = false;
+  const allowMultiSend =
+    scriptKeys.includes("01_intro") ||
+    scriptKeys.includes("02_how_it_works") ||
+    scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key));
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1249,7 +1345,20 @@ async function processEgConversation(
       return sentAny;
     }
     sentAny = true;
+    markCustomerTurnHandled(convId, lastIncoming.id);
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
     await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
   }
 
   if (!sentAny) {
@@ -1314,6 +1423,8 @@ async function processGenericConversation(
     return false;
   }
 
+  const operatorUserId = await client.probeOperatorUserId();
+
   if (
     !(await ensureCustomerMessageEligible(
       deps,
@@ -1323,6 +1434,7 @@ async function processGenericConversation(
       convState,
       lastIncoming,
       sorted,
+      { operatorUserId, country: channel.country },
     ))
   ) {
     return false;
@@ -1765,7 +1877,13 @@ async function ensureCustomerMessageEligible(
   convState: ConversationRuntimeState,
   lastIncoming: PagerMessage,
   sorted: PagerMessage[],
-  options?: { bypass?: boolean; countryLabel?: string; country?: "ZM" | "CM" | "EG" },
+  options?: {
+    bypass?: boolean;
+    forceContinuation?: boolean;
+    operatorUserId?: string;
+    countryLabel?: string;
+    country?: "ZM" | "CM" | "EG";
+  },
 ): Promise<boolean> {
   const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
   if (!options?.bypass && !isActionableCustomerMessage(conv, lastIncomingAt)) {
@@ -1784,6 +1902,8 @@ async function ensureCustomerMessageEligible(
 
   const eligibility = assessReplyEligibility(conv, convState, lastIncoming, sorted, {
     country: options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | undefined),
+    forceContinuation: options?.forceContinuation,
+    operatorUserId: options?.operatorUserId,
   });
   if (eligibility.eligible) {
     return true;
