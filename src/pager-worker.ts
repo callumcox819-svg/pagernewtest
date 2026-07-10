@@ -18,7 +18,7 @@ import {
   isActionableCustomerMessage,
   parseMessageTimestamp,
   recentCustomerMessageTexts,
-  shouldProcessConversation,
+  shouldQueueConversation,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -474,7 +474,7 @@ async function buildWorkQueue(
       if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
         continue;
       }
-      if (!shouldProcessConversation(conv)) {
+      if (!shouldQueueConversation(conv)) {
         continue;
       }
       selected.set(conv.id, conv);
@@ -483,13 +483,38 @@ async function buildWorkQueue(
         break;
       }
     }
+    if (addedForChannel === 0) {
+      let fallback = 0;
+      for (const conv of folderScopedConversations) {
+        if ((conv.channelId || conv.channel?.id) !== channel.channelId) {
+          continue;
+        }
+        if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
+          continue;
+        }
+        if (!shouldQueueConversation(conv)) {
+          continue;
+        }
+        selected.set(conv.id, conv);
+        fallback += 1;
+        if (fallback >= INBOX_TOP_EG_CM) {
+          break;
+        }
+      }
+      addedForChannel = fallback;
+      if (fallback) {
+        console.log(
+          `Pager worker: channel ${channel.channelName}/${channel.runtime.country} folder fallback=${fallback}`,
+        );
+      }
+    }
     console.log(
       `Pager worker: channel ${channel.channelName}/${channel.runtime.country} inbox head=${addedForChannel}`,
     );
   }
 
   for (const conv of folderScopedConversations) {
-    if (shouldProcessConversation(conv)) {
+    if (shouldQueueConversation(conv)) {
       selected.set(conv.id, conv);
     }
   }
@@ -526,7 +551,7 @@ async function buildWorkQueue(
         if (selected.has(conv.id)) {
           continue;
         }
-        if (shouldProcessConversation(conv)) {
+        if (shouldQueueConversation(conv)) {
           selected.set(conv.id, conv);
           addedForChannel += 1;
         }
@@ -555,7 +580,7 @@ async function buildWorkQueue(
       if (selected.has(conv.id)) {
         continue;
       }
-      if (shouldProcessConversation(conv)) {
+      if (shouldQueueConversation(conv)) {
         selected.set(conv.id, conv);
         addedForChannel += 1;
       }
@@ -1746,7 +1771,7 @@ async function ensureCustomerMessageEligible(
   if (!options?.bypass && !isActionableCustomerMessage(conv, lastIncomingAt)) {
     const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
     console.log(
-      `Pager worker: skip ${convId.slice(0, 8)}${label} — not_fresh_or_unread (text=${truncate((lastIncoming.text || "").trim())})`,
+      `Pager worker: skip ${convId.slice(0, 8)}${label} — not_actionable (text=${truncate((lastIncoming.text || "").trim())})`,
     );
     if (convState.lastCustomerMessageId !== lastIncoming.id) {
       await patchConversationState(deps.stateStore, state.chatId, convId, {

@@ -202,19 +202,15 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
     return true;
   }
   if (!linkSent) {
-    return (
-      isEgJoinOrRegistrationQuestion(customerText) ||
-      isEgDepositTierChoice(customerText) ||
-      isReadyForRegistration(customerText) ||
-      isRegistrationHelpRequest(customerText) ||
-      wantsRegistrationLink(customerText)
-    );
+    return explainSent;
   }
   if (!depositSent) {
     return (
       isRegistrationConfirmed(customerText) ||
       isRegistrationPending(customerText) ||
-      isRegistrationHelpRequest(customerText)
+      isRegistrationHelpRequest(customerText) ||
+      isEgJoinOrRegistrationQuestion(customerText) ||
+      isReadyForRegistration(customerText)
     );
   }
   if (!gameIdSent) {

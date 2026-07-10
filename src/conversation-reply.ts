@@ -7,18 +7,51 @@ import {
 import type { ConversationRuntimeState } from "./state-store.js";
 import type { CountryCode } from "./config.js";
 import { isAutomatedFunnelOutgoing } from "./funnel-outbound.js";
+import { egFunnelNeedsContinuation } from "./eg-script-engine.js";
+import { isInProgressStatusConversation } from "./status-folders.js";
 
-/** Brand-new customer messages (always processed). */
-export const FRESH_CUSTOMER_MESSAGE_MS = 30 * 60 * 1000;
+/** Customer message is new enough to auto-reply. */
+export const FRESH_CUSTOMER_MESSAGE_MS = 2 * 60 * 60 * 1000;
+
+/** Max age when Pager omits unread flags but customer spoke last. */
+export const MAX_ACTIONABLE_AGE_MS = 6 * 60 * 60 * 1000;
 
 export function isActionableCustomerMessage(
   conv: PagerConversation,
   lastIncomingAt?: string,
 ): boolean {
+  const at = lastIncomingAt ?? resolveLastMessageAt(conv);
+
   if (hasUnreadMarkers(conv)) {
     return true;
   }
-  return isFreshCustomerMessage(lastIncomingAt);
+  if (isFreshCustomerMessage(at)) {
+    return true;
+  }
+
+  if (isInProgressStatusConversation(conv)) {
+    return false;
+  }
+
+  if (!isIncomingDirection(conv.lastMessageDirection)) {
+    return false;
+  }
+
+  const state = (conv.conversationState ?? "").trim().toLowerCase();
+  if (state === "read") {
+    return false;
+  }
+
+  const ts = Date.parse(parseMessageTimestamp(at));
+  if (!Number.isFinite(ts) || Date.now() - ts > MAX_ACTIONABLE_AGE_MS) {
+    return false;
+  }
+
+  return true;
+}
+
+export function shouldQueueConversation(conv: PagerConversation): boolean {
+  return isActionableCustomerMessage(conv, resolveLastMessageAt(conv));
 }
 
 export type ReplyEligibility =
@@ -98,9 +131,9 @@ export function isConversationUnread(conv: PagerConversation): boolean {
   return false;
 }
 
-/** Queue only chats with an unread marker or a message from the last 30 minutes. */
+/** @deprecated Use shouldQueueConversation */
 export function shouldProcessConversation(conv: PagerConversation): boolean {
-  return isActionableCustomerMessage(conv, resolveLastMessageAt(conv));
+  return shouldQueueConversation(conv);
 }
 
 export function shouldProcessIncomingMessage(lastIncomingAt?: string, conv?: PagerConversation): boolean {
@@ -259,14 +292,39 @@ export function assessReplyEligibility(
   options?: { country?: "ZM" | "CM" | "EG" },
 ): ReplyEligibility {
   const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
+  const customerText = (lastIncoming.text || "").trim();
 
   if (!isActionableCustomerMessage(conv, lastIncomingAt)) {
-    return { eligible: false, reason: "not_fresh_or_unread", markSeen: true };
+    return { eligible: false, reason: "not_actionable", markSeen: true };
   }
 
   if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt, conv, undefined, options?.country)) {
+    if (
+      options?.country === "EG" &&
+      isFreshCustomerMessage(lastIncomingAt) &&
+      egFunnelNeedsContinuation(
+        customerText,
+        collectOutgoingTextsFromThread(sortedMessages),
+      )
+    ) {
+      return { eligible: true };
+    }
     return { eligible: false, reason: "replied_after_in_thread", markSeen: true };
   }
 
   return { eligible: true };
+}
+
+function collectOutgoingTextsFromThread(messages: PagerMessage[]): string[] {
+  const texts: string[] = [];
+  for (const message of messages) {
+    if (!isOutgoingDirection(message.messageDirection)) {
+      continue;
+    }
+    const text = (message.text || "").trim();
+    if (text) {
+      texts.push(text);
+    }
+  }
+  return texts;
 }
