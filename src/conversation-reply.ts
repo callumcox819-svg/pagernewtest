@@ -231,6 +231,79 @@ export function hasDeliveredReplyAfter(
   return hasOperatorReplyAfter(messages, lastIncomingAt, conv, operatorUserId, country);
 }
 
+export function isOperatorOutgoingMessage(
+  message: PagerMessage,
+  conv?: PagerConversation,
+  operatorUserId?: string,
+  country?: CountryCode,
+): boolean {
+  const text = (message.text || "").trim();
+  if (country && text && isAutomatedFunnelOutgoing(text, country)) {
+    return true;
+  }
+  const author = (message.authorId ?? "").trim();
+  if (operatorUserId && author && author === operatorUserId) {
+    return true;
+  }
+  if (isOutgoingDirection(message.messageDirection)) {
+    return true;
+  }
+  if (isCustomerMessage(message, conv, operatorUserId)) {
+    return false;
+  }
+  if (isIncomingDirection(message.messageDirection)) {
+    return false;
+  }
+  return Boolean(text && (message.isDelivered || message.facebookMessageId));
+}
+
+export function hasBotReplyAfterCustomerMessage(
+  messages: PagerMessage[],
+  lastIncoming: PagerMessage,
+  conv?: PagerConversation,
+  operatorUserId?: string,
+  country?: CountryCode,
+): boolean {
+  const chronological = [...messages].sort(
+    (left, right) =>
+      Date.parse(parseMessageTimestamp(left.createdAt)) -
+      Date.parse(parseMessageTimestamp(right.createdAt)),
+  );
+  const customerIdx = chronological.findIndex((message) => message.id === lastIncoming.id);
+  if (customerIdx >= 0) {
+    for (let index = customerIdx + 1; index < chronological.length; index++) {
+      const message = chronological[index]!;
+      if (!isOperatorOutgoingMessage(message, conv, operatorUserId, country)) {
+        continue;
+      }
+      const text = (message.text || "").trim();
+      if (text || message.isDelivered || message.facebookMessageId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const afterTs = Date.parse(parseMessageTimestamp(lastIncoming.createdAt));
+  if (!Number.isFinite(afterTs)) {
+    return false;
+  }
+  for (const message of messages) {
+    if (!isOperatorOutgoingMessage(message, conv, operatorUserId, country)) {
+      continue;
+    }
+    const outgoingTs = Date.parse(parseMessageTimestamp(message.createdAt));
+    if (!Number.isFinite(outgoingTs) || outgoingTs <= afterTs) {
+      continue;
+    }
+    const text = (message.text || "").trim();
+    if (text || message.isDelivered || message.facebookMessageId) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isCustomerWaitingInThread(
   conv: PagerConversation,
   messages: PagerMessage[],
@@ -310,9 +383,23 @@ export function assessReplyEligibility(
   convState: ConversationRuntimeState,
   lastIncoming: PagerMessage,
   sortedMessages: PagerMessage[],
-  options?: { country?: "ZM" | "CM" | "EG" },
+  options?: { country?: "ZM" | "CM" | "EG"; operatorUserId?: string },
 ): ReplyEligibility {
   const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
+  const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
+
+  if (
+    !isNewCustomerTurn &&
+    hasBotReplyAfterCustomerMessage(
+      sortedMessages,
+      lastIncoming,
+      conv,
+      options?.operatorUserId,
+      options?.country,
+    )
+  ) {
+    return { eligible: false, reason: "awaiting_customer_reply" };
+  }
 
   if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt, conv, undefined, options?.country)) {
     if (

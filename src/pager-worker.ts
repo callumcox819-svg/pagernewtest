@@ -15,6 +15,7 @@ import {
   assessReplyEligibility,
   conversationPriorityScore,
   findLatestIncomingMessage,
+  hasBotReplyAfterCustomerMessage,
   recentCustomerMessageTexts,
   shouldProcessConversation,
   shouldQueueEgConversation,
@@ -35,6 +36,8 @@ import {
   regLinkSentInHistory as cmRegLinkSentInHistory,
   regSendTriggersInProgress as cmRegSendTriggersInProgress,
   resolveCmFunnelScripts,
+  limitCmScriptsForCustomerTurn,
+  CM_REG_SEND_KEYS,
   tierSentInHistory,
 } from "./cm-script-engine.js";
 import {
@@ -60,6 +63,9 @@ import {
   statusMoveTriggersInProgress as zmStatusMoveTriggersInProgress,
   resolveZmFunnelScripts,
   zmScriptSentInHistory,
+  limitZmScriptsForCustomerTurn,
+  ZM_EXPLAIN_SEND_KEYS,
+  ZM_REG_SEND_KEYS,
 } from "./zm-script-engine.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
 import { extractProofImageUrl, resolveMessageReaction } from "./message-attachments.js";
@@ -655,6 +661,8 @@ async function processCmConversation(
     !cmScriptSentInHistory(outgoingTexts, "01_intro") &&
     Boolean(latestCustomerText);
 
+  const operatorUserId = await client.probeOperatorUserId();
+
   if (
     !(await ensureCustomerMessageEligible(
       deps,
@@ -666,6 +674,7 @@ async function processCmConversation(
       sorted,
       {
         bypass: awaitingRegAfterTierChoice || cmNewLeadBypass,
+        operatorUserId,
         countryLabel: "CM",
         country: "CM",
       },
@@ -725,13 +734,14 @@ async function processCmConversation(
     messageReaction,
   });
 
-  const scriptKeys = resolveCmFunnelScripts(
+  let scriptKeys = resolveCmFunnelScripts(
     effectiveStep,
     latestCustomerText,
     intent,
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
+  scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
 
   if (!scriptKeys.length) {
     console.log(
@@ -751,6 +761,8 @@ async function processCmConversation(
   );
 
   let sentAny = false;
+  const allowMultiSend =
+    scriptKeys.includes("01_intro") || scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -794,7 +806,19 @@ async function processCmConversation(
       return sentAny;
     }
     sentAny = true;
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
     await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
   }
 
   if (!sentAny) {
@@ -865,12 +889,8 @@ async function processZmConversation(
     isNoStatusConversation(conv) &&
     !zmScriptSentInHistory(outgoingTexts, "01_intro") &&
     Boolean(latestCustomerText);
-  const zmFunnelContinuationBypass =
-    !zmRegLinkSentInHistory(outgoingTexts) &&
-    zmExplainScriptsSentInHistory(outgoingTexts) &&
-    (zmIsReadyForRegistration(latestCustomerText) ||
-      isZmRegistrationAccountQuestion(latestCustomerText) ||
-      zmIsRegistrationHelpRequest(latestCustomerText));
+
+  const operatorUserId = await client.probeOperatorUserId();
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -882,7 +902,8 @@ async function processZmConversation(
       lastIncoming,
       sorted,
       {
-        bypass: zmNewLeadBypass || zmFunnelContinuationBypass,
+        bypass: zmNewLeadBypass,
+        operatorUserId,
         countryLabel: "ZM",
         country: "ZM",
       },
@@ -942,13 +963,14 @@ async function processZmConversation(
     messageReaction,
   });
 
-  const scriptKeys = resolveZmFunnelScripts(
+  let scriptKeys = resolveZmFunnelScripts(
     effectiveStep,
     latestCustomerText,
     intent,
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
+  scriptKeys = limitZmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
 
   if (!scriptKeys.length) {
     console.log(
@@ -968,6 +990,10 @@ async function processZmConversation(
   );
 
   let sentAny = false;
+  const allowMultiSend =
+    scriptKeys.includes("01_intro") ||
+    scriptKeys.some((key) => ZM_EXPLAIN_SEND_KEYS.has(key)) ||
+    scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key));
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1007,6 +1033,15 @@ async function processZmConversation(
       return sentAny;
     }
     sentAny = true;
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
     if (scriptKey === "07_game_id") {
       const attachment = resolveScriptAttachment("ZM", scriptKey);
       if (attachment) {
@@ -1035,6 +1070,9 @@ async function processZmConversation(
       }
     }
     await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
   }
 
   if (!sentAny) {
@@ -1113,23 +1151,8 @@ async function processEgConversation(
     isNoStatusConversation(conv) &&
     !egScriptSentInHistory(outgoingTexts, "01_intro") &&
     Boolean(latestCustomerText);
-  const egFunnelContinuationBypass =
-    !egRegLinkSentInHistory(outgoingTexts) &&
-    (explainScriptsSentInHistory(outgoingTexts) || egScriptSentInHistory(outgoingTexts, "01_intro")) &&
-    (isEgJoinOrRegistrationQuestion(latestCustomerText) ||
-      isEgDepositTierChoice(latestCustomerText) ||
-      tierChosenRecently);
 
-  if (
-    convState.lastCustomerMessageId === lastIncoming.id &&
-    convState.lastReplyAt &&
-    !awaitingRegAfterTierChoice &&
-    !egNewLeadBypass &&
-    !egFunnelContinuationBypass &&
-    !egFunnelNeedsContinuation(latestCustomerText, outgoingTexts)
-  ) {
-    return false;
-  }
+  const operatorUserId = await client.probeOperatorUserId();
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -1141,10 +1164,8 @@ async function processEgConversation(
       lastIncoming,
       sorted,
       {
-        bypass:
-          awaitingRegAfterTierChoice ||
-          egNewLeadBypass ||
-          egFunnelContinuationBypass,
+        bypass: awaitingRegAfterTierChoice || egNewLeadBypass,
+        operatorUserId,
         countryLabel: "EG",
         country: "EG",
       },
@@ -1785,14 +1806,39 @@ async function ensureCustomerMessageEligible(
   convState: ConversationRuntimeState,
   lastIncoming: PagerMessage,
   sorted: PagerMessage[],
-  options?: { bypass?: boolean; countryLabel?: string; country?: "ZM" | "CM" | "EG" },
+  options?: {
+    bypass?: boolean;
+    operatorUserId?: string;
+    countryLabel?: string;
+    country?: "ZM" | "CM" | "EG";
+  },
 ): Promise<boolean> {
+  const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | undefined);
+  const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
+  if (
+    !isNewCustomerTurn &&
+    hasBotReplyAfterCustomerMessage(
+      sorted,
+      lastIncoming,
+      conv,
+      options?.operatorUserId,
+      country,
+    )
+  ) {
+    const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate((lastIncoming.text || "").trim())})`,
+    );
+    return false;
+  }
+
   if (options?.bypass) {
     return true;
   }
 
   const eligibility = assessReplyEligibility(conv, convState, lastIncoming, sorted, {
-    country: options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | undefined),
+    country,
+    operatorUserId: options?.operatorUserId,
   });
   if (eligibility.eligible) {
     return true;

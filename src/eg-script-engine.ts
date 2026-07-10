@@ -199,7 +199,14 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
     return Boolean(customerText.trim());
   }
   if (!explainSent) {
-    return true;
+    return (
+      wantsDetailsAfterIntro(customerText) ||
+      isReadyForRegistration(customerText) ||
+      isEgJoinOrRegistrationQuestion(customerText) ||
+      /\b(مهتم|مستعد|نعم|اه|ايوه|ok|yes|ready|interested|comment|كيف)\b/i.test(
+        customerText,
+      )
+    );
   }
   if (!linkSent) {
     return (

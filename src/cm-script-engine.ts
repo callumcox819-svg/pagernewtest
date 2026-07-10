@@ -402,8 +402,7 @@ export function resolveCmFunnelScripts(
       if (
         ["interested", "positive", "ready", "question"].includes(intent) ||
         signal ||
-        wantsDetailsAfterIntro(t) ||
-        t.length > 0
+        wantsDetailsAfterIntro(t)
       ) {
         return ["02_age"];
       }
@@ -415,18 +414,17 @@ export function resolveCmFunnelScripts(
     if (!stepsSent) {
       if (
         isAgeAnswer(t) ||
-        ["positive", "ready", "interested", "question", "unknown"].includes(intent) ||
+        ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
-        t.length > 0
+        wantsDetailsAfterIntro(t)
       ) {
         return ["03_steps"];
       }
     } else if (!tierSent) {
       if (
-        ["positive", "ready", "interested", "question", "unknown"].includes(intent) ||
+        ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
-        isReadyForRegistration(t) ||
-        t.length > 0
+        isReadyForRegistration(t)
       ) {
         return ["04_tier"];
       }
@@ -449,10 +447,9 @@ export function resolveCmFunnelScripts(
     }
     if (stepsSent && !tierSent) {
       if (
-        ["positive", "ready", "interested", "question", "unknown"].includes(intent) ||
+        ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
-        isReadyForRegistration(t) ||
-        t.length > 0
+        isReadyForRegistration(t)
       ) {
         return ["04_tier"];
       }
@@ -516,6 +513,26 @@ export function classifyCmMessage(
 
 export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
+}
+
+/** One funnel stage per customer message — intro pair or reg bundle only as multi-send. */
+export function limitCmScriptsForCustomerTurn(
+  scriptKeys: string[],
+  outgoingTexts: string[],
+): string[] {
+  if (!scriptKeys.length) {
+    return scriptKeys;
+  }
+  if (
+    scriptKeys.includes("01_intro") &&
+    !cmScriptSentInHistory(outgoingTexts, "01_intro")
+  ) {
+    return scriptKeys.filter((key) => key === "01_intro" || key === "01_intro_2");
+  }
+  if (scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))) {
+    return scriptKeys.filter((key) => CM_REG_SEND_KEYS.has(key));
+  }
+  return [scriptKeys[0]!];
 }
 
 function isOutgoingDelivered(message: PagerMessage): boolean {
