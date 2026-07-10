@@ -15,6 +15,8 @@ import {
   assessReplyEligibility,
   conversationPriorityScore,
   findLatestIncomingMessage,
+  isActionableCustomerMessage,
+  parseMessageTimestamp,
   recentCustomerMessageTexts,
   shouldProcessConversation,
 } from "./conversation-reply.js";
@@ -39,7 +41,6 @@ import {
 import {
   classifyEgMessage,
   collectOutgoingTexts as collectEgOutgoingTexts,
-  egFunnelNeedsContinuation,
   egScriptSentInHistory,
   explainScriptsSentInHistory,
   funnelStepFromScriptGaps as egFunnelStepFromScriptGaps,
@@ -91,13 +92,11 @@ import type {
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import {
   countApiStatusFolders,
-  expandEnabledFolderIds,
   isFunnelFollowUpFolderName,
   mergeStatusFolderList,
   conversationAllowedInFolders,
   getEnabledFolderIds,
   hasEnabledStatusFolders,
-  isNoStatusConversation,
 } from "./status-folders.js";
 import type { TemplateRole } from "./config.js";
 import type { TelegramApi } from "./telegram-api.js";
@@ -112,7 +111,7 @@ type WorkerDeps = {
 const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 400;
 const INBOX_TOP = 25;
-const INBOX_TOP_EG_CM = 80;
+const INBOX_TOP_EG_CM = 30;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -243,7 +242,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   const operatorFolderIds = getEnabledFolderIds(freshState);
-  const enabledFolderIds = expandEnabledFolderIds(freshState, operatorFolderIds);
+  const enabledFolderIds = operatorFolderIds;
   if (enabledFolderIds && enabledFolderIds.size === 0) {
     console.log(`Pager worker: chat ${freshState.chatId} — no status folders enabled`);
     return;
@@ -254,13 +253,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       .filter((folder) => folder.enabled)
       .map((folder) => folder.name)
       .join(", ");
-    const followUpFolderCount =
-      operatorFolderIds && enabledFolderIds
-        ? [...enabledFolderIds].filter((id) => !operatorFolderIds.has(id)).length
-        : 0;
     console.log(
-      `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}]` +
-        (followUpFolderCount ? ` +funnel=${followUpFolderCount}` : ""),
+      `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}]`,
     );
   }
 
@@ -480,6 +474,9 @@ async function buildWorkQueue(
       if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
         continue;
       }
+      if (!shouldProcessConversation(conv)) {
+        continue;
+      }
       selected.set(conv.id, conv);
       addedForChannel += 1;
       if (addedForChannel >= INBOX_TOP_EG_CM) {
@@ -639,10 +636,6 @@ async function processCmConversation(
       tierChosenRecently ||
       isRegistrationAccountQuestion(latestCustomerText) ||
       isCmRegistrationHelpRequest(latestCustomerText));
-  const cmNewLeadBypass =
-    isNoStatusConversation(conv) &&
-    !cmScriptSentInHistory(outgoingTexts, "01_intro") &&
-    Boolean(latestCustomerText);
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -654,7 +647,7 @@ async function processCmConversation(
       lastIncoming,
       sorted,
       {
-        bypass: awaitingRegAfterTierChoice || cmNewLeadBypass,
+        bypass: awaitingRegAfterTierChoice,
         countryLabel: "CM",
         country: "CM",
       },
@@ -850,16 +843,6 @@ async function processZmConversation(
   const outgoingTexts = collectZmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
-  const zmNewLeadBypass =
-    isNoStatusConversation(conv) &&
-    !zmScriptSentInHistory(outgoingTexts, "01_intro") &&
-    Boolean(latestCustomerText);
-  const zmFunnelContinuationBypass =
-    !zmRegLinkSentInHistory(outgoingTexts) &&
-    zmExplainScriptsSentInHistory(outgoingTexts) &&
-    (zmIsReadyForRegistration(latestCustomerText) ||
-      isZmRegistrationAccountQuestion(latestCustomerText) ||
-      zmIsRegistrationHelpRequest(latestCustomerText));
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -871,7 +854,6 @@ async function processZmConversation(
       lastIncoming,
       sorted,
       {
-        bypass: zmNewLeadBypass || zmFunnelContinuationBypass,
         countryLabel: "ZM",
         country: "ZM",
       },
@@ -1098,24 +1080,11 @@ async function processEgConversation(
     explainScriptsSentInHistory(outgoingTexts) &&
     !egRegLinkSentInHistory(outgoingTexts) &&
     (isEgDepositTierChoice(latestCustomerText) || tierChosenRecently);
-  const egNewLeadBypass =
-    isNoStatusConversation(conv) &&
-    !egScriptSentInHistory(outgoingTexts, "01_intro") &&
-    Boolean(latestCustomerText);
-  const egFunnelContinuationBypass =
-    !egRegLinkSentInHistory(outgoingTexts) &&
-    (explainScriptsSentInHistory(outgoingTexts) || egScriptSentInHistory(outgoingTexts, "01_intro")) &&
-    (isEgJoinOrRegistrationQuestion(latestCustomerText) ||
-      isEgDepositTierChoice(latestCustomerText) ||
-      tierChosenRecently);
 
   if (
     convState.lastCustomerMessageId === lastIncoming.id &&
     convState.lastReplyAt &&
-    !awaitingRegAfterTierChoice &&
-    !egNewLeadBypass &&
-    !egFunnelContinuationBypass &&
-    !egFunnelNeedsContinuation(latestCustomerText, outgoingTexts)
+    !awaitingRegAfterTierChoice
   ) {
     return false;
   }
@@ -1130,10 +1099,7 @@ async function processEgConversation(
       lastIncoming,
       sorted,
       {
-        bypass:
-          awaitingRegAfterTierChoice ||
-          egNewLeadBypass ||
-          egFunnelContinuationBypass,
+        bypass: awaitingRegAfterTierChoice,
         countryLabel: "EG",
         country: "EG",
       },
@@ -1776,8 +1742,19 @@ async function ensureCustomerMessageEligible(
   sorted: PagerMessage[],
   options?: { bypass?: boolean; countryLabel?: string; country?: "ZM" | "CM" | "EG" },
 ): Promise<boolean> {
-  if (options?.bypass) {
-    return true;
+  const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
+  if (!options?.bypass && !isActionableCustomerMessage(conv, lastIncomingAt)) {
+    const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)}${label} — not_fresh_or_unread (text=${truncate((lastIncoming.text || "").trim())})`,
+    );
+    if (convState.lastCustomerMessageId !== lastIncoming.id) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+      });
+    }
+    return false;
   }
 
   const eligibility = assessReplyEligibility(conv, convState, lastIncoming, sorted, {

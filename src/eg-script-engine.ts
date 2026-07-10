@@ -424,8 +424,7 @@ export function resolveEgFunnelScripts(
       intent === "deposit_done" ||
       intent === "image_only" ||
       intent === "game_id_text" ||
-      options?.hasImage ||
-      (intent === "positive" && (options?.hasImage || options?.messageReaction)))
+      options?.hasImage)
   ) {
     return ["07_game_id"];
   }

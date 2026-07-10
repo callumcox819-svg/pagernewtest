@@ -7,10 +7,19 @@ import {
 import type { ConversationRuntimeState } from "./state-store.js";
 import type { CountryCode } from "./config.js";
 import { isAutomatedFunnelOutgoing } from "./funnel-outbound.js";
-import { egFunnelNeedsContinuation } from "./eg-script-engine.js";
 
 /** Brand-new customer messages (always processed). */
 export const FRESH_CUSTOMER_MESSAGE_MS = 30 * 60 * 1000;
+
+export function isActionableCustomerMessage(
+  conv: PagerConversation,
+  lastIncomingAt?: string,
+): boolean {
+  if (hasUnreadMarkers(conv)) {
+    return true;
+  }
+  return isFreshCustomerMessage(lastIncomingAt);
+}
 
 export type ReplyEligibility =
   | { eligible: true }
@@ -89,34 +98,16 @@ export function isConversationUnread(conv: PagerConversation): boolean {
   return false;
 }
 
-/** Process chats where the customer spoke last and the thread still needs a reply. */
+/** Queue only chats with an unread marker or a message from the last 30 minutes. */
 export function shouldProcessConversation(conv: PagerConversation): boolean {
-  if (isFreshCustomerMessage(resolveLastMessageAt(conv))) {
-    return true;
-  }
-  if (hasUnreadMarkers(conv)) {
-    return true;
-  }
-  if (isIncomingDirection(conv.lastMessageDirection)) {
-    if ((conv.conversationState ?? "").trim().toLowerCase() === "read") {
-      return false;
-    }
-    return true;
-  }
-  return false;
+  return isActionableCustomerMessage(conv, resolveLastMessageAt(conv));
 }
 
 export function shouldProcessIncomingMessage(lastIncomingAt?: string, conv?: PagerConversation): boolean {
-  if (isFreshCustomerMessage(lastIncomingAt)) {
-    return true;
+  if (!conv) {
+    return isFreshCustomerMessage(lastIncomingAt);
   }
-  if (conv && hasUnreadMarkers(conv)) {
-    return true;
-  }
-  if (conv && isConversationUnread(conv)) {
-    return true;
-  }
-  return false;
+  return isActionableCustomerMessage(conv, lastIncomingAt);
 }
 
 export function shouldOpenConversation(conv: PagerConversation): boolean {
@@ -246,15 +237,6 @@ export function isCustomerWaitingInThread(
     return true;
   }
 
-  if (hasUnreadMarkers(conv)) {
-    return true;
-  }
-
-  const latest = sortMessagesNewestFirst(messages)[0];
-  if (latest && isCustomerMessage(latest, conv)) {
-    return true;
-  }
-
   return false;
 }
 
@@ -269,20 +251,6 @@ export function shouldQueueConversationFromThread(
   return isCustomerWaitingInThread(conv, messages, { country });
 }
 
-function collectOutgoingTextsFromThread(messages: PagerMessage[]): string[] {
-  const texts: string[] = [];
-  for (const message of messages) {
-    if (!isOutgoingDirection(message.messageDirection)) {
-      continue;
-    }
-    const text = (message.text || "").trim();
-    if (text) {
-      texts.push(text);
-    }
-  }
-  return texts;
-}
-
 export function assessReplyEligibility(
   conv: PagerConversation,
   convState: ConversationRuntimeState,
@@ -292,27 +260,13 @@ export function assessReplyEligibility(
 ): ReplyEligibility {
   const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
 
+  if (!isActionableCustomerMessage(conv, lastIncomingAt)) {
+    return { eligible: false, reason: "not_fresh_or_unread", markSeen: true };
+  }
+
   if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt, conv, undefined, options?.country)) {
-    if (
-      options?.country === "EG" &&
-      egFunnelNeedsContinuation((lastIncoming.text || "").trim(), collectOutgoingTextsFromThread(sortedMessages))
-    ) {
-      return { eligible: true };
-    }
     return { eligible: false, reason: "replied_after_in_thread", markSeen: true };
   }
 
-  if (shouldProcessIncomingMessage(lastIncomingAt, conv)) {
-    return { eligible: true };
-  }
-
-  if (isCustomerWaitingInThread(conv, sortedMessages, { country: options?.country })) {
-    return { eligible: true };
-  }
-
-  if (convState.lastCustomerMessageId === lastIncoming.id && !convState.lastReplyAt) {
-    return { eligible: false, reason: "already_skipped_message" };
-  }
-
-  return { eligible: false, reason: "stale_read_conversation" };
+  return { eligible: true };
 }
