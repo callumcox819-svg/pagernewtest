@@ -415,10 +415,12 @@ export function assessReplyEligibility(
   }
 
   if (!options?.forceContinuation) {
+    const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
     if (hasAlreadyRepliedToCustomerMessage(convState, lastIncoming)) {
       return { eligible: false, reason: "awaiting_customer_reply" };
     }
     if (
+      !isNewCustomerTurn &&
       hasBotReplyAfterCustomerMessage(
         sortedMessages,
         lastIncoming,

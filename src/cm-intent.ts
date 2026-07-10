@@ -141,11 +141,13 @@ export function isClientReadyPhrase(text: string): boolean {
     return false;
   }
   return (
-    /\b(je suis pret|je suis prete|pret a commencer|pret a continuer|je suis partant|je suis partante)\b/i.test(
+    /\b(je suis pret|j'?suis pret|jsuis pret|je suis prete|j'?suis prete|jsuis prete)\b/i.test(
       t,
     ) ||
+    /\b(pret a commencer|pret a continuer|je suis partant|je suis partante)\b/i.test(t) ||
     /\b(j'attends|j attends|jattends|vas y|allons y|on y va|je suis d'accord)\b/i.test(t) ||
-    /\bje veux commencer|je veux continuer\b/i.test(t)
+    /\bje veux commencer|je veux continuer\b/i.test(t) ||
+    /^(pret|prete|ok|oui)\.?$/i.test(t)
   );
 }
 
@@ -337,6 +339,9 @@ export function isFunnelPositiveReaction(text: string, funnelStep: number): bool
   if (!t) {
     return false;
   }
+  if (isClientReadyPhrase(t)) {
+    return true;
+  }
   if (POSITIVE_EMOJI.test(t)) {
     return true;
   }
@@ -350,11 +355,14 @@ export function isFunnelPositiveReaction(text: string, funnelStep: number): bool
 }
 
 export function wantsDetailsAfterIntro(text: string): boolean {
-  const t = (text || "").trim();
+  const t = normalizeFrText(text);
   if (!t) {
     return false;
   }
-  return /\b(detail|détail|explique|comment ça|comment ca|how)\b/i.test(t);
+  return (
+    /\b(detail|explique|comment ca|comment ça|how|pret|prete|commencer|continuer)\b/i.test(t) ||
+    isClientReadyPhrase(text)
+  );
 }
 
 export function isReadyForRegistration(text: string): boolean {
