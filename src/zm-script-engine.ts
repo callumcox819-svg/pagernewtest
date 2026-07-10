@@ -7,6 +7,7 @@ import {
   isRegistrationConfirmed,
   isRegistrationHelpRequest,
   isRegistrationPending,
+  isZmRegistrationAccountQuestion,
   wantsDetailsAfterIntro,
   wantsRegistrationLink,
 } from "./zm-intent.js";
@@ -261,7 +262,7 @@ export function resolveZmFunnelScripts(
   text: string,
   intent: ZmIntent,
   outgoingTexts: string[],
-  options?: { hasImage?: boolean; messageReaction?: string },
+  options?: { hasImage?: boolean; messageReaction?: string; recentCustomerTexts?: string[] },
 ): string[] {
   const t = (text || "").trim();
   const out = outgoingTexts;
@@ -270,7 +271,18 @@ export function resolveZmFunnelScripts(
     return [];
   }
 
-  if (isRegistrationHelpRequest(t)) {
+  const introSent = zmScriptSentInHistory(out, "01_intro");
+  const explainSent = explainScriptsSentInHistory(out);
+  const linkSent = regLinkSentInHistory(out);
+  const signal = positiveSignal(t, intent, effectiveStep);
+  const registrationHelp =
+    isRegistrationHelpRequest(t) || isZmRegistrationAccountQuestion(t);
+  const wantsReg =
+    wantsRegistrationNow(t, intent, effectiveStep) ||
+    isZmRegistrationAccountQuestion(t) ||
+    isRegistrationHelpRequest(t);
+
+  if (registrationHelp) {
     if (!regLinkSentInHistory(out) && effectiveStep < 3) {
       if (!zmScriptSentInHistory(out, "01_intro")) {
         return ["01_intro"];
@@ -279,6 +291,9 @@ export function resolveZmFunnelScripts(
         return ["02_how_it_works", "03_zmw_table"];
       }
     }
+    if (!linkSent) {
+      return ["04_registration", "05_link"];
+    }
     return [...registrationHelpScriptKeys("ZM")];
   }
 
@@ -286,10 +301,9 @@ export function resolveZmFunnelScripts(
     return registrationLinkScriptKeys("ZM", regLinkSentInHistory(out));
   }
 
-  const introSent = zmScriptSentInHistory(out, "01_intro");
-  const explainSent = explainScriptsSentInHistory(out);
-  const linkSent = regLinkSentInHistory(out);
-  const signal = positiveSignal(t, intent, effectiveStep);
+  if (explainSent && !linkSent && wantsReg) {
+    return ["04_registration", "05_link"];
+  }
 
   if (effectiveStep < 1) {
     if (introSent) {
@@ -424,6 +438,18 @@ export function resolveZmFunnelScripts(
       next.push("09_tg_link");
     }
     return next;
+  }
+
+  if (!linkSent && explainSent && wantsReg) {
+    return ["04_registration", "05_link"];
+  }
+
+  if (!introSent && !linkSent && (intent === "interested" || signal || isGreeting(t) || hasUsableFollowUp(t))) {
+    return ["01_intro"];
+  }
+
+  if (introSent && !explainSent && !linkSent && t.length > 0) {
+    return ["02_how_it_works", "03_zmw_table"];
   }
 
   return [];

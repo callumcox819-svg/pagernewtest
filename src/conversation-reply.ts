@@ -148,6 +148,29 @@ export function findLatestIncomingMessage(
   );
 }
 
+/** Recent customer lines (newest first) for funnel context when the latest message is a follow-up. */
+export function recentCustomerMessageTexts(
+  messages: PagerMessage[],
+  conv?: PagerConversation,
+  limit = 6,
+): string[] {
+  const enriched = conv ? enrichConversationFromThread(conv, messages) : conv;
+  const texts: string[] = [];
+  for (const message of sortMessagesNewestFirst(messages)) {
+    if (!isCustomerMessage(message, enriched)) {
+      continue;
+    }
+    const text = (message.text || "").trim();
+    if (text) {
+      texts.push(text);
+    }
+    if (texts.length >= limit) {
+      break;
+    }
+  }
+  return texts;
+}
+
 export function hasOperatorReplyAfter(
   messages: PagerMessage[],
   afterCustomerAt: string,

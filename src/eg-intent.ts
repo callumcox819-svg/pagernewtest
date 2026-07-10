@@ -60,6 +60,9 @@ export function classifyEgIntent(
   if (wantsRegistrationLink(t)) {
     return "ready";
   }
+  if (isEgJoinOrRegistrationQuestion(t) || isRegistrationHelpRequest(t)) {
+    return "ready";
+  }
   if (!t && isPositiveMessageReaction(options?.messageReaction)) {
     return "positive";
   }
@@ -180,14 +183,30 @@ export function isRegistrationPending(text: string): boolean {
 
 export function isRegistrationHelpRequest(text: string): boolean {
   const t = (text || "").trim();
-  if (AR_INTERESTED.test(t) && !/(تسجيل|حساب|لينك|رابط|كود|sms)/i.test(t)) {
+  if (AR_INTERESTED.test(t) && !/(تسجيل|حساب|لينك|رابط|كود|sms|انضمام|انضم|اشتراك)/i.test(t)) {
     return false;
   }
   return (
     AR_REG_HELP.test(t) ||
+    isEgJoinOrRegistrationQuestion(t) ||
     /\b(problem|issue|error|help).{0,30}(registration|register|account)\b/i.test(t) ||
     /مساعد(ة|ه).{0,24}(تسجيل|حساب|لينك|رابط|كود)/i.test(t) ||
     /(تسجيل|حساب|لينك|رابط|كود).{0,24}مساعد(ة|ه)/i.test(t)
+  );
+}
+
+export function isEgJoinOrRegistrationQuestion(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  return (
+    /(كيف|ازاي|ازاى).{0,24}(انضمام|انضم|التسجيل|اسجل|سجل|اشترك|اشتراك|انضم|الانضمام)/i.test(t) ||
+    /(انضمام|التسجيل|اشتراك).{0,24}(كيف|ازاي|ازاى)/i.test(t) ||
+    /(أنشئ|انشئ|اعمل|افتح|انشاء).{0,24}(حساب|اكونت|account)/i.test(t) ||
+    /(ايه|اي|أي|which).{0,16}(حساب|اكونت|account)/i.test(t) ||
+    /(حساب|اكونت).{0,20}(انشئ|انشاء|اعمل|افتح|انشاء)/i.test(t) ||
+    /تمام.{0,24}(انضمام|انضم|التسجيل|كيف)/i.test(t)
   );
 }
 

@@ -15,6 +15,7 @@ import {
   assessReplyEligibility,
   conversationPriorityScore,
   findLatestIncomingMessage,
+  recentCustomerMessageTexts,
   shouldProcessConversation,
 } from "./conversation-reply.js";
 import {
@@ -26,6 +27,7 @@ import {
 import { ocrLangForCountry } from "./ocr-lang.js";
 import {
   classifyCmMessage,
+  cmScriptSentInHistory,
   collectOutgoingTexts as collectCmOutgoingTexts,
   funnelStepFromScriptGaps as cmFunnelStepFromScriptGaps,
   inferStepFromThread as cmInferStepFromThread,
@@ -48,17 +50,25 @@ import {
 import {
   classifyZmMessage,
   collectOutgoingTexts as collectZmOutgoingTexts,
+  explainScriptsSentInHistory as zmExplainScriptsSentInHistory,
   funnelStepFromScriptGaps as zmFunnelStepFromScriptGaps,
   inferStepFromThread as zmInferStepFromThread,
   regLinkSentInHistory as zmRegLinkSentInHistory,
   regSendTriggersInProgress as zmRegSendTriggersInProgress,
   statusMoveTriggersInProgress as zmStatusMoveTriggersInProgress,
   resolveZmFunnelScripts,
+  zmScriptSentInHistory,
 } from "./zm-script-engine.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
 import { extractProofImageUrl, resolveMessageReaction } from "./message-attachments.js";
-import { isDepositTierChoice, isRegistrationConfirmed } from "./cm-intent.js";
-import { isEgDepositTierChoice } from "./eg-intent.js";
+import {
+  isDepositTierChoice,
+  isCmRegistrationHelpRequest,
+  isRegistrationAccountQuestion,
+  isRegistrationConfirmed,
+} from "./cm-intent.js";
+import { isEgDepositTierChoice, isEgJoinOrRegistrationQuestion } from "./eg-intent.js";
+import { isZmRegistrationAccountQuestion, isReadyForRegistration as zmIsReadyForRegistration, isRegistrationHelpRequest as zmIsRegistrationHelpRequest } from "./zm-intent.js";
 import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
@@ -618,10 +628,19 @@ async function processCmConversation(
 
   const outgoingTexts = collectCmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const tierChosenRecently = recentCustomerTexts.some((line) => isDepositTierChoice(line));
   const awaitingRegAfterTierChoice =
     tierSentInHistory(outgoingTexts) &&
     !cmRegLinkSentInHistory(outgoingTexts) &&
-    isDepositTierChoice(latestCustomerText);
+    (isDepositTierChoice(latestCustomerText) ||
+      tierChosenRecently ||
+      isRegistrationAccountQuestion(latestCustomerText) ||
+      isCmRegistrationHelpRequest(latestCustomerText));
+  const cmNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !cmScriptSentInHistory(outgoingTexts, "01_intro") &&
+    Boolean(latestCustomerText);
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -632,7 +651,11 @@ async function processCmConversation(
       convState,
       lastIncoming,
       sorted,
-      { bypass: awaitingRegAfterTierChoice, countryLabel: "CM", country: "CM" },
+      {
+        bypass: awaitingRegAfterTierChoice || cmNewLeadBypass,
+        countryLabel: "CM",
+        country: "CM",
+      },
     ))
   ) {
     return false;
@@ -694,7 +717,7 @@ async function processCmConversation(
     latestCustomerText,
     intent,
     outgoingTexts,
-    { hasImage: Boolean(imageUrl), messageReaction },
+    { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
 
   if (!scriptKeys.length) {
@@ -824,6 +847,17 @@ async function processZmConversation(
 
   const outgoingTexts = collectZmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const zmNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !zmScriptSentInHistory(outgoingTexts, "01_intro") &&
+    Boolean(latestCustomerText);
+  const zmFunnelContinuationBypass =
+    !zmRegLinkSentInHistory(outgoingTexts) &&
+    zmExplainScriptsSentInHistory(outgoingTexts) &&
+    (zmIsReadyForRegistration(latestCustomerText) ||
+      isZmRegistrationAccountQuestion(latestCustomerText) ||
+      zmIsRegistrationHelpRequest(latestCustomerText));
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -834,7 +868,11 @@ async function processZmConversation(
       convState,
       lastIncoming,
       sorted,
-      { countryLabel: "ZM" },
+      {
+        bypass: zmNewLeadBypass || zmFunnelContinuationBypass,
+        countryLabel: "ZM",
+        country: "ZM",
+      },
     ))
   ) {
     return false;
@@ -896,7 +934,7 @@ async function processZmConversation(
     latestCustomerText,
     intent,
     outgoingTexts,
-    { hasImage: Boolean(imageUrl), messageReaction },
+    { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
 
   if (!scriptKeys.length) {
@@ -1052,14 +1090,22 @@ async function processEgConversation(
 
   const outgoingTexts = collectEgOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const tierChosenRecently = recentCustomerTexts.some((line) => isEgDepositTierChoice(line));
   const awaitingRegAfterTierChoice =
     explainScriptsSentInHistory(outgoingTexts) &&
     !egRegLinkSentInHistory(outgoingTexts) &&
-    isEgDepositTierChoice(latestCustomerText);
+    (isEgDepositTierChoice(latestCustomerText) || tierChosenRecently);
   const egNewLeadBypass =
     isNoStatusConversation(conv) &&
     !egScriptSentInHistory(outgoingTexts, "01_intro") &&
     Boolean(latestCustomerText);
+  const egFunnelContinuationBypass =
+    !egRegLinkSentInHistory(outgoingTexts) &&
+    (explainScriptsSentInHistory(outgoingTexts) || egScriptSentInHistory(outgoingTexts, "01_intro")) &&
+    (isEgJoinOrRegistrationQuestion(latestCustomerText) ||
+      isEgDepositTierChoice(latestCustomerText) ||
+      tierChosenRecently);
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -1071,7 +1117,10 @@ async function processEgConversation(
       lastIncoming,
       sorted,
       {
-        bypass: awaitingRegAfterTierChoice || egNewLeadBypass,
+        bypass:
+          awaitingRegAfterTierChoice ||
+          egNewLeadBypass ||
+          egFunnelContinuationBypass,
         countryLabel: "EG",
         country: "EG",
       },
@@ -1136,7 +1185,7 @@ async function processEgConversation(
     latestCustomerText,
     intent,
     outgoingTexts,
-    { hasImage: Boolean(imageUrl), messageReaction },
+    { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
 
   if (!scriptKeys.length) {

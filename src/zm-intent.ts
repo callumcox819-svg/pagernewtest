@@ -187,6 +187,19 @@ export function isRegistrationPending(text: string): boolean {
   return /\b(not yet|still registering|in progress|trying to register|its not registering|it'?s not registering|failing to register|couldn'?t manage|it refusing)\b/i.test(t);
 }
 
+export function isZmRegistrationAccountQuestion(text: string): boolean {
+  const t = (text || "").trim().toLowerCase();
+  if (!t) {
+    return false;
+  }
+  return (
+    /\b(which|what)\s+account\b/i.test(t) ||
+    /\b(create|open|make|register)\s+(an?\s+)?account\b/i.test(t) ||
+    /\baccount\b.{0,20}\b(create|open|register)\b/i.test(t) ||
+    /\bhow\s+(do\s+i|to)\s+(create|open|register)\b/i.test(t)
+  );
+}
+
 export function isRegistrationHelpRequest(text: string): boolean {
   const t = (text || "").trim();
   return (

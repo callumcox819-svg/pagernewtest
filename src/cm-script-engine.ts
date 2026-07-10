@@ -8,7 +8,9 @@ import {
   isDepositTierChoice,
   isFunnelPositiveReaction,
   isCmProfitFigure,
+  isCmRegistrationHelpRequest,
   isReadyForRegistration,
+  isRegistrationAccountQuestion,
   isRegistrationConfirmed,
   isRegistrationPending,
   wantsDetailsAfterIntro,
@@ -285,24 +287,49 @@ export function resolveCmFunnelScripts(
   text: string,
   intent: CmIntent,
   outgoingTexts: string[],
-  options?: { hasImage?: boolean; messageReaction?: string },
+  options?: { hasImage?: boolean; messageReaction?: string; recentCustomerTexts?: string[] },
 ): string[] {
   const out = outgoingTexts;
   const t = (text || "").trim();
+  const recentTexts = options?.recentCustomerTexts ?? [];
+  const registrationHelp =
+    isCmRegistrationHelpRequest(t) || isRegistrationAccountQuestion(t);
 
   if (intent === "declined") {
     return [];
   }
 
-  if (isRegistrationHelpRequest(t)) {
+  const introSent = cmScriptSentInHistory(out, "01_intro");
+  const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
+  const ageSent = cmScriptSentInHistory(out, "02_age") || ageQuestionSentInHistory(out);
+  const stepsSent = stepsSentInHistory(out);
+  const tierSent = tierSentInHistory(out);
+  const linkSent = regLinkSentInHistory(out);
+  const tierChoice =
+    isDepositTierChoice(t) || recentTexts.some((line) => isDepositTierChoice(line));
+  const signal = positiveSignal(t, intent, effectiveStep);
+
+  if (registrationHelp) {
     if (regLinkSentInHistory(out)) {
       return ["07_chrome", "06_link"];
     }
+    if (!linkSent && (tierSent || tierChoice || stepsSent)) {
+      return [...CM_REG_BUNDLE];
+    }
     if (effectiveStep < 3) {
-      if (!cmScriptSentInHistory(out, "01_intro")) {
+      if (!introSent) {
         return ["01_intro", "01_intro_2"];
       }
-      return [];
+      if (!intro2Sent) {
+        return ["01_intro_2"];
+      }
+      if (!stepsSent) {
+        return ["03_steps"];
+      }
+      if (!tierSent) {
+        return ["04_tier"];
+      }
+      return [...CM_REG_BUNDLE];
     }
     return [...registrationHelpScriptKeys("CM")];
   }
@@ -315,16 +342,11 @@ export function resolveCmFunnelScripts(
     return [];
   }
 
-  const introSent = cmScriptSentInHistory(out, "01_intro");
-  const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
-  const ageSent = cmScriptSentInHistory(out, "02_age") || ageQuestionSentInHistory(out);
-  const stepsSent = stepsSentInHistory(out);
-  const tierSent = tierSentInHistory(out);
-  const linkSent = regLinkSentInHistory(out);
-  const tierChoice = isDepositTierChoice(t);
-  const signal = positiveSignal(t, intent, effectiveStep);
-
   if ((tierSent || effectiveStep >= 3) && tierChoice && !linkSent) {
+    return [...CM_REG_BUNDLE];
+  }
+
+  if (tierSent && !linkSent && isRegistrationAccountQuestion(t)) {
     return [...CM_REG_BUNDLE];
   }
 
@@ -333,7 +355,7 @@ export function resolveCmFunnelScripts(
   }
 
   if (linkSent) {
-    if (isRegistrationHelpRequest(t)) {
+    if (registrationHelp) {
       return ["07_chrome", "06_link"];
     }
     if (isRegistrationBlocked(t)) {
@@ -462,7 +484,10 @@ export function resolveCmFunnelScripts(
       tierSent &&
       !linkSent &&
       (isReadyForRegistration(t) ||
+        registrationHelp ||
+        isRegistrationAccountQuestion(t) ||
         wantsRegistrationLink(t) ||
+        tierChoice ||
         ["ready", "interested", "positive", "question"].includes(intent) ||
         signal ||
         isClientReadyPhrase(t))
@@ -476,25 +501,6 @@ export function resolveCmFunnelScripts(
   }
 
   return [];
-}
-
-function isRegistrationHelpRequest(text: string): boolean {
-  const t = (text || "").trim().toLowerCase();
-  if (!t) {
-    return false;
-  }
-  if (/\b(vous voulez m'aide|veux m'aide|m'aider|aidez[- ]?moi|besoin d'aide)\b/i.test(t)) {
-    return false;
-  }
-  return (
-    /\b(je ne sais pas|je sais pas|sais pas faire|pas faire|comment faire)\b/i.test(t) ||
-    /\b(aide|help).{0,24}(inscri|enregistr|compte|plateforme|lien|telecharg)\b/i.test(t) ||
-    /\b(inscri|enregistr|compte|plateforme|lien|telecharg).{0,24}(aide|help)\b/i.test(t) ||
-    /\b(je connais pas|connais pas)\b/i.test(t) ||
-    /\b(je ne vois pas|je vois pas|pas de plate ?forme|plateforme|telecharg|m[' ]inscrit|je fais comment)\b/i.test(
-      t,
-    )
-  );
 }
 
 export function classifyCmMessage(

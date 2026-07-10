@@ -4,6 +4,7 @@ import {
   classifyEgIntent,
   isDepositConfirmed,
   isEgDepositTierChoice,
+  isEgJoinOrRegistrationQuestion,
   isFunnelPositiveReaction,
   isReadyForRegistration,
   isRegistrationConfirmed,
@@ -251,20 +252,27 @@ export function resolveEgFunnelScripts(
   text: string,
   intent: EgIntent,
   outgoingTexts: string[],
-  options?: { hasImage?: boolean; messageReaction?: string },
+  options?: { hasImage?: boolean; messageReaction?: string; recentCustomerTexts?: string[] },
 ): string[] {
   const t = (text || "").trim();
   const out = outgoingTexts;
+  const recentTexts = options?.recentCustomerTexts ?? [];
   const introSent = egScriptSentInHistory(out, "01_intro");
   const explainSent = explainScriptsSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
+  const tierChoice =
+    isEgDepositTierChoice(t) || recentTexts.some((line) => isEgDepositTierChoice(line));
   const signal = positiveSignal(t, intent, effectiveStep);
+  const wantsReg =
+    wantsRegistrationNow(t, intent, effectiveStep) ||
+    isEgJoinOrRegistrationQuestion(t) ||
+    isRegistrationHelpRequest(t);
 
   if (intent === "declined") {
     return [];
   }
 
-  if (isRegistrationHelpRequest(t)) {
+  if (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t)) {
     if (!linkSent && effectiveStep < 3) {
       if (!introSent) {
         return ["01_intro"];
@@ -274,6 +282,9 @@ export function resolveEgFunnelScripts(
       }
       return ["04_registration", "05_link"];
     }
+    if (!linkSent) {
+      return ["04_registration", "05_link"];
+    }
     return [...registrationHelpScriptKeys("EG")];
   }
 
@@ -281,7 +292,11 @@ export function resolveEgFunnelScripts(
     return registrationLinkScriptKeys("EG", regLinkSentInHistory(out));
   }
 
-  if ((explainSent || effectiveStep >= 2) && isEgDepositTierChoice(t) && !linkSent) {
+  if ((explainSent || effectiveStep >= 2) && tierChoice && !linkSent) {
+    return ["04_registration", "05_link"];
+  }
+
+  if (explainSent && !linkSent && wantsReg) {
     return ["04_registration", "05_link"];
   }
 
@@ -381,6 +396,18 @@ export function resolveEgFunnelScripts(
     if (!egScriptSentInHistory(out, "07_game_id")) {
       return ["07_game_id"];
     }
+  }
+
+  if (!linkSent && explainSent && wantsReg) {
+    return ["04_registration", "05_link"];
+  }
+
+  if (!introSent && !linkSent && (intent === "interested" || signal || isGreeting(t) || hasUsableFollowUp(t))) {
+    return ["01_intro"];
+  }
+
+  if (introSent && !explainSent && !linkSent && t.length > 0) {
+    return explainScriptKeys();
   }
 
   return [];

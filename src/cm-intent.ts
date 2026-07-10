@@ -63,6 +63,9 @@ export function classifyCmIntent(
   if (wantsRegistrationLink(t)) {
     return "ready";
   }
+  if (isRegistrationAccountQuestion(t) || isCmRegistrationHelpRequest(t)) {
+    return "ready";
+  }
   if (!t && isPositiveMessageReaction(options?.messageReaction)) {
     return "positive";
   }
@@ -252,6 +255,41 @@ export function isAgeAnswer(text: string): boolean {
     }
   }
   return false;
+}
+
+export function isCmRegistrationHelpRequest(text: string): boolean {
+  const t = normalizeFrText(text);
+  if (!t) {
+    return false;
+  }
+  if (/\b(vous voulez m'aide|veux m'aide|m'aider|aidez[- ]?moi|besoin d'aide)\b/i.test(t)) {
+    return false;
+  }
+  return (
+    /\b(je ne sais pas|je sais pas|sais pas faire|pas faire|comment faire)\b/i.test(t) ||
+    /\b(aide|help).{0,24}(inscri|enregistr|compte|plateforme|lien|telecharg)\b/i.test(t) ||
+    /\b(inscri|enregistr|compte|plateforme|lien|telecharg).{0,24}(aide|help)\b/i.test(t) ||
+    /\b(je connais pas|connais pas)\b/i.test(t) ||
+    /\b(je ne vois pas|je vois pas|pas de plate ?forme|plateforme|telecharg|m[' ]inscrit|je fais comment)\b/i.test(
+      t,
+    )
+  );
+}
+
+export function isRegistrationAccountQuestion(text: string): boolean {
+  const t = normalizeFrText(text);
+  if (!t) {
+    return false;
+  }
+  return (
+    /\b(je cree|je creer|je veux creer|je veux ouvrir|j'ouvre|j ouvre)\b.{0,24}\b(compte|account)\b/i.test(
+      t,
+    ) ||
+    /\b(quel|quelle|which)\s+(compte|account)\b/i.test(t) ||
+    /\b(compte|account).{0,20}(creer|cree|ouvrir|faire|inscri)\b/i.test(t) ||
+    /\bcomment\s+(creer|cree|ouvrir|inscri).{0,16}(compte|account)\b/i.test(t) ||
+    /\bje crée quel compte\b/i.test(t)
+  );
 }
 
 export function wantsRegistrationLink(text: string): boolean {
