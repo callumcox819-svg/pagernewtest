@@ -339,9 +339,6 @@ export function isFunnelPositiveReaction(text: string, funnelStep: number): bool
   if (!t) {
     return false;
   }
-  if (isClientReadyPhrase(t)) {
-    return true;
-  }
   if (POSITIVE_EMOJI.test(t)) {
     return true;
   }
@@ -355,14 +352,11 @@ export function isFunnelPositiveReaction(text: string, funnelStep: number): bool
 }
 
 export function wantsDetailsAfterIntro(text: string): boolean {
-  const t = normalizeFrText(text);
+  const t = (text || "").trim();
   if (!t) {
     return false;
   }
-  return (
-    /\b(detail|explique|comment ca|comment ça|how|pret|prete|commencer|continuer)\b/i.test(t) ||
-    isClientReadyPhrase(text)
-  );
+  return /\b(detail|détail|explique|comment ça|comment ca|how)\b/i.test(t);
 }
 
 export function isReadyForRegistration(text: string): boolean {

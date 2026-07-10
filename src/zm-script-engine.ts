@@ -189,39 +189,6 @@ export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key));
 }
 
-/** One funnel stage per customer message — paired scripts only where intended. */
-export function limitZmScriptsForCustomerTurn(
-  scriptKeys: string[],
-  outgoingTexts: string[],
-): string[] {
-  if (!scriptKeys.length) {
-    return scriptKeys;
-  }
-
-  if (
-    scriptKeys.includes("01_intro") &&
-    !zmScriptSentInHistory(outgoingTexts, "01_intro")
-  ) {
-    return ["01_intro"];
-  }
-
-  if (
-    scriptKeys.some((key) => ZM_EXPLAIN_SEND_KEYS.has(key)) &&
-    !explainScriptsSentInHistory(outgoingTexts)
-  ) {
-    return ["02_how_it_works", "03_zmw_table"];
-  }
-
-  if (
-    scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key)) &&
-    !regLinkSentInHistory(outgoingTexts)
-  ) {
-    return scriptKeys.filter((key) => ZM_REG_SEND_KEYS.has(key));
-  }
-
-  return [scriptKeys[0]!];
-}
-
 export function statusMoveTriggersInProgress(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => ZM_STATUS_MOVE_KEYS.has(key));
 }
@@ -411,8 +378,10 @@ export function resolveZmFunnelScripts(
       (signal ||
         intent === "ready" ||
         intent === "positive" ||
+        intent === "interested" ||
+        intent === "question" ||
         isReadyForRegistration(t) ||
-        options?.hasImage)
+        hasUsableFollowUp(t))
     ) {
       return ["06_deposit"];
     }
@@ -426,9 +395,13 @@ export function resolveZmFunnelScripts(
     (intent === "game_id_text" ||
       intent === "ready" ||
       intent === "positive" ||
+      intent === "interested" ||
       intent === "image_only" ||
+      intent === "question" ||
       options?.hasImage ||
-      isRegistrationConfirmed(t))
+      signal ||
+      hasUsableFollowUp(t) ||
+      t.length > 0)
   ) {
     return ["07_game_id"];
   }
@@ -452,7 +425,10 @@ export function resolveZmFunnelScripts(
     zmScriptSentInHistory(out, "07_game_id") &&
     !zmScriptSentInHistory(out, "09_tg_link") &&
     (intent === "positive" ||
-      intent === "ready")
+      intent === "ready" ||
+      intent === "question" ||
+      intent === "interested" ||
+      hasUsableFollowUp(t))
   ) {
     const next: string[] = [];
     if (!zmScriptSentInHistory(out, "08_tg_invite")) {
@@ -468,8 +444,12 @@ export function resolveZmFunnelScripts(
     return ["04_registration", "05_link"];
   }
 
-  if (!introSent && !linkSent && (intent === "interested" || signal || isGreeting(t))) {
+  if (!introSent && !linkSent && (intent === "interested" || signal || isGreeting(t) || hasUsableFollowUp(t))) {
     return ["01_intro"];
+  }
+
+  if (introSent && !explainSent && !linkSent && t.length > 0) {
+    return ["02_how_it_works", "03_zmw_table"];
   }
 
   return [];

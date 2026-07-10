@@ -188,42 +188,6 @@ export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key));
 }
 
-const EG_EXPLAIN_KEYS = ["02_how_it_works", "03_egp_table"] as const;
-const EG_REG_KEYS = ["04_registration", "05_link"] as const;
-
-/** One funnel stage per customer message. */
-export function limitEgScriptsForCustomerTurn(
-  scriptKeys: string[],
-  outgoingTexts: string[],
-): string[] {
-  if (!scriptKeys.length) {
-    return scriptKeys;
-  }
-
-  if (
-    scriptKeys.includes("01_intro") &&
-    !egScriptSentInHistory(outgoingTexts, "01_intro")
-  ) {
-    return ["01_intro"];
-  }
-
-  if (
-    scriptKeys.some((key) => EG_EXPLAIN_KEYS.includes(key as (typeof EG_EXPLAIN_KEYS)[number])) &&
-    !explainScriptsSentInHistory(outgoingTexts)
-  ) {
-    return [...EG_EXPLAIN_KEYS];
-  }
-
-  if (
-    scriptKeys.some((key) => EG_REG_KEYS.includes(key as (typeof EG_REG_KEYS)[number])) &&
-    !regLinkSentInHistory(outgoingTexts)
-  ) {
-    return scriptKeys.filter((key) => EG_REG_KEYS.includes(key as (typeof EG_REG_KEYS)[number]));
-  }
-
-  return [scriptKeys[0]!];
-}
-
 export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: string[]): boolean {
   const introSent = egScriptSentInHistory(outgoingTexts, "01_intro");
   const explainSent = explainScriptsSentInHistory(outgoingTexts);
@@ -235,24 +199,22 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
     return Boolean(customerText.trim());
   }
   if (!explainSent) {
-    return (
-      wantsDetailsAfterIntro(customerText) ||
-      isFunnelPositiveReaction(customerText, 1) ||
-      /\b(مهتم|مستعد|نعم|اه|ايوه|ok|yes|ready|interested|interesse|comment|كيف)\b/i.test(
-        customerText,
-      )
-    );
+    return true;
   }
   if (!linkSent) {
-    return explainSent;
+    return (
+      isEgJoinOrRegistrationQuestion(customerText) ||
+      isEgDepositTierChoice(customerText) ||
+      isReadyForRegistration(customerText) ||
+      isRegistrationHelpRequest(customerText) ||
+      wantsRegistrationLink(customerText)
+    );
   }
   if (!depositSent) {
     return (
       isRegistrationConfirmed(customerText) ||
       isRegistrationPending(customerText) ||
-      isRegistrationHelpRequest(customerText) ||
-      isEgJoinOrRegistrationQuestion(customerText) ||
-      isReadyForRegistration(customerText)
+      isRegistrationHelpRequest(customerText)
     );
   }
   if (!gameIdSent) {
@@ -377,7 +339,7 @@ export function resolveEgFunnelScripts(
 
   if (effectiveStep < 1) {
     if (introSent) {
-      if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
+      if (!explainSent && (wantsExplain(t, intent, effectiveStep) || t.length > 0)) {
         return explainScriptKeys();
       }
       if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
@@ -389,7 +351,8 @@ export function resolveEgFunnelScripts(
       ["interested", "positive", "ready", "question", "unknown"].includes(intent) ||
       signal ||
       isGreeting(t) ||
-      hasUsableFollowUp(t)
+      hasUsableFollowUp(t) ||
+      t.length > 0
     ) {
       return ["01_intro"];
     }
@@ -397,7 +360,7 @@ export function resolveEgFunnelScripts(
   }
 
   if (effectiveStep < 3) {
-    if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
+    if (!explainSent && (wantsExplain(t, intent, effectiveStep) || t.length > 0)) {
       return explainScriptKeys();
     }
     if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
@@ -461,7 +424,8 @@ export function resolveEgFunnelScripts(
       intent === "deposit_done" ||
       intent === "image_only" ||
       intent === "game_id_text" ||
-      options?.hasImage)
+      options?.hasImage ||
+      (intent === "positive" && (options?.hasImage || options?.messageReaction)))
   ) {
     return ["07_game_id"];
   }
@@ -478,6 +442,10 @@ export function resolveEgFunnelScripts(
 
   if (!introSent && !linkSent && (intent === "interested" || signal || isGreeting(t) || hasUsableFollowUp(t))) {
     return ["01_intro"];
+  }
+
+  if (introSent && !explainSent && !linkSent && t.length > 0) {
+    return explainScriptKeys();
   }
 
   return [];
