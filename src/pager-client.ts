@@ -1929,7 +1929,13 @@ export function isCustomerMessage(
     return true;
   }
   if (!author && text) {
-    return true;
+    if (isOutgoingDirection(message.messageDirection)) {
+      return false;
+    }
+    if (isIncomingDirection(message.messageDirection)) {
+      return true;
+    }
+    return false;
   }
   if (isOutgoingDirection(message.messageDirection)) {
     return false;

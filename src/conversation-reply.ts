@@ -1,6 +1,13 @@
 import type { PagerConversation, PagerMessage } from "./pager-client.js";
-import { isCustomerMessage, resolveLastMessageAt, enrichConversationFromThread } from "./pager-client.js";
+import {
+  isCustomerMessage,
+  resolveLastMessageAt,
+  enrichConversationFromThread,
+} from "./pager-client.js";
 import type { ConversationRuntimeState } from "./state-store.js";
+import type { CountryCode } from "./config.js";
+import { isAutomatedFunnelOutgoing } from "./funnel-outbound.js";
+import { egFunnelNeedsContinuation } from "./eg-script-engine.js";
 
 /** Brand-new customer messages (always processed). */
 export const FRESH_CUSTOMER_MESSAGE_MS = 30 * 60 * 1000;
@@ -141,11 +148,19 @@ export function findLatestIncomingMessage(
   messages: PagerMessage[],
   conv?: PagerConversation,
   operatorUserId?: string,
+  country?: CountryCode,
 ): PagerMessage | undefined {
   const enriched = conv ? enrichConversationFromThread(conv, messages, operatorUserId) : conv;
-  return sortMessagesNewestFirst(messages).find((message) =>
-    isCustomerMessage(message, enriched, operatorUserId),
-  );
+  return sortMessagesNewestFirst(messages).find((message) => {
+    if (!isCustomerMessage(message, enriched, operatorUserId)) {
+      return false;
+    }
+    const text = (message.text || "").trim();
+    if (text && country && isAutomatedFunnelOutgoing(text, country)) {
+      return false;
+    }
+    return true;
+  });
 }
 
 /** Recent customer lines (newest first) for funnel context when the latest message is a follow-up. */
@@ -176,6 +191,7 @@ export function hasOperatorReplyAfter(
   afterCustomerAt: string,
   conv?: PagerConversation,
   operatorUserId?: string,
+  country?: CountryCode,
 ): boolean {
   const afterTs = Date.parse(parseMessageTimestamp(afterCustomerAt));
   if (!Number.isFinite(afterTs)) {
@@ -191,6 +207,9 @@ export function hasOperatorReplyAfter(
       continue;
     }
     const text = (message.text || "").trim();
+    if (country && text && isAutomatedFunnelOutgoing(text, country)) {
+      continue;
+    }
     if (text || message.isDelivered || message.facebookMessageId) {
       return true;
     }
@@ -203,8 +222,9 @@ export function hasDeliveredReplyAfter(
   lastIncomingAt: string,
   conv?: PagerConversation,
   operatorUserId?: string,
+  country?: CountryCode,
 ): boolean {
-  return hasOperatorReplyAfter(messages, lastIncomingAt, conv, operatorUserId);
+  return hasOperatorReplyAfter(messages, lastIncomingAt, conv, operatorUserId, country);
 }
 
 export function isCustomerWaitingInThread(
@@ -218,7 +238,7 @@ export function isCustomerWaitingInThread(
   }
 
   const customerAt = parseMessageTimestamp(latestCustomer.createdAt);
-  if (hasOperatorReplyAfter(messages, customerAt, conv)) {
+  if (hasOperatorReplyAfter(messages, customerAt, conv, undefined, options?.country)) {
     return false;
   }
 
@@ -249,6 +269,20 @@ export function shouldQueueConversationFromThread(
   return isCustomerWaitingInThread(conv, messages, { country });
 }
 
+function collectOutgoingTextsFromThread(messages: PagerMessage[]): string[] {
+  const texts: string[] = [];
+  for (const message of messages) {
+    if (!isOutgoingDirection(message.messageDirection)) {
+      continue;
+    }
+    const text = (message.text || "").trim();
+    if (text) {
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
 export function assessReplyEligibility(
   conv: PagerConversation,
   convState: ConversationRuntimeState,
@@ -258,7 +292,13 @@ export function assessReplyEligibility(
 ): ReplyEligibility {
   const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
 
-  if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt, conv)) {
+  if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt, conv, undefined, options?.country)) {
+    if (
+      options?.country === "EG" &&
+      egFunnelNeedsContinuation((lastIncoming.text || "").trim(), collectOutgoingTextsFromThread(sortedMessages))
+    ) {
+      return { eligible: true };
+    }
     return { eligible: false, reason: "replied_after_in_thread", markSeen: true };
   }
 

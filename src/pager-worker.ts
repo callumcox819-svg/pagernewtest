@@ -39,6 +39,7 @@ import {
 import {
   classifyEgMessage,
   collectOutgoingTexts as collectEgOutgoingTexts,
+  egFunnelNeedsContinuation,
   egScriptSentInHistory,
   explainScriptsSentInHistory,
   funnelStepFromScriptGaps as egFunnelStepFromScriptGaps,
@@ -447,8 +448,9 @@ function prioritizeWorkQueue(
 function findLatestIncomingFromThread(
   messages: PagerMessage[],
   conv?: PagerConversation,
+  country?: "ZM" | "CM" | "EG",
 ): PagerMessage | undefined {
-  return findLatestIncomingMessage(messages, conv);
+  return findLatestIncomingMessage(messages, conv, undefined, country);
 }
 
 async function buildWorkQueue(
@@ -621,7 +623,7 @@ async function processCmConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const lastIncoming = findLatestIncomingFromThread(sorted, conv);
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, "CM");
   if (!lastIncoming) {
     return false;
   }
@@ -840,7 +842,7 @@ async function processZmConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const lastIncoming = findLatestIncomingFromThread(sorted, conv);
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, "ZM");
   if (!lastIncoming) {
     return false;
   }
@@ -1080,7 +1082,7 @@ async function processEgConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const lastIncoming = findLatestIncomingFromThread(sorted, conv);
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, "EG");
   if (!lastIncoming) {
     console.log(
       `Pager worker: EG ${convId.slice(0, 8)} — no_customer_message (msgs=${messages.length}, dir=${sorted[0]?.messageDirection ?? "?"})`,
@@ -1106,6 +1108,17 @@ async function processEgConversation(
     (isEgJoinOrRegistrationQuestion(latestCustomerText) ||
       isEgDepositTierChoice(latestCustomerText) ||
       tierChosenRecently);
+
+  if (
+    convState.lastCustomerMessageId === lastIncoming.id &&
+    convState.lastReplyAt &&
+    !awaitingRegAfterTierChoice &&
+    !egNewLeadBypass &&
+    !egFunnelContinuationBypass &&
+    !egFunnelNeedsContinuation(latestCustomerText, outgoingTexts)
+  ) {
+    return false;
+  }
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -1305,7 +1318,7 @@ async function processGenericConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const lastIncoming = findLatestIncomingFromThread(sorted, conv);
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, channel.country);
   if (!lastIncoming) {
     return false;
   }

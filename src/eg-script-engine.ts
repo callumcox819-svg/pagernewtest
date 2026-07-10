@@ -188,6 +188,43 @@ export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key));
 }
 
+export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: string[]): boolean {
+  const introSent = egScriptSentInHistory(outgoingTexts, "01_intro");
+  const explainSent = explainScriptsSentInHistory(outgoingTexts);
+  const linkSent = regLinkSentInHistory(outgoingTexts);
+  const depositSent = depositSentInHistory(outgoingTexts);
+  const gameIdSent = egScriptSentInHistory(outgoingTexts, "07_game_id");
+
+  if (!introSent) {
+    return Boolean(customerText.trim());
+  }
+  if (!explainSent) {
+    return true;
+  }
+  if (!linkSent) {
+    return (
+      isEgJoinOrRegistrationQuestion(customerText) ||
+      isEgDepositTierChoice(customerText) ||
+      isReadyForRegistration(customerText) ||
+      isRegistrationHelpRequest(customerText) ||
+      wantsRegistrationLink(customerText)
+    );
+  }
+  if (!depositSent) {
+    return (
+      isRegistrationConfirmed(customerText) ||
+      isRegistrationPending(customerText) ||
+      isRegistrationHelpRequest(customerText)
+    );
+  }
+  if (!gameIdSent) {
+    return (
+      isDepositConfirmed(customerText) || /\b(17\d{6,}|16\d{6,})\b/.test(customerText)
+    );
+  }
+  return false;
+}
+
 function shouldSendDepositScript(
   text: string,
   effectiveStep: number,
@@ -387,7 +424,8 @@ export function resolveEgFunnelScripts(
       intent === "deposit_done" ||
       intent === "image_only" ||
       intent === "game_id_text" ||
-      options?.hasImage)
+      options?.hasImage ||
+      (intent === "positive" && (options?.hasImage || options?.messageReaction)))
   ) {
     return ["07_game_id"];
   }
