@@ -1919,6 +1919,10 @@ async function ensureCustomerMessageEligible(
     return false;
   }
 
+  if (isNewCustomerTurn) {
+    return true;
+  }
+
   if (options?.bypass) {
     return true;
   }

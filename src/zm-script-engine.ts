@@ -406,10 +406,7 @@ export function resolveZmFunnelScripts(
       (signal ||
         intent === "ready" ||
         intent === "positive" ||
-        intent === "interested" ||
-        intent === "question" ||
-        isReadyForRegistration(t) ||
-        hasUsableFollowUp(t))
+        isReadyForRegistration(t))
     ) {
       return ["06_deposit"];
     }
@@ -427,9 +424,7 @@ export function resolveZmFunnelScripts(
       intent === "image_only" ||
       intent === "question" ||
       options?.hasImage ||
-      signal ||
-      hasUsableFollowUp(t) ||
-      t.length > 0)
+      signal)
   ) {
     return ["07_game_id"];
   }
@@ -455,8 +450,7 @@ export function resolveZmFunnelScripts(
     (intent === "positive" ||
       intent === "ready" ||
       intent === "question" ||
-      intent === "interested" ||
-      hasUsableFollowUp(t))
+      intent === "interested")
   ) {
     const next: string[] = [];
     if (!zmScriptSentInHistory(out, "08_tg_invite")) {

@@ -419,7 +419,20 @@ export function assessReplyEligibility(
       options?.country,
     )
   ) {
+    if (
+      options?.country === "EG" &&
+      egFunnelNeedsContinuation(
+        (lastIncoming.text || "").trim(),
+        collectOutgoingTextsFromThread(sortedMessages),
+      )
+    ) {
+      return { eligible: true };
+    }
     return { eligible: false, reason: "awaiting_customer_reply" };
+  }
+
+  if (isNewCustomerTurn) {
+    return { eligible: true };
   }
 
   if (hasDeliveredReplyAfter(sortedMessages, lastIncomingAt, conv, undefined, options?.country)) {
@@ -432,11 +445,7 @@ export function assessReplyEligibility(
     return { eligible: false, reason: "replied_after_in_thread", markSeen: true };
   }
 
-  if (shouldProcessIncomingMessage(lastIncomingAt, conv)) {
-    return { eligible: true };
-  }
-
-  if (isCustomerWaitingInThread(conv, sortedMessages, { country: options?.country })) {
+  if (hasUnreadMarkers(conv)) {
     return { eligible: true };
   }
 
