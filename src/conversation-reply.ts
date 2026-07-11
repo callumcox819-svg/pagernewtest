@@ -9,6 +9,11 @@ import type { CountryCode } from "./config.js";
 import { isAutomatedFunnelOutgoing } from "./funnel-outbound.js";
 import { egFunnelNeedsContinuation } from "./eg-script-engine.js";
 import {
+  cmAgeQuestionSentInHistory,
+  stepsSentInHistory as cmStepsSentInHistory,
+} from "./cm-script-engine.js";
+import { isAgeAnswer, isClientReadyPhrase } from "./cm-intent.js";
+import {
   isInProgressStatusConversation,
   isNoStatusConversation,
 } from "./status-folders.js";
@@ -345,6 +350,21 @@ export function isCustomerWaitingInThread(
 }
 
 /** Egypt: queue any thread where the customer still needs a reply. */
+export function cmFunnelNeedsContinuation(
+  customerText: string,
+  outgoingTexts: string[],
+): boolean {
+  if (!cmAgeQuestionSentInHistory(outgoingTexts) || cmStepsSentInHistory(outgoingTexts)) {
+    return false;
+  }
+  const text = (customerText || "").trim();
+  return (
+    isAgeAnswer(text) ||
+    isClientReadyPhrase(text) ||
+    /^(oui|ok|okay|yes|d'accord)\b/i.test(text)
+  );
+}
+
 export function shouldQueueEgConversation(conv: PagerConversation): boolean {
   if (hasUnreadMarkers(conv)) {
     return true;
@@ -423,6 +443,15 @@ export function assessReplyEligibility(
     ) {
       return { eligible: true };
     }
+    if (
+      options?.country === "CM" &&
+      cmFunnelNeedsContinuation(
+        (lastIncoming.text || "").trim(),
+        collectOutgoingTextsFromThread(sortedMessages),
+      )
+    ) {
+      return { eligible: true };
+    }
     return { eligible: false, reason: "awaiting_customer_reply" };
   }
 
@@ -439,6 +468,15 @@ export function assessReplyEligibility(
     if (
       options?.country === "EG" &&
       egFunnelNeedsContinuation(
+        (lastIncoming.text || "").trim(),
+        collectOutgoingTextsFromThread(sortedMessages),
+      )
+    ) {
+      return { eligible: true };
+    }
+    if (
+      options?.country === "CM" &&
+      cmFunnelNeedsContinuation(
         (lastIncoming.text || "").trim(),
         collectOutgoingTextsFromThread(sortedMessages),
       )

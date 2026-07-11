@@ -20,6 +20,7 @@ import {
   recentCustomerMessageTexts,
   shouldProcessConversation,
   shouldQueueEgConversation,
+  cmFunnelNeedsContinuation,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -1998,6 +1999,12 @@ async function ensureCustomerMessageEligible(
     ) {
       return true;
     }
+    if (
+      country === "CM" &&
+      cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted))
+    ) {
+      return true;
+    }
     const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate(customerText)})`,
@@ -2018,6 +2025,12 @@ async function ensureCustomerMessageEligible(
     if (
       country === "EG" &&
       egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
+    ) {
+      return true;
+    }
+    if (
+      country === "CM" &&
+      cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted))
     ) {
       return true;
     }

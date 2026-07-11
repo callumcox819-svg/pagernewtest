@@ -136,7 +136,18 @@ export function stepsSentInHistory(outgoingTexts: string[]): boolean {
 
 function ageQuestionSentInHistory(outgoingTexts: string[]): boolean {
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("quel âge") || blob.includes("quel age") || blob.includes("age avez-vous");
+  return (
+    blob.includes("quel âge") ||
+    blob.includes("quel age") ||
+    blob.includes("age avez-vous") ||
+    blob.includes("age as-tu") ||
+    blob.includes("âge avez") ||
+    blob.includes("age as tu")
+  );
+}
+
+export function cmAgeQuestionSentInHistory(outgoingTexts: string[]): boolean {
+  return ageQuestionSentInHistory(outgoingTexts);
 }
 
 export function scriptSentInHistory(outgoingTexts: string[], snippet: string): boolean {
@@ -294,9 +305,10 @@ export function funnelStepFromScriptGaps(
   if (!cmScriptSentInHistory(outgoingTexts, "01_intro_2")) {
     return Math.min(step, 1);
   }
-  if (!cmScriptSentInHistory(outgoingTexts, "02_age")) {
-    return Math.min(step, 2);
+  if (!cmScriptSentInHistory(outgoingTexts, "02_age") && !ageQuestionSentInHistory(outgoingTexts)) {
+    return Math.min(step, 1);
   }
+  step = Math.max(step, 2);
   if (!stepsSentInHistory(outgoingTexts)) {
     return Math.min(step, 2);
   }
@@ -493,6 +505,16 @@ export function resolveCmFunnelScripts(
         isClientReadyPhrase(t)
       ) {
         return ["02_age"];
+      }
+    } else if (!stepsSent) {
+      if (
+        isAgeAnswer(t) ||
+        ["positive", "ready", "interested", "question"].includes(intent) ||
+        signal ||
+        wantsDetailsAfterIntro(t) ||
+        isClientReadyPhrase(t)
+      ) {
+        return ["03_steps"];
       }
     }
     return [];

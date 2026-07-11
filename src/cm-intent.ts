@@ -236,29 +236,29 @@ export function isAgeAnswer(text: string): boolean {
   if (!t) {
     return false;
   }
+  const ageFromMatch = (match: RegExpMatchArray | null): number | undefined => {
+    if (!match?.[1]) {
+      return undefined;
+    }
+    const age = Number(match[1]);
+    return Number.isFinite(age) ? age : undefined;
+  };
+  const isValidAge = (age?: number): boolean => age !== undefined && age >= 15 && age <= 99;
+
   if (/^\d{1,2}$/.test(t)) {
-    const age = Number(t);
-    return age >= 15 && age <= 99;
+    return isValidAge(Number(t));
   }
-  if (/\b(j'ai|jai|ai)\s*\d{1,2}\s*ans\b/i.test(t)) {
-    return true;
+  if (/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\s*an[s]?\b/i.test(t)) {
+    return isValidAge(ageFromMatch(t.match(/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\s*an[s]?\b/i)));
   }
-  if (/\b(j'ai|jai|ai)\s*\d{1,2}\b/i.test(t)) {
-    const match = t.match(/\b(?:j'ai|jai|ai)\s*(\d{1,2})\b/i);
-    if (match) {
-      const age = Number(match[1]);
-      return age >= 15 && age <= 99;
-    }
+  if (/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\b/i.test(t)) {
+    return isValidAge(ageFromMatch(t.match(/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\b/i)));
   }
-  if (/\b\d{1,2}\s*ans\b/i.test(t)) {
-    return true;
+  if (/\b(\d{1,2})\s*an[s]?\b/i.test(t)) {
+    return isValidAge(ageFromMatch(t.match(/\b(\d{1,2})\s*an[s]?\b/i)));
   }
-  if (/\d{1,2}ans\b/i.test(t)) {
-    const match = t.match(/(\d{1,2})ans/i);
-    if (match) {
-      const age = Number(match[1]);
-      return age >= 15 && age <= 99;
-    }
+  if (/(\d{1,2})an[s]?\b/i.test(t)) {
+    return isValidAge(ageFromMatch(t.match(/(\d{1,2})an[s]?\b/i)));
   }
   return false;
 }
