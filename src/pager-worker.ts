@@ -75,7 +75,6 @@ import {
   type ZmStatusMoveTarget,
   ZM_EXPLAIN_SEND_KEYS,
   ZM_REG_SEND_KEYS,
-  ZM_TG_SEND_KEYS,
   depositSentInHistory as zmDepositSentInHistory,
 } from "./zm-script-engine.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
@@ -1104,29 +1103,6 @@ async function processZmConversation(
       if (scriptKey === "05_link") {
         const fallbackLink =
           loadLocalZmScript("05_link")?.trim() || "https://tinyurl.com/ZAM577";
-        const sent = await client.sendMessageReliable(convId, fallbackLink, {
-          channelId: runtime.channelId,
-          conv,
-        });
-        if (sent) {
-          sentAny = true;
-          sentScriptKeys.push(scriptKey);
-          await patchConversationState(deps.stateStore, state.chatId, convId, {
-            conversationId: convId,
-            channelId: runtime.channelId,
-            lastCustomerMessageId: lastIncoming.id,
-            lastCustomerMessageAt: lastIncoming.createdAt,
-            lastReplyAt: new Date().toISOString(),
-            lastReplyRole: scriptKey,
-            sendFailures: 0,
-          });
-          await sleep(500);
-        }
-        continue;
-      }
-      if (scriptKey === "09_tg_link") {
-        const fallbackLink =
-          loadLocalZmScript("09_tg_link")?.trim() || "https://t.me/+cxqeg5kratJkYTMy";
         const sent = await client.sendMessageReliable(convId, fallbackLink, {
           channelId: runtime.channelId,
           conv,

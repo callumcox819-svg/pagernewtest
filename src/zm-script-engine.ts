@@ -49,12 +49,10 @@ export const ZM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
 
 export const ZM_FOLDER_NAME_HINTS = ["замб", "zamb", "zambia"];
 export const ZM_REG_SEND_KEYS = new Set(["04_registration", "05_link"]);
-export const ZM_TG_SEND_KEYS = new Set(["08_tg_invite", "09_tg_link"]);
-export const ZM_STATUS_MOVE_KEYS = new Set(["04_registration", "05_link", "08_tg_invite", "09_tg_link"]);
+export const ZM_STATUS_MOVE_KEYS = new Set(["04_registration", "05_link"]);
 export const ZM_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works", "03_zmw_table"]);
 
 const ZM_REG_BUNDLE = ["04_registration", "05_link"] as const;
-const ZM_TG_BUNDLE = ["08_tg_invite", "09_tg_link"] as const;
 const ZM_REGISTRATION_LINK = "https://tinyurl.com/ZAM577";
 
 export function scriptSnippet(key: string): string {
@@ -288,17 +286,6 @@ export function limitZmScriptsForCustomerTurn(
     }
     return [];
   }
-  if (scriptKeys.some((key) => ZM_TG_SEND_KEYS.has(key))) {
-    const inviteSent = zmTgInviteSentInHistory(outgoingTexts);
-    const linkSent = tgLinkSentInHistory(outgoingTexts);
-    if (!inviteSent) {
-      return [...ZM_TG_BUNDLE];
-    }
-    if (!linkSent) {
-      return ["09_tg_link"];
-    }
-    return [];
-  }
   return [scriptKeys[0]!];
 }
 
@@ -309,10 +296,7 @@ export function zmAllowsMultiSend(scriptKeys: string[]): boolean {
   if (scriptKeys.some((key) => ZM_EXPLAIN_SEND_KEYS.has(key))) {
     return true;
   }
-  return (
-    scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key)) ||
-    scriptKeys.some((key) => ZM_TG_SEND_KEYS.has(key))
-  );
+  return scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key));
 }
 
 export type ZmStatusMoveTarget = "in_progress_registration" | "registration_complete";
@@ -370,6 +354,19 @@ function hasUsableFollowUp(text: string): boolean {
     return false;
   }
   return !/\b(fuck|scam|leave me alone|stop texting|not interested|no thanks|get out)\b/i.test(t);
+}
+
+function wantsDepositNow(text: string, intent: ZmIntent): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  return (
+    intent === "ready" ||
+    /\b(make a deposit|ready to deposit|let me deposit|want to deposit|do the deposit|deposit now|ready.*deposit)\b/i.test(
+      t,
+    )
+  );
 }
 
 function wantsRegistrationBundle(
@@ -486,32 +483,13 @@ export function resolveZmFunnelScripts(
       intent === "game_id_text" ||
       intent === "image_only" ||
       isRegistrationConfirmed(t) ||
-      intent === "joined"
+      intent === "joined" ||
+      wantsDepositNow(t, intent) ||
+      signal
     ) {
       return ["06_deposit"];
     }
     return [];
-  }
-
-  if (depositSent && !tgLinkSentInHistory(out)) {
-    if (
-      intent === "game_id_text" ||
-      intent === "positive" ||
-      intent === "ready" ||
-      intent === "interested" ||
-      intent === "question" ||
-      options?.hasImage ||
-      signal
-    ) {
-      const next: string[] = [];
-      if (!zmTgInviteSentInHistory(out)) {
-        next.push("08_tg_invite");
-      }
-      if (!tgLinkSentInHistory(out)) {
-        next.push("09_tg_link");
-      }
-      return next;
-    }
   }
 
   return [];
