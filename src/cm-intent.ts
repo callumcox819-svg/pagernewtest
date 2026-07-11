@@ -278,6 +278,9 @@ export function isCmRegistrationHelpRequest(text: string): boolean {
     /\b(je connais pas|connais pas)\b/i.test(t) ||
     /\b(je ne vois pas|je vois pas|pas de plate ?forme|plateforme|telecharg|m[' ]inscrit|je fais comment)\b/i.test(
       t,
+    ) ||
+    /\b(code promo|promo code|ton number|ton lien|l'application|l application|lapplication)\b/i.test(
+      t,
     )
   );
 }

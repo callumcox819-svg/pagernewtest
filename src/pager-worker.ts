@@ -102,6 +102,7 @@ import type {
   ConversationRuntimeState,
   StateStore,
 } from "./state-store.js";
+import { loadLocalCmScript } from "./cm-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import {
   countApiStatusFolders,
@@ -831,9 +832,10 @@ async function processCmConversation(
         console.warn(`CM script optional miss ${convId.slice(0, 8)}: ${scriptKey}`);
         continue;
       }
-      if (scriptKey === "06_link" && sentAny) {
-        const fallbackLink = "https://tinyurl.com/Camerun01";
-        const sent = await client.sendMessageReliable(convId, fallbackLink, {
+      if (scriptKey === "06_link") {
+        const fallbackText =
+          loadLocalCmScript("05_registration")?.trim() || "https://tinyurl.com/Camerun01";
+        const sent = await client.sendMessageReliable(convId, fallbackText, {
           channelId: runtime.channelId,
           conv,
         });

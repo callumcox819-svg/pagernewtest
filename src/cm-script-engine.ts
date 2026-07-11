@@ -156,7 +156,17 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("camerun01") || blob.includes("cash056");
+  return blob.includes("camerun01") || blob.includes("tinyurl.com/camerun");
+}
+
+export function cmRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
+  const blob = outgoingTexts.join("\n").toLowerCase();
+  return (
+    (blob.includes("je vous envoie le lien") ||
+      blob.includes("telecharger l'application") ||
+      blob.includes("télécharger l'application")) &&
+    blob.includes("cash056")
+  );
 }
 
 export function depositSentInHistory(outgoingTexts: string[]): boolean {
@@ -314,7 +324,7 @@ export function resolveCmFunnelScripts(
 
   if (registrationHelp) {
     if (regLinkSentInHistory(out)) {
-      return ["07_chrome", "06_link"];
+      return ["07_chrome"];
     }
     if (!linkSent && (tierSent || tierChoice || stepsSent)) {
       return [...CM_REG_BUNDLE];
@@ -542,11 +552,11 @@ export function limitCmScriptsForCustomerTurn(
     return scriptKeys.filter((key) => key === "01_intro" || key === "01_intro_2");
   }
   if (scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))) {
-    if (!cmScriptSentInHistory(outgoingTexts, "05_registration")) {
+    if (!cmRegistrationInstructionsSentInHistory(outgoingTexts)) {
       return ["05_registration"];
     }
     if (!regLinkSentInHistory(outgoingTexts)) {
-      return ["06_link"];
+      return ["05_registration"];
     }
     return ["07_chrome"];
   }

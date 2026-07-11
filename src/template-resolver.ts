@@ -150,6 +150,18 @@ export async function resolveScriptTextByKey(
     if (fromPager?.text?.trim() && isScriptReplyAcceptable(fromPager.text, options.scriptKey, country)) {
       return fromPager.text;
     }
+    if (
+      country === "CM" &&
+      options.scriptKey === "06_link" &&
+      fromPager?.text?.trim() &&
+      /^https?:\/\/\S+$/i.test(fromPager.text.trim())
+    ) {
+      const fullReg = loadLocalCmScript("05_registration");
+      if (fullReg?.trim()) {
+        console.warn(`${country} script bare link replaced with 05_registration for key=06_link`);
+        return fullReg;
+      }
+    }
     if (fromPager?.text?.trim()) {
       console.warn(
         `${country} script pager rejected weak match key=${options.scriptKey} chars=${fromPager.text.length}`,
@@ -271,7 +283,10 @@ function hasExcludedSnippet(text: string, excludes: string[]): boolean {
 }
 
 function pickBestScriptReply(replies: PagerSavedReply[], scriptKey: string): PagerSavedReply {
-  if (scriptKey === "05_link" || scriptKey === "06_link" || scriptKey === "07_chrome") {
+  if (scriptKey === "06_link") {
+    return [...replies].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0];
+  }
+  if (scriptKey === "05_link" || scriptKey === "07_chrome") {
     return [...replies].sort((left, right) => (left.text?.length ?? 0) - (right.text?.length ?? 0))[0];
   }
   return [...replies].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0];
