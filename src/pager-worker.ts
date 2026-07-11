@@ -16,6 +16,7 @@ import {
   conversationPriorityScore,
   findLatestIncomingMessage,
   hasBotReplyAfterCustomerMessage,
+  isNewLeadConversation,
   recentCustomerMessageTexts,
   shouldProcessConversation,
   shouldQueueEgConversation,
@@ -39,6 +40,7 @@ import {
   limitCmScriptsForCustomerTurn,
   CM_REG_SEND_KEYS,
   tierSentInHistory,
+  depositSentInHistory as cmDepositSentInHistory,
 } from "./cm-script-engine.js";
 import {
   classifyEgMessage,
@@ -54,6 +56,7 @@ import {
   limitEgScriptsForCustomerTurn,
   EG_REG_SEND_KEYS,
   EG_EXPLAIN_SEND_KEYS,
+  depositSentInHistory as egDepositSentInHistory,
 } from "./eg-script-engine.js";
 import {
   classifyZmMessage,
@@ -69,6 +72,7 @@ import {
   limitZmScriptsForCustomerTurn,
   ZM_EXPLAIN_SEND_KEYS,
   ZM_REG_SEND_KEYS,
+  depositSentInHistory as zmDepositSentInHistory,
 } from "./zm-script-engine.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
 import { extractProofImageUrl, resolveMessageReaction } from "./message-attachments.js";
@@ -426,7 +430,10 @@ function prioritizeWorkQueue(
     (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
   );
   const selected = new Map<string, PagerConversation>();
-  const minPerChannel = Math.max(120, Math.floor(limit / Math.max(channelIds.length, 1)));
+  const minPerChannel = Math.min(
+    50,
+    Math.max(20, Math.floor(limit / Math.max(channelIds.length, 1))),
+  );
 
   for (const channelId of channelIds) {
     let picked = 0;
@@ -463,6 +470,19 @@ function findLatestIncomingFromThread(
   return findLatestIncomingMessage(messages, conv, undefined, country);
 }
 
+function inboxConversationEligible(
+  conv: PagerConversation,
+  enabledFolderIds: Set<string> | null,
+): boolean {
+  if (isNewLeadConversation(conv)) {
+    return true;
+  }
+  if (!enabledFolderIds) {
+    return true;
+  }
+  return conversationAllowedInFolders(conv, enabledFolderIds);
+}
+
 async function buildWorkQueue(
   client: PagerClient,
   folderScopedConversations: PagerConversation[],
@@ -487,7 +507,7 @@ async function buildWorkQueue(
     );
     let addedForChannel = 0;
     for (const conv of inboxTop) {
-      if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
+      if (!inboxConversationEligible(conv, enabledFolderIds)) {
         continue;
       }
       if (channel.runtime.country === "EG" && !shouldQueueEgConversation(conv)) {
@@ -2102,14 +2122,25 @@ async function tryHandleCustomerImage(
     proofKind = classifyProofFromText(ctx.playbook, ctx.text).proofKind;
   }
 
+  if (proofKind === "registration_screenshot" || proofKind === "id_screenshot") {
+    return false;
+  }
+
+  const depositSent =
+    ctx.channel.country === "ZM"
+      ? zmDepositSentInHistory(ctx.outgoingTexts)
+      : ctx.channel.country === "EG"
+        ? egDepositSentInHistory(ctx.outgoingTexts)
+        : cmDepositSentInHistory(ctx.outgoingTexts);
+  const regLinkSent =
+    ctx.channel.country === "ZM"
+      ? zmRegLinkSentInHistory(ctx.outgoingTexts)
+      : ctx.channel.country === "EG"
+        ? egRegLinkSentInHistory(ctx.outgoingTexts)
+        : cmRegLinkSentInHistory(ctx.outgoingTexts);
+
   if (proofKind === "unclear_screenshot") {
-    const regLinkSent =
-      ctx.channel.country === "ZM"
-        ? zmRegLinkSentInHistory(ctx.outgoingTexts)
-        : ctx.channel.country === "EG"
-          ? egRegLinkSentInHistory(ctx.outgoingTexts)
-          : cmRegLinkSentInHistory(ctx.outgoingTexts);
-    if (!regLinkSent) {
+    if (!regLinkSent || !depositSent) {
       return false;
     }
     const replyText = await resolveTemplateText(deps.config, ctx.client, {

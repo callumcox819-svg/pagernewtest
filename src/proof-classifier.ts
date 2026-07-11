@@ -46,7 +46,9 @@ export function classifyProofFromText(
 
   const hasDepositMarker =
     playbook.depositKeywords.some((keyword) => normalized.includes(normalize(keyword))) ||
-    /(balance|deposit|funded|egp|usd|zar|ksh|kes|fcfa|رصيد|ايداع|إيداع|solde)/i.test(inputText);
+    /(balance|deposit|funded|egp|usd|zar|ksh|kes|fcfa|رصيد|ايداع|إيداع|solde|recharger|retrait)/i.test(
+      inputText,
+    );
 
   if (hasDepositMarker) {
     return {
@@ -56,9 +58,18 @@ export function classifyProofFromText(
     };
   }
 
-  const hasIdMarker =
+  const hasRegistrationUiMarker =
     playbook.registrationKeywords.some((keyword) => normalized.includes(normalize(keyword))) ||
-    /(id|client|account|uid|رقم|عميل|identifiant|compte)/i.test(inputText);
+    /(inscription|1xbet|xbet|melbet|betwinner|paris sportifs|cr[eé]er un compte|cree un compte|t[eé]l[eé]charger|telecharger|installer|apk|promo|code promo|limite d.?age|phone number|num[eé]ro de t[eé]l[eé]phone|cameroun|cash056|eg011|egypt0011)/i.test(
+      inputText,
+    ) ||
+    /(تسجيل|حساب|انشاء|إنشاء|1xbet|xbet|تحميل|تطبيق|رابط|promo|كود)/i.test(inputText);
+
+  const hasIdMarker =
+    hasRegistrationUiMarker ||
+    /(id|client|account|uid|رقم|عميل|identifiant|compte|joueur|player|profil|profile|mon compte)/i.test(
+      inputText,
+    );
 
   const hasLongDigits = /\b\d{5,}\b/.test(inputText);
 
@@ -70,7 +81,7 @@ export function classifyProofFromText(
     };
   }
 
-  if (hasIdMarker || hasLongDigits) {
+  if (hasIdMarker || hasLongDigits || hasRegistrationUiMarker) {
     return {
       proofKind: "registration_screenshot",
       combinedText: inputText,

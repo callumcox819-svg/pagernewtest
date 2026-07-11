@@ -170,6 +170,11 @@ playbooks:
       - "id"
       - "identifiant"
       - "compte"
+      - "inscription"
+      - "1xbet"
+      - "xbet"
+      - "telecharger"
+      - "promo"
     depositKeywords:
       - "solde"
       - "depot"

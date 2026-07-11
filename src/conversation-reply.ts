@@ -13,6 +13,10 @@ import {
   isNoStatusConversation,
 } from "./status-folders.js";
 
+export function isNewLeadConversation(conv: PagerConversation): boolean {
+  return isNoStatusConversation(conv) && isIncomingDirection(conv.lastMessageDirection);
+}
+
 /** Brand-new customer messages (always processed). */
 export const FRESH_CUSTOMER_MESSAGE_MS = 30 * 60 * 1000;
 
@@ -131,8 +135,10 @@ export function conversationPriorityScore(conv: PagerConversation): number {
   const unread = isConversationUnread(conv);
   const incoming = isIncomingDirection(conv.lastMessageDirection);
   const fresh = isFreshCustomerMessage(resolveLastMessageAt(conv));
+  const newLead = isNewLeadConversation(conv);
   const lastAt = Date.parse(resolveLastMessageAt(conv) ?? "");
   return (
+    (newLead ? 3_000_000 : 0) +
     (unread ? 2_000_000 : 0) +
     (fresh ? 1_000_000 : 0) +
     (incoming ? 100_000 : 0) +

@@ -433,8 +433,10 @@ export function resolveEgFunnelScripts(
       intent === "deposit_done" ||
       intent === "image_only" ||
       intent === "game_id_text" ||
+      intent === "positive" ||
+      intent === "ready" ||
       options?.hasImage ||
-      (intent === "positive" && (options?.hasImage || options?.messageReaction)))
+      isPositiveMessageReaction(options?.messageReaction))
   ) {
     return ["07_game_id"];
   }
@@ -462,9 +464,29 @@ export function resolveEgFunnelScripts(
     depositSentInHistory(out) &&
     !egScriptSentInHistory(out, "07_game_id") &&
     !t &&
-    (options?.hasImage || isPositiveMessageReaction(options?.messageReaction))
+    (options?.hasImage ||
+      isPositiveMessageReaction(options?.messageReaction) ||
+      intent === "positive" ||
+      intent === "ready")
   ) {
     return ["07_game_id"];
+  }
+
+  if (
+    effectiveStep >= 2 &&
+    !linkSent &&
+    (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t) || wantsRegistrationLink(t))
+  ) {
+    return ["04_registration", "05_link"];
+  }
+
+  if (
+    introSent &&
+    !explainSent &&
+    !linkSent &&
+    (intent === "interested" || intent === "ready" || signal || isGreeting(t))
+  ) {
+    return explainScriptKeys();
   }
 
   return [];
