@@ -136,12 +136,15 @@ export function conversationPriorityScore(conv: PagerConversation): number {
   const incoming = isIncomingDirection(conv.lastMessageDirection);
   const fresh = isFreshCustomerMessage(resolveLastMessageAt(conv));
   const newLead = isNewLeadConversation(conv);
+  const staleInProgress =
+    isInProgressStatusConversation(conv) && !unread && !incoming && !fresh && !newLead;
   const lastAt = Date.parse(resolveLastMessageAt(conv) ?? "");
   return (
     (newLead ? 3_000_000 : 0) +
     (unread ? 2_000_000 : 0) +
     (fresh ? 1_000_000 : 0) +
     (incoming ? 100_000 : 0) +
+    (staleInProgress ? -10_000_000 : 0) +
     (Number.isFinite(lastAt) ? Math.floor(lastAt / 1000) : 0)
   );
 }
@@ -341,28 +344,34 @@ export function isCustomerWaitingInThread(
   return false;
 }
 
-/** Egypt inbox: new leads + active in-progress threads where the customer spoke last. */
+/** Egypt: queue any thread where the customer still needs a reply. */
 export function shouldQueueEgConversation(conv: PagerConversation): boolean {
-  if (isNoStatusConversation(conv) && isIncomingDirection(conv.lastMessageDirection)) {
+  if (hasUnreadMarkers(conv)) {
+    return true;
+  }
+  if (isIncomingDirection(conv.lastMessageDirection)) {
+    return true;
+  }
+  if (isFreshCustomerMessage(resolveLastMessageAt(conv))) {
     return true;
   }
   if (
-    isInProgressStatusConversation(conv) &&
-    (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))
+    isNoStatusConversation(conv) &&
+    (hasUnreadMarkers(conv) ||
+      isIncomingDirection(conv.lastMessageDirection) ||
+      isFreshCustomerMessage(resolveLastMessageAt(conv)))
   ) {
     return true;
-  }
-  if (!shouldProcessConversation(conv)) {
-    return false;
   }
   if (
     isInProgressStatusConversation(conv) &&
     !hasUnreadMarkers(conv) &&
+    !isIncomingDirection(conv.lastMessageDirection) &&
     !isFreshCustomerMessage(resolveLastMessageAt(conv))
   ) {
     return false;
   }
-  return true;
+  return shouldProcessConversation(conv);
 }
 
 export function shouldQueueConversationFromThread(
@@ -399,6 +408,10 @@ export function assessReplyEligibility(
 ): ReplyEligibility {
   const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
+
+  if (isFreshCustomerMessage(lastIncomingAt)) {
+    return { eligible: true };
+  }
 
   if (
     !isNewCustomerTurn &&

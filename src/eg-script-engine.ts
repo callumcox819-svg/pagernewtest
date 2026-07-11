@@ -228,7 +228,12 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
   }
   if (!gameIdSent) {
     return (
-      isDepositConfirmed(customerText) || /\b(17\d{6,}|16\d{6,})\b/.test(customerText)
+      isDepositConfirmed(customerText) ||
+      /\b(17\d{6,}|16\d{6,})\b/.test(customerText) ||
+      isEgJoinOrRegistrationQuestion(customerText) ||
+      isRegistrationHelpRequest(customerText) ||
+      wantsRegistrationLink(customerText) ||
+      isReadyForRegistration(customerText)
     );
   }
   return false;
@@ -481,10 +486,17 @@ export function resolveEgFunnelScripts(
   }
 
   if (
+    linkSent &&
+    (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t) || wantsRegistrationLink(t))
+  ) {
+    return [...registrationHelpScriptKeys("EG")];
+  }
+
+  if (
     introSent &&
     !explainSent &&
     !linkSent &&
-    (intent === "interested" || intent === "ready" || signal || isGreeting(t))
+    (intent === "interested" || intent === "ready" || signal || isGreeting(t) || t.length > 0)
   ) {
     return explainScriptKeys();
   }

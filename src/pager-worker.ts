@@ -17,6 +17,7 @@ import {
   findLatestIncomingMessage,
   hasBotReplyAfterCustomerMessage,
   isNewLeadConversation,
+  isFreshCustomerMessage,
   recentCustomerMessageTexts,
   shouldProcessConversation,
   shouldQueueEgConversation,
@@ -127,6 +128,9 @@ const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 400;
 const INBOX_TOP = 25;
 const INBOX_TOP_EG_CM = 80;
+const INBOX_TOP_EG = 120;
+const INBOX_PAGES_EG = 5;
+const INBOX_PAGES_CM = 2;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -330,7 +334,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     ? MAX_CONVERSATIONS_PER_ACCOUNT
     : 80;
   const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
-  const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit).sort(
+  const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit, egChannelIds).sort(
     (left, right) => {
       const leftEg = egChannelIds.has(left.channelId || left.channel?.id || "");
       const rightEg = egChannelIds.has(right.channelId || right.channel?.id || "");
@@ -425,6 +429,7 @@ function prioritizeWorkQueue(
   conversations: PagerConversation[],
   channelIds: string[],
   limit: number,
+  egChannelIds?: Set<string>,
 ): PagerConversation[] {
   const scored = [...conversations].sort(
     (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
@@ -445,6 +450,22 @@ function prioritizeWorkQueue(
       selected.set(conv.id, conv);
       picked += 1;
       if (picked >= minPerChannel) {
+        break;
+      }
+    }
+  }
+
+  if (egChannelIds?.size) {
+    let egPicked = 0;
+    const egMin = Math.min(35, Math.max(15, Math.floor(limit / 4)));
+    for (const conv of scored) {
+      const convChannelId = conv.channelId || conv.channel?.id || "";
+      if (!egChannelIds.has(convChannelId) || selected.has(conv.id)) {
+        continue;
+      }
+      selected.set(conv.id, conv);
+      egPicked += 1;
+      if (egPicked >= egMin) {
         break;
       }
     }
@@ -496,26 +517,39 @@ async function buildWorkQueue(
     if (channel.runtime.country !== "CM" && channel.runtime.country !== "EG") {
       continue;
     }
-    const inboxTop = (
-      await client.listConversations({
-        channelId: channel.channelId,
-        page: 1,
-        pageSize: 60,
-      })
-    ).sort(
-      (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
-    );
+    const isEg = channel.runtime.country === "EG";
+    const maxPages = isEg ? INBOX_PAGES_EG : INBOX_PAGES_CM;
+    const inboxCap = isEg ? INBOX_TOP_EG : INBOX_TOP_EG_CM;
     let addedForChannel = 0;
-    for (const conv of inboxTop) {
-      if (!inboxConversationEligible(conv, enabledFolderIds)) {
-        continue;
+    for (let page = 1; page <= maxPages; page += 1) {
+      const inboxPage = (
+        await client.listConversations({
+          channelId: channel.channelId,
+          page,
+          pageSize: 60,
+        })
+      ).sort(
+        (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+      );
+      if (!inboxPage.length) {
+        break;
       }
-      if (channel.runtime.country === "EG" && !shouldQueueEgConversation(conv)) {
-        continue;
+      for (const conv of inboxPage) {
+        if (!inboxConversationEligible(conv, enabledFolderIds)) {
+          continue;
+        }
+        if (isEg && !shouldQueueEgConversation(conv)) {
+          continue;
+        }
+        if (!selected.has(conv.id)) {
+          selected.set(conv.id, conv);
+          addedForChannel += 1;
+        }
+        if (addedForChannel >= inboxCap) {
+          break;
+        }
       }
-      selected.set(conv.id, conv);
-      addedForChannel += 1;
-      if (addedForChannel >= INBOX_TOP_EG_CM) {
+      if (addedForChannel >= inboxCap) {
         break;
       }
     }
@@ -1861,6 +1895,7 @@ async function ensureCustomerMessageEligible(
   },
 ): Promise<boolean> {
   const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | undefined);
+  const customerText = (lastIncoming.text || "").trim();
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
   if (
     !isNewCustomerTurn &&
@@ -1872,11 +1907,19 @@ async function ensureCustomerMessageEligible(
       country,
     )
   ) {
+    if (
+      country === "EG" &&
+      egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
+    ) {
+      return true;
+    }
+    if (isFreshCustomerMessage(lastIncoming.createdAt) && customerText) {
+      return true;
+    }
     const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
     console.log(
-      `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate((lastIncoming.text || "").trim())})`,
+      `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate(customerText)})`,
     );
-    await client.acknowledgeConversation(convId);
     return false;
   }
 
