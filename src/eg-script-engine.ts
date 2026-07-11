@@ -525,7 +525,10 @@ export function limitEgScriptsForCustomerTurn(
     return ["02_how_it_works", "03_egp_table"];
   }
   if (scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key))) {
-    return scriptKeys.filter((key) => EG_REG_SEND_KEYS.has(key));
+    if (!egScriptSentInHistory(outgoingTexts, "04_registration")) {
+      return ["04_registration"];
+    }
+    return ["05_link"];
   }
   return [scriptKeys[0]!];
 }

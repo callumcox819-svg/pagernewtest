@@ -408,6 +408,23 @@ export function assessReplyEligibility(
 ): ReplyEligibility {
   const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
+  const alreadyRepliedInState =
+    !isNewCustomerTurn &&
+    convState.lastCustomerMessageId === lastIncoming.id &&
+    Boolean(convState.lastReplyAt);
+
+  if (alreadyRepliedInState) {
+    if (
+      options?.country === "EG" &&
+      egFunnelNeedsContinuation(
+        (lastIncoming.text || "").trim(),
+        collectOutgoingTextsFromThread(sortedMessages),
+      )
+    ) {
+      return { eligible: true };
+    }
+    return { eligible: false, reason: "awaiting_customer_reply" };
+  }
 
   if (
     !isNewCustomerTurn &&

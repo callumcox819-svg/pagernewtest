@@ -469,7 +469,7 @@ export function resolveCmFunnelScripts(
         return ["04_tier"];
       }
     }
-    if (tierSent && (tierChoice || signal || intent === "ready" || intent === "positive")) {
+    if (tierSent && tierChoice && !linkSent) {
       return [...CM_REG_BUNDLE];
     }
     return [];
@@ -495,14 +495,11 @@ export function resolveCmFunnelScripts(
     if (
       tierSent &&
       !linkSent &&
-      (isReadyForRegistration(t) ||
+      (tierChoice ||
         registrationHelp ||
         isRegistrationAccountQuestion(t) ||
         wantsRegistrationLink(t) ||
-        tierChoice ||
-        ["ready", "interested", "positive", "question"].includes(intent) ||
-        signal ||
-        isClientReadyPhrase(t))
+        isRegistrationPending(t))
     ) {
       return [...CM_REG_BUNDLE];
     }
@@ -530,7 +527,7 @@ export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
 }
 
-/** One funnel stage per customer message — intro pair or reg bundle only as multi-send. */
+/** One funnel script per customer message — intro pair is the only multi-send. */
 export function limitCmScriptsForCustomerTurn(
   scriptKeys: string[],
   outgoingTexts: string[],
@@ -545,7 +542,13 @@ export function limitCmScriptsForCustomerTurn(
     return scriptKeys.filter((key) => key === "01_intro" || key === "01_intro_2");
   }
   if (scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))) {
-    return scriptKeys.filter((key) => CM_REG_SEND_KEYS.has(key));
+    if (!cmScriptSentInHistory(outgoingTexts, "05_registration")) {
+      return ["05_registration"];
+    }
+    if (!regLinkSentInHistory(outgoingTexts)) {
+      return ["06_link"];
+    }
+    return ["07_chrome"];
   }
   return [scriptKeys[0]!];
 }

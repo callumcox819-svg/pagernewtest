@@ -212,7 +212,10 @@ export function limitZmScriptsForCustomerTurn(
     scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key)) &&
     !regLinkSentInHistory(outgoingTexts)
   ) {
-    return scriptKeys.filter((key) => ZM_REG_SEND_KEYS.has(key));
+    if (!zmScriptSentInHistory(outgoingTexts, "04_registration")) {
+      return ["04_registration"];
+    }
+    return ["05_link"];
   }
   return [scriptKeys[0]!];
 }

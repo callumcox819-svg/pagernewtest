@@ -818,8 +818,7 @@ async function processCmConversation(
   );
 
   let sentAny = false;
-  const allowMultiSend =
-    scriptKeys.includes("01_intro") || scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
+  const allowMultiSend = scriptKeys.includes("01_intro");
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1050,8 +1049,7 @@ async function processZmConversation(
   let sentAny = false;
   const allowMultiSend =
     scriptKeys.includes("01_intro") ||
-    scriptKeys.some((key) => ZM_EXPLAIN_SEND_KEYS.has(key)) ||
-    scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key));
+    scriptKeys.some((key) => ZM_EXPLAIN_SEND_KEYS.has(key));
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1313,10 +1311,7 @@ async function processEgConversation(
   );
 
   let sentAny = false;
-  const allowMultiSend =
-    scriptKeys.includes("01_intro") ||
-    scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key)) ||
-    scriptKeys.some((key) => EG_EXPLAIN_SEND_KEYS.has(key));
+  const allowMultiSend = scriptKeys.some((key) => EG_EXPLAIN_SEND_KEYS.has(key));
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1896,6 +1891,25 @@ async function ensureCustomerMessageEligible(
   const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | undefined);
   const customerText = (lastIncoming.text || "").trim();
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
+  const alreadyRepliedInState =
+    !isNewCustomerTurn &&
+    convState.lastCustomerMessageId === lastIncoming.id &&
+    Boolean(convState.lastReplyAt);
+
+  if (alreadyRepliedInState) {
+    if (
+      country === "EG" &&
+      egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
+    ) {
+      return true;
+    }
+    const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate(customerText)})`,
+    );
+    return false;
+  }
+
   if (
     !isNewCustomerTurn &&
     hasBotReplyAfterCustomerMessage(
