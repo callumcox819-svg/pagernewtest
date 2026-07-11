@@ -51,6 +51,9 @@ import {
   regLinkSentInHistory as egRegLinkSentInHistory,
   regSendTriggersInProgress as egRegSendTriggersInProgress,
   resolveEgFunnelScripts,
+  limitEgScriptsForCustomerTurn,
+  EG_REG_SEND_KEYS,
+  EG_EXPLAIN_SEND_KEYS,
 } from "./eg-script-engine.js";
 import {
   classifyZmMessage,
@@ -667,6 +670,7 @@ async function processCmConversation(
     !(await ensureCustomerMessageEligible(
       deps,
       state,
+      client,
       conv,
       convId,
       convState,
@@ -896,6 +900,7 @@ async function processZmConversation(
     !(await ensureCustomerMessageEligible(
       deps,
       state,
+      client,
       conv,
       convId,
       convState,
@@ -1158,6 +1163,7 @@ async function processEgConversation(
     !(await ensureCustomerMessageEligible(
       deps,
       state,
+      client,
       conv,
       convId,
       convState,
@@ -1225,12 +1231,15 @@ async function processEgConversation(
     messageReaction,
   });
 
-  const scriptKeys = resolveEgFunnelScripts(
-    effectiveStep,
-    latestCustomerText,
-    intent,
+  const scriptKeys = limitEgScriptsForCustomerTurn(
+    resolveEgFunnelScripts(
+      effectiveStep,
+      latestCustomerText,
+      intent,
+      outgoingTexts,
+      { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
+    ),
     outgoingTexts,
-    { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
 
   if (!scriptKeys.length) {
@@ -1251,6 +1260,10 @@ async function processEgConversation(
   );
 
   let sentAny = false;
+  const allowMultiSend =
+    scriptKeys.includes("01_intro") ||
+    scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key)) ||
+    scriptKeys.some((key) => EG_EXPLAIN_SEND_KEYS.has(key));
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1290,7 +1303,19 @@ async function processEgConversation(
       return sentAny;
     }
     sentAny = true;
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
     await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
   }
 
   if (!sentAny) {
@@ -1359,6 +1384,7 @@ async function processGenericConversation(
     !(await ensureCustomerMessageEligible(
       deps,
       state,
+      client,
       conv,
       convId,
       convState,
@@ -1801,6 +1827,7 @@ async function seedEnabledChannelsFromYaml(
 async function ensureCustomerMessageEligible(
   deps: WorkerDeps,
   state: ChatState,
+  client: PagerClient,
   conv: PagerConversation,
   convId: string,
   convState: ConversationRuntimeState,
@@ -1829,6 +1856,7 @@ async function ensureCustomerMessageEligible(
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate((lastIncoming.text || "").trim())})`,
     );
+    await client.acknowledgeConversation(convId);
     return false;
   }
 
@@ -1849,6 +1877,7 @@ async function ensureCustomerMessageEligible(
       lastCustomerMessageId: lastIncoming.id,
       lastCustomerMessageAt: lastIncoming.createdAt,
     });
+    await client.acknowledgeConversation(convId);
   }
 
   const label = options?.countryLabel ? ` ${options.countryLabel}` : "";

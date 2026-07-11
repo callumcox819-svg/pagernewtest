@@ -335,9 +335,15 @@ export function isCustomerWaitingInThread(
   return false;
 }
 
-/** Egypt inbox: new no-status leads yes, stale in-progress backlog no. */
+/** Egypt inbox: new leads + active in-progress threads where the customer spoke last. */
 export function shouldQueueEgConversation(conv: PagerConversation): boolean {
   if (isNoStatusConversation(conv) && isIncomingDirection(conv.lastMessageDirection)) {
+    return true;
+  }
+  if (
+    isInProgressStatusConversation(conv) &&
+    (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))
+  ) {
     return true;
   }
   if (!shouldProcessConversation(conv)) {

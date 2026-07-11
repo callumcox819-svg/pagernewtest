@@ -857,6 +857,24 @@ export class PagerClient {
     return (await this.getResponsibleUserId(convId)) === uid;
   }
 
+  /** Take + mark read so handled threads clear unread badges in Pager UI. */
+  async acknowledgeConversation(convId: string): Promise<void> {
+    const userId = await this.probeOperatorUserId();
+    if (!userId) {
+      return;
+    }
+    try {
+      await this.takeConversation(convId, userId);
+    } catch {
+      // non-fatal
+    }
+    try {
+      await this.markConversationRead(convId, userId);
+    } catch {
+      // non-fatal
+    }
+  }
+
   async prepareOutbound(
     convId: string,
     conv?: PagerConversation,

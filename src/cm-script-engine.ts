@@ -402,9 +402,19 @@ export function resolveCmFunnelScripts(
       if (
         ["interested", "positive", "ready", "question"].includes(intent) ||
         signal ||
-        wantsDetailsAfterIntro(t)
+        wantsDetailsAfterIntro(t) ||
+        isClientReadyPhrase(t)
       ) {
         return ["02_age"];
+      }
+    } else if (!stepsSent) {
+      if (
+        ["positive", "ready", "interested", "question"].includes(intent) ||
+        signal ||
+        wantsDetailsAfterIntro(t) ||
+        isClientReadyPhrase(t)
+      ) {
+        return ["03_steps"];
       }
     }
     return [];
@@ -434,6 +444,9 @@ export function resolveCmFunnelScripts(
 
   if (effectiveStep < 4) {
     if (wantsRegistrationLink(t) && stepsSent && !linkSent) {
+      return [...CM_REG_BUNDLE];
+    }
+    if (wantsRegistrationLink(t) && !linkSent) {
       return [...CM_REG_BUNDLE];
     }
     if (tierChoice && !linkSent && (tierSent || stepsSent || effectiveStep >= 3)) {
@@ -491,7 +504,7 @@ export function resolveCmFunnelScripts(
     ) {
       return [...CM_REG_BUNDLE];
     }
-    if (linkSent && !depositSentInHistory(out) && (signal || options?.hasImage)) {
+    if (linkSent && !depositSentInHistory(out) && (signal || options?.hasImage || intent === "ready" || intent === "positive" || isReadyForRegistration(t))) {
       return ["09_deposit"];
     }
     return [];

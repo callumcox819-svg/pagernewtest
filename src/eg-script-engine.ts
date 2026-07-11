@@ -1,4 +1,5 @@
 import type { PagerMessage } from "./pager-client.js";
+import { isPositiveMessageReaction } from "./message-attachments.js";
 import {
   type EgIntent,
   classifyEgIntent,
@@ -48,6 +49,7 @@ export const EG_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
 
 export const EG_FOLDER_NAME_HINTS = ["егип", "egypt", "hapka", "mahmoud", "مصر"];
 export const EG_REG_SEND_KEYS = new Set(["04_registration", "05_link"]);
+export const EG_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works", "03_egp_table"]);
 
 export function scriptSnippet(key: string): string {
   return EG_SCRIPT_SNIPPETS[key] ?? "";
@@ -455,7 +457,43 @@ export function resolveEgFunnelScripts(
     return explainScriptKeys();
   }
 
+  if (
+    effectiveStep >= 6 &&
+    depositSentInHistory(out) &&
+    !egScriptSentInHistory(out, "07_game_id") &&
+    !t &&
+    (options?.hasImage || isPositiveMessageReaction(options?.messageReaction))
+  ) {
+    return ["07_game_id"];
+  }
+
   return [];
+}
+
+/** One funnel stage per customer message — explain/reg pairs only as multi-send. */
+export function limitEgScriptsForCustomerTurn(
+  scriptKeys: string[],
+  outgoingTexts: string[],
+): string[] {
+  if (!scriptKeys.length) {
+    return scriptKeys;
+  }
+  if (
+    scriptKeys.includes("01_intro") &&
+    !egScriptSentInHistory(outgoingTexts, "01_intro")
+  ) {
+    return ["01_intro"];
+  }
+  if (
+    scriptKeys.some((key) => EG_EXPLAIN_SEND_KEYS.has(key)) &&
+    !explainScriptsSentInHistory(outgoingTexts)
+  ) {
+    return ["02_how_it_works", "03_egp_table"];
+  }
+  if (scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key))) {
+    return scriptKeys.filter((key) => EG_REG_SEND_KEYS.has(key));
+  }
+  return [scriptKeys[0]!];
 }
 
 export function classifyEgMessage(
