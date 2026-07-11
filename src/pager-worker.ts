@@ -17,7 +17,6 @@ import {
   findLatestIncomingMessage,
   hasBotReplyAfterCustomerMessage,
   isNewLeadConversation,
-  isFreshCustomerMessage,
   recentCustomerMessageTexts,
   shouldProcessConversation,
   shouldQueueEgConversation,
@@ -1911,9 +1910,6 @@ async function ensureCustomerMessageEligible(
       country === "EG" &&
       egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
     ) {
-      return true;
-    }
-    if (isFreshCustomerMessage(lastIncoming.createdAt) && customerText) {
       return true;
     }
     const label = options?.countryLabel ? ` ${options.countryLabel}` : "";

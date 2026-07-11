@@ -198,8 +198,11 @@ function stepForOutgoingText(text: string): number {
   ) {
     return 3;
   }
-  if (t.includes("quel âge") || t.includes("mon équipe cumule")) {
+  if (t.includes("quel âge") || t.includes("quel age") || t.includes("age avez-vous")) {
     return 2;
+  }
+  if (t.includes("mon équipe cumule") || t.includes("mon equipe cumule")) {
+    return 1;
   }
   if (t.includes("tu es du cameroun") || t.includes("cameroun")) {
     return 1;
@@ -413,15 +416,6 @@ export function resolveCmFunnelScripts(
       ) {
         return ["02_age"];
       }
-    } else if (!stepsSent) {
-      if (
-        ["positive", "ready", "interested", "question"].includes(intent) ||
-        signal ||
-        wantsDetailsAfterIntro(t) ||
-        isClientReadyPhrase(t)
-      ) {
-        return ["03_steps"];
-      }
     }
     return [];
   }
@@ -432,7 +426,8 @@ export function resolveCmFunnelScripts(
         isAgeAnswer(t) ||
         ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
-        wantsDetailsAfterIntro(t)
+        wantsDetailsAfterIntro(t) ||
+        isClientReadyPhrase(t)
       ) {
         return ["03_steps"];
       }
@@ -440,7 +435,8 @@ export function resolveCmFunnelScripts(
       if (
         ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
-        isReadyForRegistration(t)
+        isReadyForRegistration(t) ||
+        isClientReadyPhrase(t)
       ) {
         return ["04_tier"];
       }

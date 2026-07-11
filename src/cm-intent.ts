@@ -149,9 +149,9 @@ export function isClientReadyPhrase(text: string): boolean {
       t,
     ) ||
     /\b(je suis partant|je suis partante)\b/i.test(t) ||
-    /\b(j'attends|j attends|jattends|vas y|allons y|on y va|je suis d'accord)\b/i.test(t) ||
+    /\b(j'attends|j attends|jattends|vas y|allons y|on y va|je suis d'accord|d'accord|d accord)\b/i.test(t) ||
     /\bje veux commencer|je veux continuer\b/i.test(t) ||
-    /^(pret|prete|ok|oui)\.?$/i.test(t)
+    /^(pret|prete|ok|oui|d'accord|d accord)\.?$/i.test(t)
   );
 }
 

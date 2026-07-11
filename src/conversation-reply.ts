@@ -409,10 +409,6 @@ export function assessReplyEligibility(
   const lastIncomingAt = parseMessageTimestamp(lastIncoming.createdAt);
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
 
-  if (isFreshCustomerMessage(lastIncomingAt)) {
-    return { eligible: true };
-  }
-
   if (
     !isNewCustomerTurn &&
     hasBotReplyAfterCustomerMessage(
