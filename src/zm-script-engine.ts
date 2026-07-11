@@ -48,8 +48,13 @@ export const ZM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
 
 export const ZM_FOLDER_NAME_HINTS = ["замб", "zamb", "zambia"];
 export const ZM_REG_SEND_KEYS = new Set(["04_registration", "05_link"]);
+export const ZM_TG_SEND_KEYS = new Set(["08_tg_invite", "09_tg_link"]);
 export const ZM_STATUS_MOVE_KEYS = new Set(["04_registration", "05_link", "08_tg_invite", "09_tg_link"]);
 export const ZM_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works", "03_zmw_table"]);
+
+const ZM_REG_BUNDLE = ["04_registration", "05_link"] as const;
+const ZM_TG_BUNDLE = ["08_tg_invite", "09_tg_link"] as const;
+const ZM_REGISTRATION_LINK = "https://tinyurl.com/ZAM577";
 
 export function scriptSnippet(key: string): string {
   return ZM_SCRIPT_SNIPPETS[key] ?? "";
@@ -86,7 +91,29 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("tinyurl.com/zam577") || blob.includes("zam577");
+  return blob.includes("tinyurl.com/zam577");
+}
+
+export function zmRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
+  const blob = outgoingTexts.join("\n").toLowerCase();
+  return (
+    (blob.includes("special registration link") ||
+      blob.includes("here is the link") ||
+      blob.includes("paste it into your google chrome")) &&
+    blob.includes("zam577")
+  );
+}
+
+export function tgLinkSentInHistory(outgoingTexts: string[]): boolean {
+  if (zmScriptSentInHistory(outgoingTexts, "09_tg_link")) {
+    return true;
+  }
+  const blob = outgoingTexts.join("\n").toLowerCase();
+  return blob.includes("t.me/+");
+}
+
+export function zmTgInviteSentInHistory(outgoingTexts: string[]): boolean {
+  return zmScriptSentInHistory(outgoingTexts, "08_tg_invite");
 }
 
 export function depositSentInHistory(outgoingTexts: string[]): boolean {
@@ -186,7 +213,7 @@ export function collectOutgoingTexts(messages: PagerMessage[]): string[] {
 }
 
 export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
-  return scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key));
+  return scriptKeys.includes("05_link");
 }
 
 export function limitZmScriptsForCustomerTurn(
@@ -208,21 +235,53 @@ export function limitZmScriptsForCustomerTurn(
   ) {
     return ["02_how_it_works", "03_zmw_table"];
   }
-  if (
-    scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key)) &&
-    !regLinkSentInHistory(outgoingTexts)
-  ) {
-    if (!zmScriptSentInHistory(outgoingTexts, "04_registration")) {
-      return ["04_registration"];
+  if (scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key))) {
+    const instructionsSent = zmRegistrationInstructionsSentInHistory(outgoingTexts);
+    const linkSent = regLinkSentInHistory(outgoingTexts);
+    if (!instructionsSent) {
+      return [...ZM_REG_BUNDLE];
     }
-    return ["05_link"];
+    if (!linkSent) {
+      return ["05_link"];
+    }
+    return [];
+  }
+  if (scriptKeys.some((key) => ZM_TG_SEND_KEYS.has(key))) {
+    const inviteSent = zmTgInviteSentInHistory(outgoingTexts);
+    const linkSent = tgLinkSentInHistory(outgoingTexts);
+    if (!inviteSent) {
+      return [...ZM_TG_BUNDLE];
+    }
+    if (!linkSent) {
+      return ["09_tg_link"];
+    }
+    return [];
   }
   return [scriptKeys[0]!];
 }
 
-export function statusMoveTriggersInProgress(scriptKeys: string[]): boolean {
-  return scriptKeys.some((key) => ZM_STATUS_MOVE_KEYS.has(key));
+export function zmAllowsMultiSend(scriptKeys: string[]): boolean {
+  if (scriptKeys.includes("01_intro")) {
+    return true;
+  }
+  if (scriptKeys.some((key) => ZM_EXPLAIN_SEND_KEYS.has(key))) {
+    return true;
+  }
+  return (
+    scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key)) ||
+    scriptKeys.some((key) => ZM_TG_SEND_KEYS.has(key))
+  );
 }
+
+export function zmStatusMoveAfterSend(sentScriptKeys: string[]): boolean {
+  return sentScriptKeys.includes("05_link") || sentScriptKeys.includes("09_tg_link");
+}
+
+export function statusMoveTriggersInProgress(scriptKeys: string[]): boolean {
+  return scriptKeys.includes("05_link") || scriptKeys.includes("09_tg_link");
+}
+
+export { ZM_REGISTRATION_LINK };
 
 function shouldSendDepositScript(
   text: string,

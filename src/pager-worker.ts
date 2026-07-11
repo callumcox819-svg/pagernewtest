@@ -66,13 +66,14 @@ import {
   funnelStepFromScriptGaps as zmFunnelStepFromScriptGaps,
   inferStepFromThread as zmInferStepFromThread,
   regLinkSentInHistory as zmRegLinkSentInHistory,
-  regSendTriggersInProgress as zmRegSendTriggersInProgress,
-  statusMoveTriggersInProgress as zmStatusMoveTriggersInProgress,
   resolveZmFunnelScripts,
   zmScriptSentInHistory,
   limitZmScriptsForCustomerTurn,
+  zmAllowsMultiSend,
+  zmStatusMoveAfterSend,
   ZM_EXPLAIN_SEND_KEYS,
   ZM_REG_SEND_KEYS,
+  ZM_TG_SEND_KEYS,
   depositSentInHistory as zmDepositSentInHistory,
 } from "./zm-script-engine.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
@@ -104,6 +105,7 @@ import type {
   StateStore,
 } from "./state-store.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
+import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import {
   countApiStatusFolders,
@@ -1062,9 +1064,8 @@ async function processZmConversation(
   );
 
   let sentAny = false;
-  const allowMultiSend =
-    scriptKeys.includes("01_intro") ||
-    scriptKeys.some((key) => ZM_EXPLAIN_SEND_KEYS.has(key));
+  const sentScriptKeys: string[] = [];
+  const allowMultiSend = zmAllowsMultiSend(scriptKeys);
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1073,14 +1074,48 @@ async function processZmConversation(
       country: "ZM",
     });
     if (!replyText?.trim()) {
-      if (scriptKey === "05_link" && sentAny) {
-        const fallbackLink = "https://tinyurl.com/ZAM577";
+      if (scriptKey === "05_link") {
+        const fallbackLink =
+          loadLocalZmScript("05_link")?.trim() || "https://tinyurl.com/ZAM577";
         const sent = await client.sendMessageReliable(convId, fallbackLink, {
           channelId: runtime.channelId,
           conv,
         });
         if (sent) {
           sentAny = true;
+          sentScriptKeys.push(scriptKey);
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            conversationId: convId,
+            channelId: runtime.channelId,
+            lastCustomerMessageId: lastIncoming.id,
+            lastCustomerMessageAt: lastIncoming.createdAt,
+            lastReplyAt: new Date().toISOString(),
+            lastReplyRole: scriptKey,
+            sendFailures: 0,
+          });
+          await sleep(500);
+        }
+        continue;
+      }
+      if (scriptKey === "09_tg_link") {
+        const fallbackLink =
+          loadLocalZmScript("09_tg_link")?.trim() || "https://t.me/+cxqeg5kratJkYTMy";
+        const sent = await client.sendMessageReliable(convId, fallbackLink, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          sentScriptKeys.push(scriptKey);
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            conversationId: convId,
+            channelId: runtime.channelId,
+            lastCustomerMessageId: lastIncoming.id,
+            lastCustomerMessageAt: lastIncoming.createdAt,
+            lastReplyAt: new Date().toISOString(),
+            lastReplyRole: scriptKey,
+            sendFailures: 0,
+          });
           await sleep(500);
         }
         continue;
@@ -1104,6 +1139,7 @@ async function processZmConversation(
       return sentAny;
     }
     sentAny = true;
+    sentScriptKeys.push(scriptKey);
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,
@@ -1150,7 +1186,7 @@ async function processZmConversation(
     return false;
   }
 
-  if (zmRegSendTriggersInProgress(scriptKeys) || zmStatusMoveTriggersInProgress(scriptKeys)) {
+  if (zmStatusMoveAfterSend(sentScriptKeys)) {
     const statusId = findFunnelFollowUpStatusId(currentState);
     const operatorId = await client.probeOperatorUserId();
     if (statusId && operatorId) {
@@ -1171,7 +1207,7 @@ async function processZmConversation(
     lastCustomerMessageId: lastIncoming.id,
     lastCustomerMessageAt: lastIncoming.createdAt,
     lastReplyAt: new Date().toISOString(),
-    lastReplyRole: scriptKeys[scriptKeys.length - 1],
+    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1] ?? scriptKeys[scriptKeys.length - 1],
     sendFailures: 0,
   });
 
