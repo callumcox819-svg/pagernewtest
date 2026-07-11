@@ -44,20 +44,6 @@ export function classifyProofFromText(
     };
   }
 
-  const hasDepositMarker =
-    playbook.depositKeywords.some((keyword) => normalized.includes(normalize(keyword))) ||
-    /(balance|deposit|funded|egp|usd|zar|ksh|kes|fcfa|رصيد|ايداع|إيداع|solde|recharger|retrait)/i.test(
-      inputText,
-    );
-
-  if (hasDepositMarker) {
-    return {
-      proofKind: "deposit_balance_screenshot",
-      combinedText: inputText,
-      reason: "Detected balance or deposit markers",
-    };
-  }
-
   const hasRegistrationUiMarker =
     playbook.registrationKeywords.some((keyword) => normalized.includes(normalize(keyword))) ||
     /(inscription|1xbet|xbet|melbet|betwinner|paris sportifs|cr[eé]er un compte|cree un compte|t[eé]l[eé]charger|telecharger|installer|apk|promo|code promo|limite d.?age|phone number|num[eé]ro de t[eé]l[eé]phone|cameroun|cash056|eg011|egypt0011)/i.test(
@@ -72,6 +58,29 @@ export function classifyProofFromText(
     );
 
   const hasLongDigits = /\b\d{5,}\b/.test(inputText);
+  const hasZmGameId = /\b(17\d{6,}|16\d{6,})\b/.test(inputText);
+
+  if (hasZmGameId && (hasIdMarker || hasLongDigits)) {
+    return {
+      proofKind: "id_screenshot",
+      combinedText: inputText,
+      reason: "Detected ZM game/account id starting with 16/17",
+    };
+  }
+
+  const hasDepositMarker =
+    playbook.depositKeywords.some((keyword) => normalized.includes(normalize(keyword))) ||
+    /(balance|deposit|funded|egp|usd|zar|ksh|kes|fcfa|رصيد|ايداع|إيداع|solde|recharger|retrait)/i.test(
+      inputText,
+    );
+
+  if (hasDepositMarker) {
+    return {
+      proofKind: "deposit_balance_screenshot",
+      combinedText: inputText,
+      reason: "Detected balance or deposit markers",
+    };
+  }
 
   if (hasIdMarker && hasLongDigits) {
     return {

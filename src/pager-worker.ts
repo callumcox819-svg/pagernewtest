@@ -70,7 +70,8 @@ import {
   zmScriptSentInHistory,
   limitZmScriptsForCustomerTurn,
   zmAllowsMultiSend,
-  zmStatusMoveAfterSend,
+  zmStatusMoveTarget,
+  type ZmStatusMoveTarget,
   ZM_EXPLAIN_SEND_KEYS,
   ZM_REG_SEND_KEYS,
   ZM_TG_SEND_KEYS,
@@ -116,6 +117,8 @@ import {
   getEnabledFolderIds,
   hasEnabledStatusFolders,
   isNoStatusConversation,
+  isZmInProgressRegistrationStatusName,
+  isZmRegistrationCompleteStatusName,
 } from "./status-folders.js";
 import type { TemplateRole } from "./config.js";
 import type { TelegramApi } from "./telegram-api.js";
@@ -1011,7 +1014,7 @@ async function processZmConversation(
     return true;
   }
 
-  if (imageUrl) {
+  if (imageUrl && zmDepositSentInHistory(outgoingTexts)) {
     const imageHandled = await tryHandleCustomerImage(deps, {
       state,
       client,
@@ -1031,6 +1034,23 @@ async function processZmConversation(
     }
   }
 
+  let proofKind: import("./config.js").ProofKind | undefined;
+  let proofText = "";
+  if (imageUrl) {
+    try {
+      const image = await client.downloadAttachment(imageUrl);
+      const classification = await classifyProofFromImage(playbook, image, {
+        caption: latestCustomerText,
+        ocrEnabled: deps.env.OCR_ENABLED,
+        ocrLang: ocrLangForCountry(channel.country),
+      });
+      proofKind = classification.proofKind;
+      proofText = classification.combinedText;
+    } catch (error) {
+      console.warn(`ZM OCR failed ${convId.slice(0, 8)}:`, formatError(error));
+    }
+  }
+
   const intent = classifyZmMessage(latestCustomerText, {
     hasImage: Boolean(imageUrl),
     funnelStep: effectiveStep,
@@ -1042,7 +1062,13 @@ async function processZmConversation(
     latestCustomerText,
     intent,
     outgoingTexts,
-    { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
+    {
+      hasImage: Boolean(imageUrl),
+      messageReaction,
+      recentCustomerTexts,
+      proofKind,
+      proofText,
+    },
   );
   scriptKeys = limitZmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
 
@@ -1186,13 +1212,16 @@ async function processZmConversation(
     return false;
   }
 
-  if (zmStatusMoveAfterSend(sentScriptKeys)) {
-    const statusId = findFunnelFollowUpStatusId(currentState);
+  const statusTarget = zmStatusMoveTarget(sentScriptKeys);
+  if (statusTarget) {
+    const statusId = findZmStatusId(currentState, statusTarget);
     const operatorId = await client.probeOperatorUserId();
     if (statusId && operatorId) {
       try {
         await client.patchConversationStatus(convId, statusId, operatorId);
-        console.log(`Pager worker: ZM ${convId.slice(0, 8)} status -> in progress`);
+        console.log(
+          `Pager worker: ZM ${convId.slice(0, 8)} status -> ${statusTarget === "registration_complete" ? "registration" : "in progress registration"}`,
+        );
       } catch (error) {
         console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
       }
@@ -1597,6 +1626,21 @@ function findFunnelFollowUpStatusId(state: ChatState): string | undefined {
     if (isFunnelFollowUpFolderName(folder.name)) {
       return folder.id;
     }
+  }
+  return undefined;
+}
+
+function findZmStatusId(state: ChatState, target: ZmStatusMoveTarget): string | undefined {
+  for (const folder of state.statusFolders ?? []) {
+    if (target === "in_progress_registration" && isZmInProgressRegistrationStatusName(folder.name)) {
+      return folder.id;
+    }
+    if (target === "registration_complete" && isZmRegistrationCompleteStatusName(folder.name)) {
+      return folder.id;
+    }
+  }
+  if (target === "in_progress_registration") {
+    return findFunnelFollowUpStatusId(state);
   }
   return undefined;
 }

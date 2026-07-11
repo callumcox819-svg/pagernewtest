@@ -81,7 +81,27 @@ export function isInProgressStatusConversation(conv: PagerConversation): boolean
 /** Status folders the bot moves chats into mid-funnel — must still receive follow-up replies. */
 export function isFunnelFollowUpFolderName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
-  return /в процес|процес|process|рега|реєстраці|чекаю id|не заверш|en cours/i.test(normalized);
+  return (
+    isZmInProgressRegistrationStatusName(normalized) ||
+    isZmRegistrationCompleteStatusName(normalized) ||
+    /в процес|процес|process|рега|реєстраці|чекаю id|не заверш|en cours/i.test(normalized)
+  );
+}
+
+export function isZmInProgressRegistrationStatusName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return /в процес[сіi].*реєстраці|процес[іi].*реєстраці|in registration process/i.test(normalized);
+}
+
+export function isZmRegistrationCompleteStatusName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  if (isZmInProgressRegistrationStatusName(normalized)) {
+    return false;
+  }
+  if (/^реєстрація$|^registration$/i.test(normalized)) {
+    return true;
+  }
+  return normalized.includes("реєстраці") && !normalized.includes("процес");
 }
 
 export function expandEnabledFolderIds(

@@ -1,4 +1,5 @@
 import type { PagerMessage } from "./pager-client.js";
+import type { ProofKind } from "./config.js";
 import {
   type ZmIntent,
   classifyZmIntent,
@@ -6,12 +7,12 @@ import {
   isReadyForRegistration,
   isRegistrationConfirmed,
   isRegistrationHelpRequest,
-  isRegistrationPending,
   isZmRegistrationAccountQuestion,
   wantsDetailsAfterIntro,
   wantsRegistrationLink,
 } from "./zm-intent.js";
-import { registrationHelpScriptKeys, registrationLinkScriptKeys } from "./funnel-common.js";
+
+const ZM_GAME_ID_RE = /\b(17\d{6,}|16\d{6,})\b/;
 
 export const ZM_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "Hi! I want to show you",
@@ -116,6 +117,43 @@ export function zmTgInviteSentInHistory(outgoingTexts: string[]): boolean {
   return zmScriptSentInHistory(outgoingTexts, "08_tg_invite");
 }
 
+export function gameIdSentInHistory(outgoingTexts: string[]): boolean {
+  return zmScriptSentInHistory(outgoingTexts, "07_game_id");
+}
+
+export function gameIdReceivedInText(text: string): boolean {
+  return ZM_GAME_ID_RE.test((text || "").trim());
+}
+
+export function gameIdReceivedFromProof(proofKind: ProofKind | undefined, proofText: string): boolean {
+  if (!proofKind || !proofText.trim()) {
+    return false;
+  }
+  if (proofKind === "id_screenshot") {
+    return true;
+  }
+  if (gameIdReceivedInText(proofText)) {
+    return true;
+  }
+  if (
+    (proofKind === "registration_screenshot" || proofKind === "deposit_balance_screenshot") &&
+    gameIdReceivedInText(proofText)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function customerIdReceived(
+  text: string,
+  recentTexts: string[],
+  proofKind?: ProofKind,
+  proofText?: string,
+): boolean {
+  const blob = [text, proofText ?? "", ...recentTexts].filter(Boolean).join("\n");
+  return gameIdReceivedInText(blob) || gameIdReceivedFromProof(proofKind, blob);
+}
+
 export function depositSentInHistory(outgoingTexts: string[]): boolean {
   if (zmScriptSentInHistory(outgoingTexts, "06_deposit")) {
     return true;
@@ -189,6 +227,10 @@ export function funnelStepFromScriptGaps(outgoingTexts: string[], storedStep = 0
     return Math.min(step, 3);
   }
   step = Math.max(step, 4);
+  if (!gameIdSentInHistory(outgoingTexts)) {
+    return Math.min(step, 4);
+  }
+  step = Math.max(step, 5);
   if (!depositSentInHistory(outgoingTexts)) {
     return Math.min(step, 5);
   }
@@ -273,29 +315,27 @@ export function zmAllowsMultiSend(scriptKeys: string[]): boolean {
   );
 }
 
+export type ZmStatusMoveTarget = "in_progress_registration" | "registration_complete";
+
+export function zmStatusMoveTarget(sentScriptKeys: string[]): ZmStatusMoveTarget | null {
+  if (sentScriptKeys.includes("06_deposit")) {
+    return "registration_complete";
+  }
+  if (sentScriptKeys.includes("05_link")) {
+    return "in_progress_registration";
+  }
+  return null;
+}
+
 export function zmStatusMoveAfterSend(sentScriptKeys: string[]): boolean {
-  return sentScriptKeys.includes("05_link") || sentScriptKeys.includes("09_tg_link");
+  return zmStatusMoveTarget(sentScriptKeys) !== null;
 }
 
 export function statusMoveTriggersInProgress(scriptKeys: string[]): boolean {
-  return scriptKeys.includes("05_link") || scriptKeys.includes("09_tg_link");
+  return scriptKeys.includes("05_link") || scriptKeys.includes("06_deposit");
 }
 
 export { ZM_REGISTRATION_LINK };
-
-function shouldSendDepositScript(
-  text: string,
-  effectiveStep: number,
-  outgoingTexts: string[],
-): boolean {
-  if (!regLinkSentInHistory(outgoingTexts)) {
-    return false;
-  }
-  if (isRegistrationConfirmed(text) || isRegistrationPending(text)) {
-    return true;
-  }
-  return effectiveStep >= 4 && !depositSentInHistory(outgoingTexts);
-}
 
 function positiveSignal(text: string, intent: ZmIntent, effectiveStep: number): boolean {
   return (
@@ -314,21 +354,6 @@ function wantsExplain(
   return (
     wantsDetailsAfterIntro(text) ||
     ["interested", "positive", "ready", "question"].includes(intent) ||
-    positiveSignal(text, intent, effectiveStep) ||
-    isReadyForRegistration(text)
-  );
-}
-
-function wantsRegistrationNow(
-  text: string,
-  intent: ZmIntent,
-  effectiveStep: number,
-): boolean {
-  return (
-    wantsRegistrationLink(text) ||
-    isReadyForRegistration(text) ||
-    isRegistrationPending(text) ||
-    ["ready", "interested", "positive", "question"].includes(intent) ||
     positiveSignal(text, intent, effectiveStep)
   );
 }
@@ -347,15 +372,35 @@ function hasUsableFollowUp(text: string): boolean {
   return !/\b(fuck|scam|leave me alone|stop texting|not interested|no thanks|get out)\b/i.test(t);
 }
 
+function wantsRegistrationBundle(
+  text: string,
+  intent: ZmIntent,
+  effectiveStep: number,
+): boolean {
+  return (
+    isReadyForRegistration(text) ||
+    wantsRegistrationLink(text) ||
+    intent === "ready" ||
+    (positiveSignal(text, intent, effectiveStep) && effectiveStep >= 2)
+  );
+}
+
 export function resolveZmFunnelScripts(
   effectiveStep: number,
   text: string,
   intent: ZmIntent,
   outgoingTexts: string[],
-  options?: { hasImage?: boolean; messageReaction?: string; recentCustomerTexts?: string[] },
+  options?: {
+    hasImage?: boolean;
+    messageReaction?: string;
+    recentCustomerTexts?: string[];
+    proofKind?: ProofKind;
+    proofText?: string;
+  },
 ): string[] {
   const t = (text || "").trim();
   const out = outgoingTexts;
+  const recentTexts = options?.recentCustomerTexts ?? [];
 
   if (intent === "declined") {
     return [];
@@ -364,172 +409,109 @@ export function resolveZmFunnelScripts(
   const introSent = zmScriptSentInHistory(out, "01_intro");
   const explainSent = explainScriptsSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
+  const gameIdAskSent = gameIdSentInHistory(out);
+  const depositSent = depositSentInHistory(out);
   const signal = positiveSignal(t, intent, effectiveStep);
-  const registrationHelp =
-    isRegistrationHelpRequest(t) || isZmRegistrationAccountQuestion(t);
-  const wantsReg =
-    wantsRegistrationNow(t, intent, effectiveStep) ||
-    isZmRegistrationAccountQuestion(t) ||
-    isRegistrationHelpRequest(t);
+  const idReceived = customerIdReceived(t, recentTexts, options?.proofKind, options?.proofText);
 
-  if (registrationHelp) {
-    if (!regLinkSentInHistory(out) && effectiveStep < 3) {
-      if (!zmScriptSentInHistory(out, "01_intro")) {
-        return ["01_intro"];
-      }
-      if (!explainScriptsSentInHistory(out)) {
-        return ["02_how_it_works", "03_zmw_table"];
-      }
+  if (isRegistrationHelpRequest(t) || isZmRegistrationAccountQuestion(t)) {
+    if (!introSent) {
+      return ["01_intro"];
+    }
+    if (!explainSent) {
+      return ["02_how_it_works", "03_zmw_table"];
     }
     if (!linkSent) {
       return ["04_registration", "05_link"];
     }
-    return [...registrationHelpScriptKeys("ZM")];
-  }
-
-  if (wantsRegistrationLink(t)) {
-    return registrationLinkScriptKeys("ZM", regLinkSentInHistory(out));
-  }
-
-  if (explainSent && !linkSent && wantsReg) {
-    return ["04_registration", "05_link"];
-  }
-
-  if (effectiveStep < 1) {
-    if (introSent) {
-      if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
-        return ["02_how_it_works", "03_zmw_table"];
-      }
-      if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
-        return ["04_registration", "05_link"];
-      }
-      return [];
+    if (!depositSent && idReceived) {
+      return ["06_deposit"];
     }
-    if (intent === "interested" || signal || intent === "question" || isGreeting(t) || hasUsableFollowUp(t)) {
+    if (!gameIdAskSent && !depositSent) {
+      return ["07_game_id"];
+    }
+    return [];
+  }
+
+  if (!introSent) {
+    if (
+      intent === "interested" ||
+      signal ||
+      intent === "question" ||
+      isGreeting(t) ||
+      hasUsableFollowUp(t)
+    ) {
       return ["01_intro"];
     }
     return [];
   }
 
-  if (effectiveStep < 3) {
-    if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
+  if (!explainSent) {
+    if (wantsExplain(t, intent, effectiveStep) || signal || intent === "interested") {
       return ["02_how_it_works", "03_zmw_table"];
     }
-    if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
+    return [];
+  }
+
+  if (!linkSent) {
+    if (wantsRegistrationBundle(t, intent, effectiveStep)) {
       return ["04_registration", "05_link"];
     }
     return [];
   }
 
-  if (effectiveStep < 4) {
-    if (isRegistrationConfirmed(t) && linkSent) {
-      return shouldSendDepositScript(t, effectiveStep, out) ? ["06_deposit"] : [];
-    }
-
-    if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
-      return ["02_how_it_works", "03_zmw_table"];
-    }
-
-    if (explainSent && wantsRegistrationNow(t, intent, effectiveStep)) {
-      if (linkSent) {
-        if (shouldSendDepositScript(t, effectiveStep, out) || signal || intent === "ready") {
-          return depositSentInHistory(out) ? [] : ["06_deposit"];
-        }
-        return [];
-      }
-      return ["04_registration", "05_link"];
-    }
-    if (linkSent && !depositSentInHistory(out) && (signal || intent === "joined")) {
-      return ["06_deposit"];
-    }
-    return [];
+  if (!depositSent && idReceived) {
+    return ["06_deposit"];
   }
 
-  if (isRegistrationHelpRequest(t)) {
-    return [...registrationHelpScriptKeys("ZM")];
-  }
-
-  if (isRegistrationPending(t) && !linkSent) {
-    return ["04_registration", "05_link"];
-  }
-
-  if (effectiveStep < 7) {
-    if (isRegistrationConfirmed(t) || intent === "joined" || options?.hasImage) {
-      if (shouldSendDepositScript(t, effectiveStep, out)) {
-        return ["06_deposit"];
-      }
-    }
-    if (!linkSent && wantsRegistrationNow(t, intent, effectiveStep)) {
-      return ["04_registration", "05_link"];
-    }
+  if (!gameIdAskSent && !depositSent) {
     if (
-      linkSent &&
-      !depositSentInHistory(out) &&
-      (signal ||
-        intent === "ready" ||
-        intent === "positive" ||
-        isReadyForRegistration(t))
+      signal ||
+      intent === "positive" ||
+      intent === "ready" ||
+      intent === "joined" ||
+      isRegistrationConfirmed(t) ||
+      options?.hasImage ||
+      t.length > 0
+    ) {
+      return ["07_game_id"];
+    }
+    return [];
+  }
+
+  if (gameIdAskSent && !depositSent) {
+    if (
+      idReceived ||
+      options?.hasImage ||
+      intent === "game_id_text" ||
+      intent === "image_only" ||
+      isRegistrationConfirmed(t) ||
+      intent === "joined"
     ) {
       return ["06_deposit"];
     }
     return [];
   }
 
-  if (
-    effectiveStep >= 7 &&
-    depositSentInHistory(out) &&
-    !zmScriptSentInHistory(out, "07_game_id") &&
-    (intent === "game_id_text" ||
-      intent === "ready" ||
+  if (depositSent && !tgLinkSentInHistory(out)) {
+    if (
+      intent === "game_id_text" ||
       intent === "positive" ||
+      intent === "ready" ||
       intent === "interested" ||
-      intent === "image_only" ||
       intent === "question" ||
       options?.hasImage ||
-      signal)
-  ) {
-    return ["07_game_id"];
-  }
-
-  if (intent === "game_id_text") {
-    if (!zmScriptSentInHistory(out, "07_game_id")) {
-      return ["07_game_id"];
+      signal
+    ) {
+      const next: string[] = [];
+      if (!zmTgInviteSentInHistory(out)) {
+        next.push("08_tg_invite");
+      }
+      if (!tgLinkSentInHistory(out)) {
+        next.push("09_tg_link");
+      }
+      return next;
     }
-    const next: string[] = [];
-    if (!zmScriptSentInHistory(out, "08_tg_invite")) {
-      next.push("08_tg_invite");
-    }
-    if (!zmScriptSentInHistory(out, "09_tg_link")) {
-      next.push("09_tg_link");
-    }
-    return next;
-  }
-
-  if (
-    effectiveStep >= 7 &&
-    zmScriptSentInHistory(out, "07_game_id") &&
-    !zmScriptSentInHistory(out, "09_tg_link") &&
-    (intent === "positive" ||
-      intent === "ready" ||
-      intent === "question" ||
-      intent === "interested")
-  ) {
-    const next: string[] = [];
-    if (!zmScriptSentInHistory(out, "08_tg_invite")) {
-      next.push("08_tg_invite");
-    }
-    if (!zmScriptSentInHistory(out, "09_tg_link")) {
-      next.push("09_tg_link");
-    }
-    return next;
-  }
-
-  if (!linkSent && explainSent && wantsReg) {
-    return ["04_registration", "05_link"];
-  }
-
-  if (!introSent && !linkSent && (intent === "interested" || signal || isGreeting(t))) {
-    return ["01_intro"];
   }
 
   return [];
