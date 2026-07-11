@@ -35,7 +35,7 @@ import {
   funnelStepFromScriptGaps as cmFunnelStepFromScriptGaps,
   inferStepFromThread as cmInferStepFromThread,
   regLinkSentInHistory as cmRegLinkSentInHistory,
-  regSendTriggersInProgress as cmRegSendTriggersInProgress,
+  cmStatusMoveAfterSend,
   resolveCmFunnelScripts,
   limitCmScriptsForCustomerTurn,
   cmAllowsMultiSend,
@@ -820,6 +820,7 @@ async function processCmConversation(
   );
 
   let sentAny = false;
+  const sentScriptKeys: string[] = [];
   const allowMultiSend = cmAllowsMultiSend(scriptKeys);
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
@@ -842,6 +843,16 @@ async function processCmConversation(
         });
         if (sent) {
           sentAny = true;
+          sentScriptKeys.push(scriptKey);
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            conversationId: convId,
+            channelId: runtime.channelId,
+            lastCustomerMessageId: lastIncoming.id,
+            lastCustomerMessageAt: lastIncoming.createdAt,
+            lastReplyAt: new Date().toISOString(),
+            lastReplyRole: scriptKey,
+            sendFailures: 0,
+          });
           await sleep(500);
         }
         continue;
@@ -865,6 +876,7 @@ async function processCmConversation(
       return sentAny;
     }
     sentAny = true;
+    sentScriptKeys.push(scriptKey);
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,
@@ -884,7 +896,7 @@ async function processCmConversation(
     return false;
   }
 
-  if (cmRegSendTriggersInProgress(scriptKeys)) {
+  if (cmStatusMoveAfterSend(sentScriptKeys)) {
     const statusId = findFunnelFollowUpStatusId(currentState);
     const operatorId = await client.probeOperatorUserId();
     if (statusId && operatorId) {
@@ -905,7 +917,7 @@ async function processCmConversation(
     lastCustomerMessageId: lastIncoming.id,
     lastCustomerMessageAt: lastIncoming.createdAt,
     lastReplyAt: new Date().toISOString(),
-    lastReplyRole: scriptKeys[scriptKeys.length - 1],
+    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1] ?? scriptKeys[scriptKeys.length - 1],
     sendFailures: 0,
   });
 

@@ -591,7 +591,11 @@ export function classifyCmMessage(
 }
 
 export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
-  return scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
+  return scriptKeys.includes("07_chrome");
+}
+
+export function cmStatusMoveAfterSend(sentScriptKeys: string[]): boolean {
+  return sentScriptKeys.includes("07_chrome");
 }
 
 /** Intro pair and registration trio are multi-send; everything else is one script per customer turn. */
