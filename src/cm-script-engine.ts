@@ -16,7 +16,6 @@ import {
   wantsDetailsAfterIntro,
   wantsRegistrationLink,
 } from "./cm-intent.js";
-import { registrationHelpScriptKeys, registrationLinkScriptKeys } from "./funnel-common.js";
 
 export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "Tu es du Cameroun",
@@ -163,10 +162,58 @@ export function cmRegistrationInstructionsSentInHistory(outgoingTexts: string[])
   const blob = outgoingTexts.join("\n").toLowerCase();
   return (
     (blob.includes("je vous envoie le lien") ||
+      blob.includes("je t'envoie le lien") ||
       blob.includes("telecharger l'application") ||
-      blob.includes("télécharger l'application")) &&
+      blob.includes("télécharger l'application") ||
+      blob.includes("telecharger l'app") ||
+      blob.includes("télécharger l'app")) &&
     blob.includes("cash056")
   );
+}
+
+const CM_REGISTRATION_LINK = "https://tinyurl.com/Camerun01";
+
+export function cmChromeReminderSentInHistory(outgoingTexts: string[]): boolean {
+  if (cmScriptSentInHistory(outgoingTexts, "07_chrome")) {
+    return true;
+  }
+  return outgoingTexts.some((line) => {
+    const lower = line.toLowerCase();
+    return lower.includes("google chrome") && lower.includes("colle");
+  });
+}
+
+function canSendCmRegistration(
+  tierSent: boolean,
+  tierChoice: boolean,
+  linkSent: boolean,
+  outgoingTexts: string[],
+): boolean {
+  if (linkSent) {
+    return false;
+  }
+  if (cmRegistrationInstructionsSentInHistory(outgoingTexts) && !regLinkSentInHistory(outgoingTexts)) {
+    return true;
+  }
+  return tierSent && tierChoice;
+}
+
+function cmRegBundleIfEligible(
+  tierSent: boolean,
+  tierChoice: boolean,
+  linkSent: boolean,
+  outgoingTexts: string[],
+): string[] {
+  return canSendCmRegistration(tierSent, tierChoice, linkSent, outgoingTexts)
+    ? [...CM_REG_BUNDLE]
+    : [];
+}
+
+function cmTierReminderIfNeeded(tierSent: boolean, tierChoice: boolean): string[] {
+  if (tierSent && !tierChoice) {
+    return ["04_tier"];
+  }
+  return [];
 }
 
 export function depositSentInHistory(outgoingTexts: string[]): boolean {
@@ -323,11 +370,19 @@ export function resolveCmFunnelScripts(
   const signal = positiveSignal(t, intent, effectiveStep);
 
   if (registrationHelp) {
-    if (regLinkSentInHistory(out)) {
+    if (regLinkSentInHistory(out) && !cmChromeReminderSentInHistory(out)) {
       return ["07_chrome"];
     }
-    if (!linkSent && (tierSent || tierChoice || stepsSent)) {
-      return [...CM_REG_BUNDLE];
+    if (regLinkSentInHistory(out)) {
+      return [];
+    }
+    const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out);
+    if (reg.length) {
+      return reg;
+    }
+    const tierReminder = cmTierReminderIfNeeded(tierSent, tierChoice);
+    if (tierReminder.length) {
+      return tierReminder;
     }
     if (effectiveStep < 3) {
       if (!introSent) {
@@ -336,34 +391,47 @@ export function resolveCmFunnelScripts(
       if (!intro2Sent) {
         return ["01_intro_2"];
       }
+      if (!ageSent) {
+        return ["02_age"];
+      }
       if (!stepsSent) {
         return ["03_steps"];
       }
       if (!tierSent) {
         return ["04_tier"];
       }
-      return [...CM_REG_BUNDLE];
+      return [];
     }
-    return [...registrationHelpScriptKeys("CM")];
+    if (!tierSent && stepsSent) {
+      return ["04_tier"];
+    }
+    return [];
   }
 
   if (wantsRegistrationLink(t)) {
-    return registrationLinkScriptKeys("CM", regLinkSentInHistory(out));
+    const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out);
+    if (reg.length) {
+      return reg;
+    }
+    const tierReminder = cmTierReminderIfNeeded(tierSent, tierChoice);
+    if (tierReminder.length) {
+      return tierReminder;
+    }
+    if (stepsSent && !tierSent) {
+      return ["04_tier"];
+    }
+    return [];
   }
 
   if (intent === "game_id_text") {
     return [];
   }
 
-  if ((tierSent || effectiveStep >= 3) && tierChoice && !linkSent) {
+  if (tierSent && tierChoice && !linkSent) {
     return [...CM_REG_BUNDLE];
   }
 
-  if (tierSent && !linkSent && isRegistrationAccountQuestion(t)) {
-    return [...CM_REG_BUNDLE];
-  }
-
-  if (wantsRegistrationLink(t) && stepsSent && !linkSent) {
+  if (tierSent && tierChoice && !linkSent && isRegistrationAccountQuestion(t)) {
     return [...CM_REG_BUNDLE];
   }
 
@@ -455,17 +523,14 @@ export function resolveCmFunnelScripts(
   }
 
   if (effectiveStep < 4) {
-    if (wantsRegistrationLink(t) && stepsSent && !linkSent) {
-      return [...CM_REG_BUNDLE];
-    }
-    if (wantsRegistrationLink(t) && !linkSent) {
-      return [...CM_REG_BUNDLE];
-    }
-    if (tierChoice && !linkSent && (tierSent || stepsSent || effectiveStep >= 3)) {
+    if (tierChoice && tierSent && !linkSent) {
       return [...CM_REG_BUNDLE];
     }
     if (isCmProfitFigure(t) && !linkSent) {
       if (!tierSent) {
+        return ["04_tier"];
+      }
+      if (!tierChoice) {
         return ["04_tier"];
       }
       return [...CM_REG_BUNDLE];
@@ -492,7 +557,7 @@ export function resolveCmFunnelScripts(
     return [];
   }
 
-  if (isRegistrationPending(t) && !linkSent) {
+  if (isRegistrationPending(t) && tierSent && tierChoice && !linkSent) {
     return [...CM_REG_BUNDLE];
   }
 
@@ -502,15 +567,7 @@ export function resolveCmFunnelScripts(
         return ["09_deposit"];
       }
     }
-    if (
-      tierSent &&
-      !linkSent &&
-      (tierChoice ||
-        registrationHelp ||
-        isRegistrationAccountQuestion(t) ||
-        wantsRegistrationLink(t) ||
-        isRegistrationPending(t))
-    ) {
+    if (canSendCmRegistration(tierSent, tierChoice, linkSent, out)) {
       return [...CM_REG_BUNDLE];
     }
     if (linkSent && !depositSentInHistory(out) && (signal || options?.hasImage || intent === "ready" || intent === "positive" || isReadyForRegistration(t))) {
@@ -537,7 +594,7 @@ export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
 }
 
-/** One funnel script per customer message — intro pair is the only multi-send. */
+/** Intro pair and registration trio are multi-send; everything else is one script per customer turn. */
 export function limitCmScriptsForCustomerTurn(
   scriptKeys: string[],
   outgoingTexts: string[],
@@ -552,16 +609,33 @@ export function limitCmScriptsForCustomerTurn(
     return scriptKeys.filter((key) => key === "01_intro" || key === "01_intro_2");
   }
   if (scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))) {
-    if (!cmRegistrationInstructionsSentInHistory(outgoingTexts)) {
-      return ["05_registration"];
+    const instructionsSent = cmRegistrationInstructionsSentInHistory(outgoingTexts);
+    const linkSent = regLinkSentInHistory(outgoingTexts);
+    const chromeSent = cmChromeReminderSentInHistory(outgoingTexts);
+
+    if (!instructionsSent) {
+      return [...CM_REG_BUNDLE];
     }
-    if (!regLinkSentInHistory(outgoingTexts)) {
-      return ["05_registration"];
+    const remaining: string[] = [];
+    if (!linkSent) {
+      remaining.push("06_link");
     }
-    return ["07_chrome"];
+    if (!chromeSent) {
+      remaining.push("07_chrome");
+    }
+    return remaining;
   }
   return [scriptKeys[0]!];
 }
+
+export function cmAllowsMultiSend(scriptKeys: string[]): boolean {
+  if (scriptKeys.includes("01_intro")) {
+    return true;
+  }
+  return scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
+}
+
+export { CM_REGISTRATION_LINK };
 
 function isOutgoingDelivered(message: PagerMessage): boolean {
   const direction = (message.messageDirection || "").toLowerCase();

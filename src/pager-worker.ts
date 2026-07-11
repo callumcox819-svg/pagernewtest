@@ -38,6 +38,7 @@ import {
   regSendTriggersInProgress as cmRegSendTriggersInProgress,
   resolveCmFunnelScripts,
   limitCmScriptsForCustomerTurn,
+  cmAllowsMultiSend,
   CM_REG_SEND_KEYS,
   tierSentInHistory,
   depositSentInHistory as cmDepositSentInHistory,
@@ -819,7 +820,7 @@ async function processCmConversation(
   );
 
   let sentAny = false;
-  const allowMultiSend = scriptKeys.includes("01_intro");
+  const allowMultiSend = cmAllowsMultiSend(scriptKeys);
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -834,7 +835,7 @@ async function processCmConversation(
       }
       if (scriptKey === "06_link") {
         const fallbackText =
-          loadLocalCmScript("05_registration")?.trim() || "https://tinyurl.com/Camerun01";
+          loadLocalCmScript("06_link")?.trim() || "https://tinyurl.com/Camerun01";
         const sent = await client.sendMessageReliable(convId, fallbackText, {
           channelId: runtime.channelId,
           conv,
