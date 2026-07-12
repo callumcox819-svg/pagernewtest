@@ -2018,6 +2018,40 @@ async function ensureCustomerMessageEligible(
   }
 
   if (isNewCustomerTurn) {
+    if (
+      hasBotReplyAfterCustomerMessage(
+        sorted,
+        lastIncoming,
+        conv,
+        options?.operatorUserId,
+        country,
+      )
+    ) {
+      if (
+        country === "EG" &&
+        egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
+      ) {
+        return true;
+      }
+      if (
+        country === "CM" &&
+        cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted))
+      ) {
+        return true;
+      }
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: convState.channelId,
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: convState.lastReplyAt ?? new Date().toISOString(),
+      });
+      const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
+      console.log(
+        `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (thread synced, text=${truncate(customerText)})`,
+      );
+      return false;
+    }
     return true;
   }
 

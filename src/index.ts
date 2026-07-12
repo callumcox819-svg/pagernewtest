@@ -28,6 +28,7 @@ import {
   ensurePagerSession,
   resolvePagerOrgSlug,
 } from "./pager-session.js";
+import { applyPagerPause, describePagerAccount } from "./pager-pause.js";
 import {
   TelegramApi,
   buildChannelKeyboard,
@@ -562,20 +563,37 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
   }
 
   if (command === "/pause") {
-    await stateStore.patch(chatId, { paused: true });
+    const touched = await applyPagerPause(stateStore, state, true);
+    const account = describePagerAccount(state);
+    const chatLines = touched.map((item) => `• ${describePagerAccount(item)}`).join("\n");
     await telegram.sendMessage(
       chatId,
-      "⏸ Авто-ответы на паузе.\nБот не шлёт сообщения в Pager, пока не снимешь паузу: /reset_pause",
+      [
+        `⏸ Авто-ответы на паузе для Pager: ${account}`,
+        touched.length > 1 ? `Затронуто Telegram-чатов: ${touched.length}` : "",
+        chatLines ? `${chatLines}` : "",
+        "",
+        "Бот не шлёт сообщения в Pager, пока не снимешь паузу: /reset_pause",
+      ]
+        .filter(Boolean)
+        .join("\n"),
       buildMainMenuKeyboard(),
     );
     return;
   }
 
   if (command === "/reset_pause") {
-    await stateStore.patch(chatId, { paused: false });
+    const touched = await applyPagerPause(stateStore, state, false);
+    const account = describePagerAccount(state);
     await telegram.sendMessage(
       chatId,
-      "▶️ Пауза снята. Авто-ответы снова работают.",
+      [
+        `▶️ Пауза снята для Pager: ${account}`,
+        touched.length > 1 ? `Активных Telegram-чатов: ${touched.length}` : "",
+        "Бот продолжит обрабатывать все непрочитанные чаты и чаты, где клиент написал последним.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
       buildMainMenuKeyboard(),
     );
     return;

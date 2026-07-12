@@ -462,14 +462,16 @@ export function resolveZmFunnelScripts(
   }
 
   if (!gameIdAskSent && !depositSent) {
+    if (!t && !options?.hasImage) {
+      return [];
+    }
     if (
       signal ||
       intent === "positive" ||
       intent === "ready" ||
       intent === "joined" ||
       isRegistrationConfirmed(t) ||
-      options?.hasImage ||
-      t.length > 0
+      options?.hasImage
     ) {
       return ["07_game_id"];
     }

@@ -111,9 +111,6 @@ export function shouldProcessConversation(conv: PagerConversation): boolean {
     return true;
   }
   if (isIncomingDirection(conv.lastMessageDirection)) {
-    if ((conv.conversationState ?? "").trim().toLowerCase() === "read") {
-      return false;
-    }
     return true;
   }
   return false;
@@ -504,7 +501,14 @@ export function assessReplyEligibility(
     return { eligible: true };
   }
 
+  if (isIncomingDirection(conv.lastMessageDirection)) {
+    return { eligible: true };
+  }
+
   if (convState.lastCustomerMessageId === lastIncoming.id && !convState.lastReplyAt) {
+    if (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection)) {
+      return { eligible: true };
+    }
     return { eligible: false, reason: "already_skipped_message" };
   }
 
