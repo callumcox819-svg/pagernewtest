@@ -362,30 +362,10 @@ export function cmFunnelNeedsContinuation(
   );
 }
 
+/** Same eligibility as CM/ZM: unread, fresh, or customer-last — no extra EG-only drops. */
 export function shouldQueueEgConversation(conv: PagerConversation): boolean {
-  if (hasUnreadMarkers(conv)) {
-    return true;
-  }
-  if (isIncomingDirection(conv.lastMessageDirection)) {
-    return true;
-  }
-  if (isFreshCustomerMessage(resolveLastMessageAt(conv))) {
-    return true;
-  }
-  if (
-    isNoStatusConversation(conv) &&
-    (hasUnreadMarkers(conv) ||
-      isIncomingDirection(conv.lastMessageDirection) ||
-      isFreshCustomerMessage(resolveLastMessageAt(conv)))
-  ) {
-    return true;
-  }
-  if (
-    isInProgressStatusConversation(conv) &&
-    !hasUnreadMarkers(conv) &&
-    !isIncomingDirection(conv.lastMessageDirection) &&
-    !isFreshCustomerMessage(resolveLastMessageAt(conv))
-  ) {
+  if (isInProgressStatusConversation(conv) && !hasUnreadMarkers(conv) && !isIncomingDirection(conv.lastMessageDirection) && !isFreshCustomerMessage(resolveLastMessageAt(conv)) && !isNoStatusConversation(conv)) {
+    // Only skip dead in-progress threads where the operator already spoke last and nothing is pending.
     return false;
   }
   return shouldProcessConversation(conv);

@@ -56,8 +56,7 @@ import {
   regSendTriggersInProgress as egRegSendTriggersInProgress,
   resolveEgFunnelScripts,
   limitEgScriptsForCustomerTurn,
-  EG_REG_SEND_KEYS,
-  EG_EXPLAIN_SEND_KEYS,
+  egAllowsMultiSend,
   depositSentInHistory as egDepositSentInHistory,
 } from "./eg-script-engine.js";
 import {
@@ -106,6 +105,7 @@ import type {
   StateStore,
 } from "./state-store.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
+import { loadLocalEgScript } from "./eg-local-scripts.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import {
@@ -1368,7 +1368,7 @@ async function processEgConversation(
   );
 
   let sentAny = false;
-  const allowMultiSend = scriptKeys.some((key) => EG_EXPLAIN_SEND_KEYS.has(key));
+  const allowMultiSend = egAllowsMultiSend(scriptKeys);
   for (const scriptKey of scriptKeys) {
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1378,7 +1378,21 @@ async function processEgConversation(
     });
     if (!replyText?.trim()) {
       if (scriptKey === "05_link" && sentAny) {
-        const fallbackLink = "https://tinyurl.com/Egypt0011";
+        const fallbackLink =
+          loadLocalEgScript("05_link")?.trim() || "https://tinyurl.com/Egypt0011";
+        const sent = await client.sendMessageReliable(convId, fallbackLink, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          await sleep(500);
+        }
+        continue;
+      }
+      if (scriptKey === "10_tg_link" && sentAny) {
+        const fallbackLink =
+          loadLocalEgScript("10_tg_link")?.trim() || "https://t.me/+t7iYS46b2Ls2YWRk";
         const sent = await client.sendMessageReliable(convId, fallbackLink, {
           channelId: runtime.channelId,
           conv,
