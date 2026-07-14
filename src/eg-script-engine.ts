@@ -3,6 +3,7 @@ import { isPositiveMessageReaction } from "./message-attachments.js";
 import {
   type EgIntent,
   classifyEgIntent,
+  isAppOrBrowserQuestion,
   isDepositConfirmed,
   isEgDepositTierChoice,
   isEgJoinOrRegistrationQuestion,
@@ -16,46 +17,43 @@ import {
 } from "./eg-intent.js";
 import { registrationHelpScriptKeys, registrationLinkScriptKeys } from "./funnel-common.js";
 
+/** Matching pager-ai-bot EG snippets (no Telegram handoff auto-send). */
 export const EG_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "إنت من مصر",
   "02_how_it_works": "تمام كده",
-  "03_egp_table": "55 جنيه",
-  "04_registration": "EG011",
-  "05_link": "tinyurl.com",
-  "06_deposit": "الأخضر",
+  "04_registration": "هبعتلك اللينك دلوقتي",
+  "05_link": "tinyurl.com/Egypt0011",
+  "06_deposit": "+ الأخضر",
   "07_game_id": "يبدأ ب 17",
-  "09_tg_invite": "تليجرام",
-  "10_tg_link": "t.me/+",
+  "08_app_or_browser": "ينفع الاتنين",
 };
 
 export const EG_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
-  "01_intro": ["إنت من مصر", "انت من مصر", "دخل إضافي", "أنا بساعد الناس"],
-  "02_how_it_works": ["الشغل بيمشي", "كود eg011", "من 365", "1100 جنيه"],
-  "03_egp_table": ["55 جنيه", "110 جنيه", "إيه اللي يناسبك"],
-  "04_registration": [
-    "هبعتلك لينك",
-    "لينك التسجيل",
-    "اختار الدولة",
-    "استخدم كود الترويج",
-    "google chrome",
-  ],
-  "05_link": ["tinyurl.com/egypt0011", "tinyurl.com", "egypt0011"],
-  "06_deposit": ["الزر الأخضر", "ابعتلي سكرين واضح يظهر الرصيد"],
-  "07_game_id": ["يبدأ بـ 17", "يبدأ ب 17", "رقم العميل"],
-  "09_tg_invite": ["انضم لقناتنا الخاصة على تليجرام", "قناتنا الخاصة على تليجرام"],
-  "10_tg_link": ["t.me/+t7iys46b2ls2ywrk", "t7iys46b2ls2ywrk"],
+  "01_intro": ["إنت من مصر", "انت من مصر", "بساعد ناس يعملوا شوية دخل"],
+  "02_how_it_works": ["تمام كده", "كود eg011", "365-550", "730-1100"],
+  "04_registration": ["هبعتلك اللينك دلوقتي", "جنيه مصري", "كود eg011"],
+  "05_link": ["tinyurl.com/egypt0011", "egypt0011"],
+  "06_deposit": ["+ الأخضر", "ابعتلي سكرين لما يخلص"],
+  "07_game_id": ["يبدأ ب 17", "رقم الحساب"],
+  "08_app_or_browser": ["ينفع الاتنين", "تطبيق أو متصفح"],
 };
 
 export const EG_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
-  "04_registration": ["تمام كده", "55 جنيه", "110 جنيه"],
-  "05_link": ["eg011", "هبعتلك اللينك", "55 جنيه"],
-  "02_how_it_works": ["eg011", "tinyurl.com"],
-  "03_egp_table": ["eg011", "tinyurl.com", "هبعتلك اللينك"],
+  "04_registration": ["تمام كده", "هتعمل إيداع"],
+  "05_link": ["هبعتلك اللينك", "تمام كده"],
+  "02_how_it_works": ["tinyurl.com", "هبعتلك اللينك"],
 };
 
-export const EG_FOLDER_NAME_HINTS = ["егип", "egypt", "hapka", "mahmoud", "مصر"];
+export const EG_FOLDER_NAME_HINTS = [
+  "егип",
+  "egypt",
+  "hapka",
+  "hapkatest",
+  "mahmoud",
+  "مصر",
+];
 export const EG_REG_SEND_KEYS = new Set(["04_registration", "05_link"]);
-export const EG_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works", "03_egp_table"]);
+export const EG_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works"]);
 
 export function scriptSnippet(key: string): string {
   return EG_SCRIPT_SNIPPETS[key] ?? "";
@@ -81,14 +79,7 @@ export function egScriptSentInHistory(outgoingTexts: string[], scriptKey: string
 }
 
 export function explainScriptsSentInHistory(outgoingTexts: string[]): boolean {
-  return (
-    egScriptSentInHistory(outgoingTexts, "02_how_it_works") ||
-    egScriptSentInHistory(outgoingTexts, "03_egp_table")
-  );
-}
-
-function explainScriptKeys(): string[] {
-  return ["02_how_it_works", "03_egp_table"];
+  return egScriptSentInHistory(outgoingTexts, "02_how_it_works");
 }
 
 export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
@@ -96,8 +87,7 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  // Do NOT treat bare EG011 as the link — it appears in 02_how_it_works and 04_registration.
-  return blob.includes("tinyurl.com") || blob.includes("egypt0011");
+  return blob.includes("tinyurl.com/egypt0011") || blob.includes("egypt0011");
 }
 
 export function egRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
@@ -105,11 +95,7 @@ export function egRegistrationInstructionsSentInHistory(outgoingTexts: string[])
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return (
-    blob.includes("هبعتلك لينك") ||
-    blob.includes("لينك التسجيل") ||
-    blob.includes("اختار الدولة")
-  );
+  return blob.includes("هبعتلك اللينك") || blob.includes("جنيه مصري");
 }
 
 export function depositSentInHistory(outgoingTexts: string[]): boolean {
@@ -117,57 +103,31 @@ export function depositSentInHistory(outgoingTexts: string[]): boolean {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("الزر الأخضر") || blob.includes("يظهر الرصيد للتأكيد");
+  return blob.includes("+ الأخضر") || blob.includes("ابعتلي سكرين لما يخلص");
 }
 
 export function gameIdSentInHistory(outgoingTexts: string[]): boolean {
   return egScriptSentInHistory(outgoingTexts, "07_game_id");
 }
 
-export function tgInviteSentInHistory(outgoingTexts: string[]): boolean {
-  if (egScriptSentInHistory(outgoingTexts, "09_tg_invite")) {
-    return true;
-  }
-  if (egScriptSentInHistory(outgoingTexts, "10_tg_link")) {
-    return true;
-  }
-  const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("t.me/+t7iys46b2ls2ywrk") || blob.includes("قناتنا الخاصة على تليجرام");
-}
-
-function tgScriptKeys(): string[] {
-  return ["09_tg_invite", "10_tg_link"];
-}
-
 function stepForOutgoingText(text: string): number {
   const t = text.toLowerCase();
-  if (t.includes("t.me/+t7iys46b2ls2ywrk") || t.includes("t.me/+")) {
-    return 9;
-  }
-  if (t.includes("قناتنا الخاصة على تليجرام") || t.includes("انضم لقناتنا")) {
-    return 8;
-  }
-  if (t.includes("الزر الأخضر") || t.includes("يظهر الرصيد للتأكيد")) {
+  if (t.includes("يبدأ ب 17") || t.includes("رقم الحساب")) {
     return 7;
   }
-  if (t.includes("يبدأ بـ 17") || t.includes("يبدأ ب 17") || t.includes("رقم العميل")) {
+  if (t.includes("+ الأخضر") || t.includes("ابعتلي سكرين لما يخلص")) {
     return 6;
   }
-  if (t.includes("tinyurl.com") || t.includes("egypt0011")) {
+  if (t.includes("tinyurl.com/egypt0011") || t.includes("egypt0011")) {
     return 4;
   }
-  if (
-    t.includes("هبعتلك لينك") ||
-    t.includes("لينك التسجيل") ||
-    t.includes("اختار الدولة") ||
-    t.includes("استخدم كود الترويج")
-  ) {
+  if (t.includes("هبعتلك اللينك") || t.includes("جنيه مصري")) {
     return 3;
   }
-  if (t.includes("الشغل بيمشي") || t.includes("365") || t.includes("1100")) {
+  if (t.includes("تمام كده") || t.includes("365-550") || t.includes("730-1100")) {
     return 2;
   }
-  if (t.includes("إنت من مصر") || t.includes("انت من مصر") || t.includes("أهلاً") || t.includes("اهلا")) {
+  if (t.includes("إنت من مصر") || t.includes("انت من مصر") || t.includes("بساعد ناس")) {
     return 1;
   }
   return 0;
@@ -195,6 +155,7 @@ export function inferStepFromThread(messages: PagerMessage[]): number {
   return step;
 }
 
+/** Matches pager-ai-bot funnel_step_from_script_gaps for geo=eg. */
 export function funnelStepFromScriptGaps(outgoingTexts: string[], storedStep = 0): number {
   let step = Math.max(storedStep, 0);
   if (!egScriptSentInHistory(outgoingTexts, "01_intro")) {
@@ -206,21 +167,13 @@ export function funnelStepFromScriptGaps(outgoingTexts: string[], storedStep = 0
   }
   step = Math.max(step, 2);
   if (!regLinkSentInHistory(outgoingTexts)) {
-    return Math.min(step, 2);
+    return Math.min(step, 3);
   }
-  step = Math.max(step, 3);
+  step = Math.max(step, 4);
   if (!depositSentInHistory(outgoingTexts)) {
     return Math.min(step, 5);
   }
-  step = Math.max(step, 6);
-  if (!gameIdSentInHistory(outgoingTexts)) {
-    return Math.min(step, 6);
-  }
-  step = Math.max(step, 7);
-  if (!tgInviteSentInHistory(outgoingTexts)) {
-    return Math.min(step, 7);
-  }
-  return Math.max(step, 9);
+  return Math.max(step, 6);
 }
 
 export function collectOutgoingTexts(messages: PagerMessage[]): string[] {
@@ -250,7 +203,6 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
   const linkSent = regLinkSentInHistory(outgoingTexts);
   const depositSent = depositSentInHistory(outgoingTexts);
   const gameIdSent = gameIdSentInHistory(outgoingTexts);
-  const tgSent = tgInviteSentInHistory(outgoingTexts);
   const t = (customerText || "").trim();
 
   if (!introSent) {
@@ -279,25 +231,14 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
       isRegistrationConfirmed(customerText) ||
       isRegistrationPending(customerText) ||
       isRegistrationHelpRequest(customerText) ||
+      isAppOrBrowserQuestion(customerText) ||
       Boolean(t)
     );
   }
   if (!gameIdSent) {
     return (
       isDepositConfirmed(customerText) ||
-      /\b(17\d{6,}|16\d{6,})\b/.test(customerText) ||
-      isEgJoinOrRegistrationQuestion(customerText) ||
-      isRegistrationHelpRequest(customerText) ||
-      wantsRegistrationLink(customerText) ||
-      isReadyForRegistration(customerText) ||
-      Boolean(t)
-    );
-  }
-  if (!tgSent) {
-    return (
-      isDepositConfirmed(customerText) ||
-      /\b(17\d{6,}|16\d{6,})\b/.test(customerText) ||
-      isReadyForRegistration(customerText) ||
+      /\b(17\d{6,}|16\d{6,}|10\d{8,})\b/.test(customerText) ||
       Boolean(t)
     );
   }
@@ -313,10 +254,13 @@ function shouldSendDepositScript(
   if (!regLinkSentInHistory(outgoingTexts)) {
     return false;
   }
+  if (depositSentInHistory(outgoingTexts)) {
+    return false;
+  }
   if (isRegistrationConfirmed(text) || isRegistrationPending(text) || options?.hasImage) {
     return true;
   }
-  return effectiveStep >= 3 && !depositSentInHistory(outgoingTexts);
+  return effectiveStep >= 4;
 }
 
 function positiveSignal(text: string, intent: EgIntent, effectiveStep: number): boolean {
@@ -328,41 +272,18 @@ function positiveSignal(text: string, intent: EgIntent, effectiveStep: number): 
   );
 }
 
-function wantsExplain(text: string, intent: EgIntent, effectiveStep: number): boolean {
-  return (
-    wantsDetailsAfterIntro(text) ||
-    intent === "question" ||
-    (intent === "interested" && effectiveStep >= 1) ||
-    positiveSignal(text, intent, effectiveStep)
-  );
-}
-
-function wantsRegistrationNow(text: string, intent: EgIntent, effectiveStep: number): boolean {
-  return (
-    wantsRegistrationLink(text) ||
-    isReadyForRegistration(text) ||
-    isRegistrationPending(text) ||
-    isEgDepositTierChoice(text) ||
-    intent === "ready" ||
-    intent === "positive" ||
-    positiveSignal(text, intent, effectiveStep)
-  );
-}
-
-function isGreeting(text: string): boolean {
-  return /^(اهلا|أهلا|اهلاً|أهلاً|مرحبا|مرحباً|السلام|سلام|هاي|هلو|hello|hi)([\s,!.]|$)/i.test(
-    (text || "").trim(),
-  );
-}
-
-function hasUsableFollowUp(text: string): boolean {
-  const t = (text || "").trim();
-  if (!t) {
-    return false;
+function egRegScripts(linkSent: boolean, force = false): string[] {
+  if (linkSent && !force) {
+    return [];
   }
-  return !/(مش مهتم|مش مهتمة|مش عايز|مش عاوز|لا شكرا|لا شكراً|سيبني|بطل|stop|scam)/i.test(t);
+  return ["04_registration", "05_link"];
 }
 
+/**
+ * Egypt funnel from pager-ai-bot:
+ * 01_intro → 02_how_it_works → 04+05 reg → (08_app_or_browser) → 06_deposit → 07_game_id
+ * Telegram handoff is NOT auto-sent.
+ */
 export function resolveEgFunnelScripts(
   effectiveStep: number,
   text: string,
@@ -372,65 +293,65 @@ export function resolveEgFunnelScripts(
 ): string[] {
   const t = (text || "").trim();
   const out = outgoingTexts;
-  const recentTexts = options?.recentCustomerTexts ?? [];
-  const introSent = egScriptSentInHistory(out, "01_intro");
-  const explainSent = explainScriptsSentInHistory(out);
+  const howSent = explainScriptsSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
-  const tierChoice =
-    isEgDepositTierChoice(t) || recentTexts.some((line) => isEgDepositTierChoice(line));
   const signal = positiveSignal(t, intent, effectiveStep);
-  const wantsReg =
-    wantsRegistrationNow(t, intent, effectiveStep) ||
-    isEgJoinOrRegistrationQuestion(t) ||
-    isRegistrationHelpRequest(t);
 
   if (intent === "declined") {
     return [];
   }
 
   if (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t)) {
-    if (!linkSent && effectiveStep < 3) {
-      if (!introSent) {
-        return ["01_intro"];
-      }
-      if (!explainSent) {
-        return explainScriptKeys();
-      }
-      return ["04_registration", "05_link"];
+    if (!egScriptSentInHistory(out, "01_intro")) {
+      return ["01_intro"];
     }
-    if (!linkSent) {
-      return ["04_registration", "05_link"];
+    if (!howSent) {
+      return ["02_how_it_works"];
     }
-    return [...registrationHelpScriptKeys("EG")];
+    return egRegScripts(linkSent, true);
   }
 
   if (wantsRegistrationLink(t)) {
-    return registrationLinkScriptKeys("EG", regLinkSentInHistory(out));
+    return registrationLinkScriptKeys("EG", linkSent);
   }
 
-  if ((explainSent || effectiveStep >= 2) && tierChoice && !linkSent) {
-    return ["04_registration", "05_link"];
+  if (howSent && !linkSent) {
+    if (
+      wantsRegistrationLink(t) ||
+      isReadyForRegistration(t) ||
+      isRegistrationPending(t) ||
+      signal ||
+      intent === "ready" ||
+      intent === "positive" ||
+      intent === "question" ||
+      intent === "interested" ||
+      isEgDepositTierChoice(t) ||
+      effectiveStep >= 2 ||
+      /استثمر|أريد|اريد|ايو|نجرب|مهتم|تمام/i.test(t)
+    ) {
+      return egRegScripts(linkSent);
+    }
   }
 
-  if (explainSent && !linkSent && wantsReg) {
-    return ["04_registration", "05_link"];
+  if (
+    isAppOrBrowserQuestion(t) &&
+    effectiveStep >= 2 &&
+    effectiveStep < 6 &&
+    !egScriptSentInHistory(out, "08_app_or_browser")
+  ) {
+    return ["08_app_or_browser"];
   }
 
   if (effectiveStep < 1) {
-    if (introSent) {
-      if (!explainSent && (wantsExplain(t, intent, effectiveStep) || t.length > 0)) {
-        return explainScriptKeys();
-      }
-      if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
-        return ["04_registration", "05_link"];
+    if (egScriptSentInHistory(out, "01_intro")) {
+      if (signal || intent === "question" || wantsDetailsAfterIntro(t) || t.length > 0) {
+        return howSent ? egRegScripts(linkSent) : ["02_how_it_works"];
       }
       return [];
     }
     if (
       ["interested", "positive", "ready", "question", "unknown"].includes(intent) ||
       signal ||
-      isGreeting(t) ||
-      hasUsableFollowUp(t) ||
       t.length > 0
     ) {
       return ["01_intro"];
@@ -438,60 +359,90 @@ export function resolveEgFunnelScripts(
     return [];
   }
 
-  if (effectiveStep < 3) {
-    if (!explainSent && (wantsExplain(t, intent, effectiveStep) || t.length > 0)) {
-      return explainScriptKeys();
+  if (effectiveStep < 2) {
+    if (howSent) {
+      if (
+        isReadyForRegistration(t) ||
+        wantsRegistrationLink(t) ||
+        signal ||
+        intent === "ready" ||
+        intent === "positive" ||
+        intent === "question" ||
+        intent === "interested" ||
+        /استثمر|أريد|اريد|ايو|نجرب|مهتم|تمام/i.test(t)
+      ) {
+        return egRegScripts(linkSent);
+      }
+      return [];
     }
-    if (explainSent && wantsRegistrationNow(t, intent, effectiveStep) && !linkSent) {
-      return ["04_registration", "05_link"];
+    if (
+      intent === "interested" ||
+      intent === "positive" ||
+      intent === "ready" ||
+      intent === "question" ||
+      wantsDetailsAfterIntro(t) ||
+      isReadyForRegistration(t) ||
+      signal ||
+      /استثمر|أريد أن|اريد ان|أنا مهتم|موضوع|شغل|ازاي|إزاي/i.test(t) ||
+      t.length > 0
+    ) {
+      return ["02_how_it_works"];
     }
     return [];
   }
 
   if (effectiveStep < 4) {
-    if (isRegistrationConfirmed(t) && linkSent) {
-      return shouldSendDepositScript(t, effectiveStep, out, options) ? ["06_deposit"] : [];
-    }
-
-    if (!explainSent && wantsExplain(t, intent, effectiveStep)) {
-      return explainScriptKeys();
-    }
-
-    if (explainSent && wantsRegistrationNow(t, intent, effectiveStep)) {
-      if (linkSent) {
-        if (shouldSendDepositScript(t, effectiveStep, out, options) || signal || intent === "ready") {
-          return depositSentInHistory(out) ? [] : ["06_deposit"];
-        }
-        return [];
-      }
-      return ["04_registration", "05_link"];
-    }
-    if (linkSent && !depositSentInHistory(out) && (signal || intent === "joined" || options?.hasImage)) {
-      return ["06_deposit"];
+    if (
+      isReadyForRegistration(t) ||
+      wantsRegistrationLink(t) ||
+      intent === "ready" ||
+      intent === "positive" ||
+      intent === "question" ||
+      signal ||
+      isEgDepositTierChoice(t)
+    ) {
+      return egRegScripts(linkSent);
     }
     return [];
   }
 
-  if (isRegistrationPending(t) && !linkSent) {
-    return ["04_registration", "05_link"];
+  if (isRegistrationPending(t)) {
+    return egRegScripts(linkSent);
   }
 
   if (effectiveStep < 7) {
+    if (intent === "game_id_text") {
+      return [];
+    }
+    if (isRegistrationConfirmed(t) || intent === "joined") {
+      return shouldSendDepositScript(t, effectiveStep, out, options) ? ["06_deposit"] : [];
+    }
     if (
       linkSent &&
       !depositSentInHistory(out) &&
-      (isRegistrationConfirmed(t) ||
-        isRegistrationPending(t) ||
-        intent === "joined" ||
-        options?.hasImage ||
-        signal ||
-        intent === "ready" ||
-        intent === "positive")
+      (options?.hasImage || signal || intent === "positive" || intent === "ready")
     ) {
       return ["06_deposit"];
     }
-    if (!linkSent && wantsRegistrationNow(t, intent, effectiveStep)) {
-      return ["04_registration", "05_link"];
+    if (
+      !linkSent &&
+      (intent === "interested" ||
+        intent === "positive" ||
+        intent === "ready" ||
+        intent === "question" ||
+        signal)
+    ) {
+      return egRegScripts(linkSent);
+    }
+    return [];
+  }
+
+  if (effectiveStep < 8 && intent === "game_id_text") {
+    if (gameIdSentInHistory(out)) {
+      return [];
+    }
+    if (depositSentInHistory(out) || effectiveStep >= 7) {
+      return ["07_game_id"];
     }
     return [];
   }
@@ -502,7 +453,6 @@ export function resolveEgFunnelScripts(
     (isDepositConfirmed(t) ||
       intent === "deposit_done" ||
       intent === "image_only" ||
-      intent === "game_id_text" ||
       intent === "positive" ||
       intent === "ready" ||
       options?.hasImage ||
@@ -511,90 +461,25 @@ export function resolveEgFunnelScripts(
     return ["07_game_id"];
   }
 
-  if (effectiveStep < 8 && intent === "game_id_text") {
-    if (!gameIdSentInHistory(out)) {
-      return ["07_game_id"];
+  if (effectiveStep < 4 && (intent === "positive" || intent === "interested" || intent === "ready" || signal)) {
+    if (!howSent) {
+      return ["02_how_it_works"];
+    }
+    if (!linkSent) {
+      return egRegScripts(linkSent);
     }
   }
 
-  if (
-    gameIdSentInHistory(out) &&
-    !tgInviteSentInHistory(out) &&
-    (intent === "game_id_text" ||
-      intent === "positive" ||
-      intent === "ready" ||
-      intent === "deposit_done" ||
-      intent === "image_only" ||
-      intent === "joined" ||
-      isDepositConfirmed(t) ||
-      isPositiveMessageReaction(options?.messageReaction) ||
-      options?.hasImage ||
-      /\b(17\d{6,}|16\d{6,})\b/.test(t))
-  ) {
-    return tgScriptKeys();
-  }
-
-  if (!linkSent && explainSent && wantsReg) {
-    return ["04_registration", "05_link"];
-  }
-
-  if (!introSent && !linkSent && (intent === "interested" || signal || isGreeting(t) || hasUsableFollowUp(t))) {
-    return ["01_intro"];
-  }
-
-  if (introSent && !explainSent && !linkSent && t.length > 0) {
-    return explainScriptKeys();
-  }
-
-  if (
-    effectiveStep >= 6 &&
-    depositSentInHistory(out) &&
-    !gameIdSentInHistory(out) &&
-    !t &&
-    (options?.hasImage ||
-      isPositiveMessageReaction(options?.messageReaction) ||
-      intent === "positive" ||
-      intent === "ready")
-  ) {
-    return ["07_game_id"];
-  }
-
-  if (
-    effectiveStep >= 2 &&
-    !linkSent &&
-    (isRegistrationHelpRequest(t) ||
-      isEgJoinOrRegistrationQuestion(t) ||
-      wantsRegistrationLink(t) ||
-      wantsReg ||
-      signal)
-  ) {
-    return ["04_registration", "05_link"];
-  }
-
-  if (
-    linkSent &&
-    (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t) || wantsRegistrationLink(t))
-  ) {
+  if (linkSent && (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t) || wantsRegistrationLink(t))) {
     return [...registrationHelpScriptKeys("EG")];
-  }
-
-  if (
-    introSent &&
-    !explainSent &&
-    !linkSent &&
-    (intent === "interested" || intent === "ready" || signal || isGreeting(t) || t.length > 0)
-  ) {
-    return explainScriptKeys();
   }
 
   return [];
 }
 
 const EG_REG_BUNDLE = ["04_registration", "05_link"] as const;
-const EG_TG_BUNDLE = ["09_tg_invite", "10_tg_link"] as const;
-const EG_TG_SEND_KEYS = new Set(["09_tg_invite", "10_tg_link"]);
 
-/** One funnel stage per customer message — explain + registration text/link go together. */
+/** One funnel stage per customer message — reg text+link go together. */
 export function limitEgScriptsForCustomerTurn(
   scriptKeys: string[],
   outgoingTexts: string[],
@@ -602,17 +487,17 @@ export function limitEgScriptsForCustomerTurn(
   if (!scriptKeys.length) {
     return scriptKeys;
   }
-  if (
-    scriptKeys.includes("01_intro") &&
-    !egScriptSentInHistory(outgoingTexts, "01_intro")
-  ) {
+  if (scriptKeys.includes("01_intro") && !egScriptSentInHistory(outgoingTexts, "01_intro")) {
     return ["01_intro"];
   }
   if (
     scriptKeys.some((key) => EG_EXPLAIN_SEND_KEYS.has(key)) &&
     !explainScriptsSentInHistory(outgoingTexts)
   ) {
-    return ["02_how_it_works", "03_egp_table"];
+    return ["02_how_it_works"];
+  }
+  if (scriptKeys.includes("08_app_or_browser")) {
+    return ["08_app_or_browser"];
   }
   if (scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key))) {
     const instructionsSent = egRegistrationInstructionsSentInHistory(outgoingTexts);
@@ -625,12 +510,6 @@ export function limitEgScriptsForCustomerTurn(
     }
     return [];
   }
-  if (scriptKeys.some((key) => EG_TG_SEND_KEYS.has(key))) {
-    if (!tgInviteSentInHistory(outgoingTexts)) {
-      return [...EG_TG_BUNDLE];
-    }
-    return [];
-  }
   return [scriptKeys[0]!];
 }
 
@@ -639,9 +518,6 @@ export function egAllowsMultiSend(scriptKeys: string[]): boolean {
     return true;
   }
   if (scriptKeys.some((key) => EG_EXPLAIN_SEND_KEYS.has(key))) {
-    return true;
-  }
-  if (scriptKeys.some((key) => EG_TG_SEND_KEYS.has(key))) {
     return true;
   }
   return scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key));

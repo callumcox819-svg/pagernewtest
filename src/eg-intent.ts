@@ -129,6 +129,17 @@ export function wantsDetailsAfterIntro(text: string): boolean {
   );
 }
 
+export function isAppOrBrowserQuestion(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  if (/(تطبيق|متصفح|انزل|البرنامج|الابليكيشن|كروم|chrome|download|app)/i.test(t)) {
+    return true;
+  }
+  return /\b(app|browser|download|install|play store|apk)\b/i.test(t);
+}
+
 export function isDepositConfirmed(text: string): boolean {
   const t = (text || "").trim();
   if (!t) {

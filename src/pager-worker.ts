@@ -1390,19 +1390,6 @@ async function processEgConversation(
         }
         continue;
       }
-      if (scriptKey === "10_tg_link" && sentAny) {
-        const fallbackLink =
-          loadLocalEgScript("10_tg_link")?.trim() || "https://t.me/+t7iYS46b2Ls2YWRk";
-        const sent = await client.sendMessageReliable(convId, fallbackLink, {
-          channelId: runtime.channelId,
-          conv,
-        });
-        if (sent) {
-          sentAny = true;
-          await sleep(500);
-        }
-        continue;
-      }
       console.warn(
         `EG script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${scriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
       );

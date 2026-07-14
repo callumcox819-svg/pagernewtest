@@ -4,9 +4,9 @@ import { EG_SCRIPT_SEARCH_NEEDLES } from "./eg-script-engine.js";
 import { ZM_SCRIPT_SEARCH_NEEDLES } from "./zm-script-engine.js";
 
 /** Distinctive multi-word / branded phrases only — short greetings & common words
- *  (أهلاً، إيداع، telegram…) must NOT mark real customer replies as bot echoes. */
+ *  must NOT mark real customer replies as bot echoes. */
 const EXTRA_EG_OUTBOUND =
-  /(أهلاً، إذا كنت مهتمًا|اهلا، اذا كنت مهتم|هتعمل حساب من اللينك|السكرين مش واضح|مرحبًا\. تحقق استراتيجياتنا|إنت من مصر\؟|انا بساعد الناس يعملوا دخل|الشغل بيمشي كالتالي|هبعتلك لينك التسجيل|الزر الأخضر|tinyurl\.com\/egypt0011)/i;
+  /(أهلاً، إذا كنت مهتمًا|اهلا، اذا كنت مهتم|هتعمل حساب من اللينك|السكرين مش واضح|مرحبًا\. تحقق استراتيجياتنا|إنت من مصر\؟|بساعد ناس يعملوا شوية دخل|تمام كده:|هبعتلك اللينك دلوقتي|tinyurl\.com\/egypt0011|\+ الأخضر|ينفع الاتنين)/i;
 
 const MIN_OUTBOUND_NEEDLE_LEN = 12;
 
