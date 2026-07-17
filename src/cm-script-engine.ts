@@ -209,6 +209,44 @@ function canSendCmRegistration(
   return tierSent && tierChoice;
 }
 
+/** After tier table: interest / app / ready → registration (same as previous Python bot). */
+function cmReadyForRegAfterTier(
+  text: string,
+  intent: CmIntent,
+  tierSent: boolean,
+  tierChoice: boolean,
+  linkSent: boolean,
+  signal: boolean,
+): boolean {
+  if (!tierSent || linkSent) {
+    return false;
+  }
+  if (tierChoice) {
+    return true;
+  }
+  const t = (text || "").trim();
+  if (!t && !signal) {
+    return false;
+  }
+  if (
+    intent === "interested" ||
+    intent === "positive" ||
+    intent === "ready" ||
+    intent === "question" ||
+    signal
+  ) {
+    return true;
+  }
+  return (
+    isReadyForRegistration(t) ||
+    isClientReadyPhrase(t) ||
+    wantsRegistrationLink(t) ||
+    isCmRegistrationHelpRequest(t) ||
+    isRegistrationAccountQuestion(t) ||
+    /\b(application|appli|lien|inscri|enregistr|commencer|continuer|ok|oui|d'accord)\b/i.test(t)
+  );
+}
+
 function cmRegBundleIfEligible(
   tierSent: boolean,
   tierChoice: boolean,
@@ -443,6 +481,10 @@ export function resolveCmFunnelScripts(
     return [...CM_REG_BUNDLE];
   }
 
+  if (cmReadyForRegAfterTier(t, intent, tierSent, tierChoice, linkSent, signal)) {
+    return [...CM_REG_BUNDLE];
+  }
+
   if (tierSent && tierChoice && !linkSent && isRegistrationAccountQuestion(t)) {
     return [...CM_REG_BUNDLE];
   }
@@ -589,13 +631,51 @@ export function resolveCmFunnelScripts(
         return ["09_deposit"];
       }
     }
+    if (cmReadyForRegAfterTier(t, intent, tierSent, tierChoice, linkSent, signal)) {
+      return [...CM_REG_BUNDLE];
+    }
     if (canSendCmRegistration(tierSent, tierChoice, linkSent, out)) {
       return [...CM_REG_BUNDLE];
+    }
+    if (
+      stepsSent &&
+      !tierSent &&
+      (signal ||
+        intent === "interested" ||
+        intent === "positive" ||
+        intent === "ready" ||
+        intent === "question" ||
+        isReadyForRegistration(t) ||
+        /\b(application|appli|lien|aide|explique|comment)\b/i.test(t))
+    ) {
+      return ["04_tier"];
     }
     if (linkSent && !depositSentInHistory(out) && (signal || options?.hasImage || intent === "ready" || intent === "positive" || isReadyForRegistration(t))) {
       return ["09_deposit"];
     }
     return [];
+  }
+
+  if (
+    !introSent &&
+    (t.length > 0 || signal || intent === "interested" || intent === "question")
+  ) {
+    return ["01_intro", "01_intro_2"];
+  }
+  if (introSent && !intro2Sent) {
+    return ["01_intro_2"];
+  }
+  if (introSent && !ageSent && (t.length > 0 || signal)) {
+    return ["02_age"];
+  }
+  if (ageSent && !stepsSent && (t.length > 0 || signal || isAgeAnswer(t))) {
+    return ["03_steps"];
+  }
+  if (stepsSent && !tierSent && (t.length > 0 || signal)) {
+    return ["04_tier"];
+  }
+  if (cmReadyForRegAfterTier(t, intent, tierSent, tierChoice, linkSent, signal)) {
+    return [...CM_REG_BUNDLE];
   }
 
   return [];

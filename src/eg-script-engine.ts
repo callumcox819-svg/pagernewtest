@@ -455,13 +455,15 @@ export function resolveEgFunnelScripts(
       intent === "image_only" ||
       intent === "positive" ||
       intent === "ready" ||
+      intent === "unknown" ||
       options?.hasImage ||
-      isPositiveMessageReaction(options?.messageReaction))
+      isPositiveMessageReaction(options?.messageReaction) ||
+      Boolean(t))
   ) {
     return ["07_game_id"];
   }
 
-  if (effectiveStep < 4 && (intent === "positive" || intent === "interested" || intent === "ready" || signal)) {
+  if (effectiveStep < 4 && (intent === "positive" || intent === "interested" || intent === "ready" || signal || intent === "unknown" || t.length > 0)) {
     if (!howSent) {
       return ["02_how_it_works"];
     }
@@ -474,6 +476,52 @@ export function resolveEgFunnelScripts(
     return [...registrationHelpScriptKeys("EG")];
   }
 
+  return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
+}
+
+/** Advance EG funnel from history gaps when intent is weak/unknown — pager-ai-bot parity. */
+export function resolveEgBacklogFallback(
+  effectiveStep: number,
+  outgoingTexts: string[],
+  intent: EgIntent = "unknown",
+  text = "",
+  options?: { hasImage?: boolean; messageReaction?: string },
+): string[] {
+  const out = outgoingTexts;
+  const introSent = egScriptSentInHistory(out, "01_intro");
+  const howSent = explainScriptsSentInHistory(out);
+  const linkSent = regLinkSentInHistory(out);
+  const depositSent = depositSentInHistory(out);
+  const gameIdSent = gameIdSentInHistory(out);
+  const t = (text || "").trim();
+
+  if (!introSent) {
+    return t || intent !== "declined" ? ["01_intro"] : [];
+  }
+  if (!howSent) {
+    return ["02_how_it_works"];
+  }
+  if (!linkSent) {
+    return ["04_registration", "05_link"];
+  }
+  if (!depositSent && (isRegistrationConfirmed(t) || intent === "joined" || options?.hasImage || intent === "positive" || intent === "ready")) {
+    return ["06_deposit"];
+  }
+  if (
+    depositSent &&
+    !gameIdSent &&
+    (intent === "positive" ||
+      intent === "ready" ||
+      intent === "deposit_done" ||
+      intent === "image_only" ||
+      intent === "unknown" ||
+      options?.hasImage ||
+      isPositiveMessageReaction(options?.messageReaction) ||
+      Boolean(t) ||
+      effectiveStep >= 6)
+  ) {
+    return ["07_game_id"];
+  }
   return [];
 }
 

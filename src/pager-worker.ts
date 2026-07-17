@@ -16,6 +16,7 @@ import {
   conversationPriorityScore,
   findLatestIncomingMessage,
   hasBotReplyAfterCustomerMessage,
+  hasUnreadMarkers,
   isNewLeadConversation,
   recentCustomerMessageTexts,
   shouldProcessConversation,
@@ -131,12 +132,12 @@ type WorkerDeps = {
 };
 
 const MAX_SEND_FAILURES = 5;
-const MAX_CONVERSATIONS_PER_ACCOUNT = 400;
-const INBOX_TOP = 25;
-const INBOX_TOP_EG_CM = 80;
-const INBOX_TOP_EG = 120;
-const INBOX_PAGES_EG = 5;
-const INBOX_PAGES_CM = 2;
+const MAX_CONVERSATIONS_PER_ACCOUNT = 500;
+const INBOX_TOP = 40;
+const INBOX_TOP_EG_CM = 150;
+const INBOX_TOP_EG = 200;
+const INBOX_PAGES_EG = 8;
+const INBOX_PAGES_CM = 5;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -325,7 +326,13 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   const folderScopedConversations = enabledFolderIds
-    ? conversations.filter((conv) => conversationAllowedInFolders(conv, enabledFolderIds))
+    ? conversations.filter(
+        (conv) =>
+          hasUnreadMarkers(conv) ||
+          isIncomingDirection(conv.lastMessageDirection) ||
+          isNewLeadConversation(conv) ||
+          conversationAllowedInFolders(conv, enabledFolderIds),
+      )
     : conversations;
   const workQueue = await buildWorkQueue(
     client,
@@ -338,7 +345,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     (item) => item.runtime.country === "EG" || item.runtime.country === "CM",
   )
     ? MAX_CONVERSATIONS_PER_ACCOUNT
-    : 80;
+    : 150;
   const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
   const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit, egChannelIds).sort(
     (left, right) => {
@@ -501,6 +508,11 @@ function inboxConversationEligible(
   conv: PagerConversation,
   enabledFolderIds: Set<string> | null,
 ): boolean {
+  // Unread / customer-last always stay in the night backlog, even if status folder
+  // is outside the operator toggle (previous bot behavior).
+  if (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection)) {
+    return true;
+  }
   if (isNewLeadConversation(conv)) {
     return true;
   }

@@ -120,16 +120,25 @@ export function isDepositTierChoice(text: string): boolean {
   if (/^(1|2)\.?$/.test(t)) {
     return true;
   }
-  if (/^(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f)?\.?$/i.test(t)) {
+  if (/^(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f|fc)?\.?$/i.test(t)) {
     return true;
   }
   if (
-    t.split(/\s+/).length <= 12 &&
-    /\b(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f)?\b/i.test(t)
+    t.split(/\s+/).length <= 14 &&
+    /\b(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f|fc)?\b/i.test(t)
   ) {
     return true;
   }
-  if (/\b(1000|1500)\s*f(?:rs?)?\b/i.test(t) || /\b(1000f(?:rs?)?|1500f(?:rs?)?)\b/i.test(t)) {
+  if (
+    /\b(1000|1500)\s*f(?:rs?|c)?\b/i.test(t) ||
+    /\b(1000f(?:rs?|c)?|1500f(?:rs?|c)?)\b/i.test(t)
+  ) {
+    return true;
+  }
+  if (/\bpour un d[eé]but\b/i.test(t) && /\b(100|1\s?000|140|cfa)\b/i.test(t)) {
+    return true;
+  }
+  if (/\ble\s+1\b/i.test(t) && /\b(d'?abord|premier|pour)\b/i.test(t)) {
     return true;
   }
   return isCmTier1000Choice(t) || isCmTier1500Choice(t);
