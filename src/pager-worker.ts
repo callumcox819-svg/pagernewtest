@@ -91,6 +91,7 @@ import { isZmRegistrationAccountQuestion, isReadyForRegistration as zmIsReadyFor
 import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
+  isOutgoingDirection,
   isPagerSessionError,
   PagerApiError,
   PagerClient,
@@ -1259,6 +1260,14 @@ async function processEgConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
+  // Thread mirror of list gate: bot already spoke last → wait for customer.
+  const newest = sorted[0];
+  if (newest && isOutgoingDirection(newest.messageDirection)) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} EG — bot_spoke_last (awaiting_customer)`,
+    );
+    return false;
+  }
   const lastIncoming = findLatestIncomingFromThread(sorted, conv, "EG");
   if (!lastIncoming) {
     console.log(
@@ -2011,12 +2020,6 @@ async function ensureCustomerMessageEligible(
     ) {
       return true;
     }
-    // Mid-funnel / unread: never lock forever after first reply.
-    if (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection)) {
-      if (country === "EG" || country === "CM") {
-        return true;
-      }
-    }
     const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate(customerText)})`,
@@ -2043,12 +2046,6 @@ async function ensureCustomerMessageEligible(
     if (
       country === "CM" &&
       cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted))
-    ) {
-      return true;
-    }
-    if (
-      (country === "EG" || country === "CM") &&
-      (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))
     ) {
       return true;
     }
@@ -2081,16 +2078,13 @@ async function ensureCustomerMessageEligible(
       ) {
         return true;
       }
-      // Sync state for bookkeeping only — do NOT invent lastReplyAt (that locks the chat).
       await patchConversationState(deps.stateStore, state.chatId, convId, {
         conversationId: convId,
         channelId: convState.channelId,
         lastCustomerMessageId: lastIncoming.id,
         lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: convState.lastReplyAt ?? new Date().toISOString(),
       });
-      if (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection)) {
-        return true;
-      }
       const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
       console.log(
         `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (thread synced, text=${truncate(customerText)})`,

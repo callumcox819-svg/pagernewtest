@@ -139,21 +139,19 @@ function stepForOutgoingText(text: string): number {
   return 0;
 }
 
-function isOutgoingDelivered(message: PagerMessage): boolean {
+function isOutgoingScriptCandidate(message: PagerMessage): boolean {
   if (!message.text?.trim()) {
     return false;
   }
   const direction = (message.messageDirection ?? "").toLowerCase();
-  if (direction !== "outgoing" && direction !== "out") {
-    return false;
-  }
-  return Boolean(message.isDelivered || message.facebookMessageId);
+  return direction === "outgoing" || direction === "out";
 }
 
 export function inferStepFromThread(messages: PagerMessage[]): number {
   let step = 0;
   for (const message of messages) {
-    if (!isOutgoingDelivered(message)) {
+    // Count failed send attempts too — otherwise EG re-spams the same script after red "!".
+    if (!isOutgoingScriptCandidate(message)) {
       continue;
     }
     step = Math.max(step, stepForOutgoingText((message.text || "").trim()));
@@ -188,7 +186,8 @@ export function collectOutgoingTexts(messages: PagerMessage[]): string[] {
   );
   const texts: string[] = [];
   for (const message of chronological) {
-    if (!isOutgoingDelivered(message)) {
+    // Include undelivered outgoings so we do not re-send after Messenger red "!".
+    if (!isOutgoingScriptCandidate(message)) {
       continue;
     }
     const text = (message.text || "").trim();
@@ -203,6 +202,10 @@ export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key));
 }
 
+/**
+ * Only reopen an already-replied EG thread for a clear mid-funnel signal.
+ * Never treat bare text / unread as a reason to push deposit / game_id.
+ */
 export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: string[]): boolean {
   const introSent = egScriptSentInHistory(outgoingTexts, "01_intro");
   const explainSent = explainScriptsSentInHistory(outgoingTexts);
@@ -210,26 +213,29 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
   const depositSent = depositSentInHistory(outgoingTexts);
   const gameIdSent = gameIdSentInHistory(outgoingTexts);
   const t = (customerText || "").trim();
+  if (!t) {
+    return false;
+  }
 
   if (!introSent) {
-    return Boolean(t);
+    return true;
   }
   if (!explainSent) {
     return (
-      Boolean(t) ||
       wantsDetailsAfterIntro(customerText) ||
       isReadyForRegistration(customerText) ||
-      isEgJoinOrRegistrationQuestion(customerText)
+      isEgJoinOrRegistrationQuestion(customerText) ||
+      isFunnelPositiveReaction(customerText, 1)
     );
   }
   if (!linkSent) {
     return (
-      Boolean(t) ||
       isEgJoinOrRegistrationQuestion(customerText) ||
       isEgDepositTierChoice(customerText) ||
       isReadyForRegistration(customerText) ||
       isRegistrationHelpRequest(customerText) ||
-      wantsRegistrationLink(customerText)
+      wantsRegistrationLink(customerText) ||
+      isFunnelPositiveReaction(customerText, 2)
     );
   }
   if (!depositSent) {
@@ -237,15 +243,13 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
       isRegistrationConfirmed(customerText) ||
       isRegistrationPending(customerText) ||
       isRegistrationHelpRequest(customerText) ||
-      isAppOrBrowserQuestion(customerText) ||
-      Boolean(t)
+      isAppOrBrowserQuestion(customerText)
     );
   }
   if (!gameIdSent) {
     return (
       isDepositConfirmed(customerText) ||
-      /\b(17\d{6,}|16\d{6,}|10\d{8,})\b/.test(customerText) ||
-      Boolean(t)
+      /\b(17\d{6,}|16\d{6,}|10\d{8,})\b/.test(customerText)
     );
   }
   return false;
@@ -253,7 +257,7 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
 
 function shouldSendDepositScript(
   text: string,
-  effectiveStep: number,
+  _effectiveStep: number,
   outgoingTexts: string[],
   options?: { hasImage?: boolean },
 ): boolean {
@@ -263,10 +267,7 @@ function shouldSendDepositScript(
   if (depositSentInHistory(outgoingTexts)) {
     return false;
   }
-  if (isRegistrationConfirmed(text) || isRegistrationPending(text) || options?.hasImage) {
-    return true;
-  }
-  return effectiveStep >= 4;
+  return isRegistrationConfirmed(text) || isRegistrationPending(text) || Boolean(options?.hasImage);
 }
 
 function positiveSignal(text: string, intent: EgIntent, effectiveStep: number): boolean {
@@ -332,7 +333,6 @@ export function resolveEgFunnelScripts(
       intent === "question" ||
       intent === "interested" ||
       isEgDepositTierChoice(t) ||
-      effectiveStep >= 2 ||
       /استثمر|أريد|اريد|ايو|نجرب|مهتم|تمام/i.test(t)
     ) {
       return egRegScripts(linkSent);
@@ -428,17 +428,8 @@ export function resolveEgFunnelScripts(
     if (isRegistrationConfirmed(t) || intent === "joined") {
       return shouldSendDepositScript(t, effectiveStep, out, options) ? ["06_deposit"] : [];
     }
-    if (
-      linkSent &&
-      !depositSentInHistory(out) &&
-      (options?.hasImage ||
-        signal ||
-        intent === "positive" ||
-        intent === "ready" ||
-        intent === "interested" ||
-        intent === "unknown" ||
-        t.length > 0)
-    ) {
+    // Deposit only after clear reg confirm / pending / proof image — never on bare text.
+    if (linkSent && !depositSentInHistory(out) && shouldSendDepositScript(t, effectiveStep, out, options)) {
       return ["06_deposit"];
     }
     if (
@@ -447,59 +438,37 @@ export function resolveEgFunnelScripts(
         intent === "positive" ||
         intent === "ready" ||
         intent === "question" ||
-        intent === "unknown" ||
         signal ||
-        t.length > 0)
+        isEgDepositTierChoice(t) ||
+        wantsRegistrationLink(t) ||
+        isReadyForRegistration(t))
     ) {
       return egRegScripts(linkSent);
     }
-    return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
+    return [];
   }
 
   if (effectiveStep < 8 && intent === "game_id_text") {
     if (gameIdSentInHistory(out)) {
       return [];
     }
-    if (depositSentInHistory(out) || effectiveStep >= 7) {
+    if (depositSentInHistory(out)) {
       return ["07_game_id"];
     }
-    return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
+    return [];
   }
 
+  // Game ID ask only after deposit confirm / proof — never re-nudge on silence.
   if (
     depositSentInHistory(out) &&
     !gameIdSentInHistory(out) &&
     (isDepositConfirmed(t) ||
       intent === "deposit_done" ||
       intent === "image_only" ||
-      intent === "positive" ||
-      intent === "ready" ||
-      intent === "unknown" ||
       options?.hasImage ||
-      isPositiveMessageReaction(options?.messageReaction) ||
-      Boolean(t) ||
-      !t)
+      isPositiveMessageReaction(options?.messageReaction))
   ) {
     return ["07_game_id"];
-  }
-
-  // After game_id ask: customer replied but no ID yet → soft re-nudge once path.
-  if (
-    gameIdSentInHistory(out) &&
-    (intent === "positive" || intent === "ready" || intent === "unknown") &&
-    t &&
-    !/\b(17\d{6,}|16\d{6,}|10\d{8,})\b/.test(t)
-  ) {
-    return ["07_game_id"];
-  }
-
-  if (effectiveStep < 4 && (intent === "positive" || intent === "interested" || intent === "ready" || signal || intent === "unknown" || t.length > 0)) {
-    if (!howSent) {
-      return ["02_how_it_works"];
-    }
-    if (!linkSent) {
-      return egRegScripts(linkSent);
-    }
   }
 
   if (linkSent && (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t) || wantsRegistrationLink(t) || isAppOrBrowserQuestion(t))) {
@@ -509,10 +478,13 @@ export function resolveEgFunnelScripts(
     return [...registrationHelpScriptKeys("EG")];
   }
 
-  return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
+  return [];
 }
 
-/** Advance EG funnel from history gaps when intent is weak/unknown — pager-ai-bot parity. */
+/**
+ * Early-funnel catch-up only (intro → explain → reg).
+ * Never auto-push deposit / game_id without a clear customer signal.
+ */
 export function resolveEgBacklogFallback(
   effectiveStep: number,
   outgoingTexts: string[],
@@ -528,30 +500,55 @@ export function resolveEgBacklogFallback(
   const gameIdSent = gameIdSentInHistory(out);
   const t = (text || "").trim();
 
+  if (intent === "declined") {
+    return [];
+  }
   if (!introSent) {
-    return t || intent !== "declined" ? ["01_intro"] : [];
+    return t ? ["01_intro"] : [];
   }
   if (!howSent) {
-    return ["02_how_it_works"];
+    if (
+      wantsDetailsAfterIntro(t) ||
+      isReadyForRegistration(t) ||
+      isEgJoinOrRegistrationQuestion(t) ||
+      isFunnelPositiveReaction(t, 1) ||
+      intent === "interested" ||
+      intent === "positive" ||
+      intent === "ready" ||
+      intent === "question"
+    ) {
+      return ["02_how_it_works"];
+    }
+    return [];
   }
   if (!linkSent) {
-    return ["04_registration", "05_link"];
+    if (
+      wantsRegistrationLink(t) ||
+      isReadyForRegistration(t) ||
+      isEgDepositTierChoice(t) ||
+      isEgJoinOrRegistrationQuestion(t) ||
+      isRegistrationHelpRequest(t) ||
+      isFunnelPositiveReaction(t, 2) ||
+      intent === "interested" ||
+      intent === "positive" ||
+      intent === "ready" ||
+      intent === "question"
+    ) {
+      return ["04_registration", "05_link"];
+    }
+    return [];
   }
-  if (!depositSent && (isRegistrationConfirmed(t) || intent === "joined" || options?.hasImage || intent === "positive" || intent === "ready" || intent === "interested" || intent === "unknown" || Boolean(t))) {
+  if (!depositSent && shouldSendDepositScript(t, effectiveStep, out, options)) {
     return ["06_deposit"];
   }
   if (
     depositSent &&
     !gameIdSent &&
-    (intent === "positive" ||
-      intent === "ready" ||
+    (isDepositConfirmed(t) ||
       intent === "deposit_done" ||
       intent === "image_only" ||
-      intent === "unknown" ||
       options?.hasImage ||
-      isPositiveMessageReaction(options?.messageReaction) ||
-      Boolean(t) ||
-      effectiveStep >= 6)
+      isPositiveMessageReaction(options?.messageReaction))
   ) {
     return ["07_game_id"];
   }

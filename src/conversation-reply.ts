@@ -104,6 +104,10 @@ export function isConversationUnread(conv: PagerConversation): boolean {
 
 /** Process chats where the customer spoke last and the thread still needs a reply. */
 export function shouldProcessConversation(conv: PagerConversation): boolean {
+  // Bot/operator already has the last word — wait for a new customer message.
+  if (isOutgoingDirection(conv.lastMessageDirection)) {
+    return false;
+  }
   if (isFreshCustomerMessage(resolveLastMessageAt(conv))) {
     return true;
   }
@@ -116,13 +120,11 @@ export function shouldProcessConversation(conv: PagerConversation): boolean {
   return false;
 }
 
-/** Egypt: always queue «Без статусу» + anything actionable (previous bot parity). */
+/** Egypt: same queue gate as CM/ZM — only unread / incoming / fresh customer turns. */
 export function shouldQueueEgConversation(conv: PagerConversation): boolean {
-  if (isNoStatusConversation(conv)) {
-    return true;
-  }
-  if (isInProgressStatusConversation(conv) && (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))) {
-    return true;
+  // Never wake a thread where the bot (or operator) already spoke last.
+  if (isOutgoingDirection(conv.lastMessageDirection)) {
+    return false;
   }
   return shouldProcessConversation(conv);
 }
