@@ -103,7 +103,13 @@ export function depositSentInHistory(outgoingTexts: string[]): boolean {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("+ الأخضر") || blob.includes("ابعتلي سكرين لما يخلص");
+  return (
+    blob.includes("+ الأخضر") ||
+    blob.includes("الزر الأخضر") ||
+    blob.includes("ابعتلي سكرين لما يخلص") ||
+    blob.includes("ابعتلي سكرين واضح يظهر الرصيد") ||
+    (blob.includes("إيداع") && blob.includes("اخضر"))
+  );
 }
 
 export function gameIdSentInHistory(outgoingTexts: string[]): boolean {
@@ -347,7 +353,7 @@ export function resolveEgFunnelScripts(
       if (signal || intent === "question" || wantsDetailsAfterIntro(t) || t.length > 0) {
         return howSent ? egRegScripts(linkSent) : ["02_how_it_works"];
       }
-      return [];
+      return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
     }
     if (
       ["interested", "positive", "ready", "question", "unknown"].includes(intent) ||
@@ -356,7 +362,7 @@ export function resolveEgFunnelScripts(
     ) {
       return ["01_intro"];
     }
-    return [];
+    return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
   }
 
   if (effectiveStep < 2) {
@@ -369,11 +375,13 @@ export function resolveEgFunnelScripts(
         intent === "positive" ||
         intent === "question" ||
         intent === "interested" ||
-        /استثمر|أريد|اريد|ايو|نجرب|مهتم|تمام/i.test(t)
+        intent === "unknown" ||
+        /استثمر|أريد|اريد|ايو|نجرب|مهتم|تمام/i.test(t) ||
+        t.length > 0
       ) {
         return egRegScripts(linkSent);
       }
-      return [];
+      return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
     }
     if (
       intent === "interested" ||
@@ -388,7 +396,7 @@ export function resolveEgFunnelScripts(
     ) {
       return ["02_how_it_works"];
     }
-    return [];
+    return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
   }
 
   if (effectiveStep < 4) {
@@ -398,12 +406,15 @@ export function resolveEgFunnelScripts(
       intent === "ready" ||
       intent === "positive" ||
       intent === "question" ||
+      intent === "interested" ||
+      intent === "unknown" ||
       signal ||
-      isEgDepositTierChoice(t)
+      isEgDepositTierChoice(t) ||
+      t.length > 0
     ) {
       return egRegScripts(linkSent);
     }
-    return [];
+    return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
   }
 
   if (isRegistrationPending(t)) {
@@ -412,7 +423,7 @@ export function resolveEgFunnelScripts(
 
   if (effectiveStep < 7) {
     if (intent === "game_id_text") {
-      return [];
+      return depositSentInHistory(out) && !gameIdSentInHistory(out) ? ["07_game_id"] : [];
     }
     if (isRegistrationConfirmed(t) || intent === "joined") {
       return shouldSendDepositScript(t, effectiveStep, out, options) ? ["06_deposit"] : [];
@@ -420,7 +431,13 @@ export function resolveEgFunnelScripts(
     if (
       linkSent &&
       !depositSentInHistory(out) &&
-      (options?.hasImage || signal || intent === "positive" || intent === "ready")
+      (options?.hasImage ||
+        signal ||
+        intent === "positive" ||
+        intent === "ready" ||
+        intent === "interested" ||
+        intent === "unknown" ||
+        t.length > 0)
     ) {
       return ["06_deposit"];
     }
@@ -430,11 +447,13 @@ export function resolveEgFunnelScripts(
         intent === "positive" ||
         intent === "ready" ||
         intent === "question" ||
-        signal)
+        intent === "unknown" ||
+        signal ||
+        t.length > 0)
     ) {
       return egRegScripts(linkSent);
     }
-    return [];
+    return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
   }
 
   if (effectiveStep < 8 && intent === "game_id_text") {
@@ -444,7 +463,7 @@ export function resolveEgFunnelScripts(
     if (depositSentInHistory(out) || effectiveStep >= 7) {
       return ["07_game_id"];
     }
-    return [];
+    return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
   }
 
   if (
@@ -458,7 +477,18 @@ export function resolveEgFunnelScripts(
       intent === "unknown" ||
       options?.hasImage ||
       isPositiveMessageReaction(options?.messageReaction) ||
-      Boolean(t))
+      Boolean(t) ||
+      !t)
+  ) {
+    return ["07_game_id"];
+  }
+
+  // After game_id ask: customer replied but no ID yet → soft re-nudge once path.
+  if (
+    gameIdSentInHistory(out) &&
+    (intent === "positive" || intent === "ready" || intent === "unknown") &&
+    t &&
+    !/\b(17\d{6,}|16\d{6,}|10\d{8,})\b/.test(t)
   ) {
     return ["07_game_id"];
   }
@@ -472,7 +502,10 @@ export function resolveEgFunnelScripts(
     }
   }
 
-  if (linkSent && (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t) || wantsRegistrationLink(t))) {
+  if (linkSent && (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t) || wantsRegistrationLink(t) || isAppOrBrowserQuestion(t))) {
+    if (isAppOrBrowserQuestion(t) && !egScriptSentInHistory(out, "08_app_or_browser")) {
+      return ["08_app_or_browser"];
+    }
     return [...registrationHelpScriptKeys("EG")];
   }
 
@@ -504,7 +537,7 @@ export function resolveEgBacklogFallback(
   if (!linkSent) {
     return ["04_registration", "05_link"];
   }
-  if (!depositSent && (isRegistrationConfirmed(t) || intent === "joined" || options?.hasImage || intent === "positive" || intent === "ready")) {
+  if (!depositSent && (isRegistrationConfirmed(t) || intent === "joined" || options?.hasImage || intent === "positive" || intent === "ready" || intent === "interested" || intent === "unknown" || Boolean(t))) {
     return ["06_deposit"];
   }
   if (
@@ -556,7 +589,8 @@ export function limitEgScriptsForCustomerTurn(
     if (!linkSent) {
       return ["05_link"];
     }
-    return [];
+    // Already sent full reg bundle — fall through to next stage instead of empty.
+    return scriptKeys.filter((key) => !EG_REG_SEND_KEYS.has(key)).slice(0, 1);
   }
   return [scriptKeys[0]!];
 }

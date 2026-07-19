@@ -56,6 +56,7 @@ import {
   regLinkSentInHistory as egRegLinkSentInHistory,
   regSendTriggersInProgress as egRegSendTriggersInProgress,
   resolveEgFunnelScripts,
+  resolveEgBacklogFallback,
   limitEgScriptsForCustomerTurn,
   egAllowsMultiSend,
   depositSentInHistory as egDepositSentInHistory,
@@ -135,8 +136,8 @@ const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 500;
 const INBOX_TOP = 40;
 const INBOX_TOP_EG_CM = 150;
-const INBOX_TOP_EG = 200;
-const INBOX_PAGES_EG = 8;
+const INBOX_TOP_EG = 250;
+const INBOX_PAGES_EG = 12;
 const INBOX_PAGES_CM = 5;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
@@ -270,8 +271,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const operatorFolderIds = getEnabledFolderIds(freshState);
   const enabledFolderIds = expandEnabledFolderIds(freshState, operatorFolderIds);
   if (enabledFolderIds && enabledFolderIds.size === 0) {
-    console.log(`Pager worker: chat ${freshState.chatId} — no status folders enabled`);
-    return;
+    console.warn(
+      `Pager worker: chat ${freshState.chatId} — no status folders enabled; falling back to all inbox`,
+    );
   }
 
   if (enabledFolderIds) {
@@ -325,21 +327,22 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
-  const folderScopedConversations = enabledFolderIds
-    ? conversations.filter(
-        (conv) =>
-          hasUnreadMarkers(conv) ||
-          isIncomingDirection(conv.lastMessageDirection) ||
-          isNewLeadConversation(conv) ||
-          conversationAllowedInFolders(conv, enabledFolderIds),
-      )
-    : conversations;
+  const folderScopedConversations =
+    !enabledFolderIds || enabledFolderIds.size === 0
+      ? conversations
+      : conversations.filter(
+          (conv) =>
+            hasUnreadMarkers(conv) ||
+            isIncomingDirection(conv.lastMessageDirection) ||
+            isNewLeadConversation(conv) ||
+            conversationAllowedInFolders(conv, enabledFolderIds),
+        );
   const workQueue = await buildWorkQueue(
     client,
     folderScopedConversations,
     enabledChannels,
     channelIds,
-    enabledFolderIds,
+    !enabledFolderIds || enabledFolderIds.size === 0 ? null : enabledFolderIds,
   );
   const accountLimit = enabledChannels.some(
     (item) => item.runtime.country === "EG" || item.runtime.country === "CM",
@@ -759,8 +762,6 @@ async function processCmConversation(
     return false;
   }
 
-  await tryTakeConversationForProcessing(client, convId);
-
   const threadStep = cmInferStepFromThread(messages);
   const gapStep = cmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
@@ -825,6 +826,8 @@ async function processCmConversation(
     );
     return false;
   }
+
+  await tryTakeConversationForProcessing(client, convId);
 
   console.log(
     `Pager worker: CM ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
@@ -1001,8 +1004,6 @@ async function processZmConversation(
     return false;
   }
 
-  await tryTakeConversationForProcessing(client, convId);
-
   const threadStep = zmInferStepFromThread(messages);
   const gapStep = zmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
@@ -1090,6 +1091,8 @@ async function processZmConversation(
     );
     return false;
   }
+
+  await tryTakeConversationForProcessing(client, convId);
 
   console.log(
     `Pager worker: ZM ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
@@ -1300,8 +1303,6 @@ async function processEgConversation(
     return false;
   }
 
-  await tryTakeConversationForProcessing(client, convId, "EG");
-
   const threadStep = egInferStepFromThread(messages);
   const gapStep = egFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
@@ -1351,7 +1352,7 @@ async function processEgConversation(
     messageReaction,
   });
 
-  const scriptKeys = limitEgScriptsForCustomerTurn(
+  let scriptKeys = limitEgScriptsForCustomerTurn(
     resolveEgFunnelScripts(
       effectiveStep,
       latestCustomerText,
@@ -1361,6 +1362,19 @@ async function processEgConversation(
     ),
     outgoingTexts,
   );
+  if (
+    !scriptKeys.length &&
+    intent !== "declined" &&
+    egFunnelNeedsContinuation(latestCustomerText, outgoingTexts)
+  ) {
+    scriptKeys = resolveEgBacklogFallback(
+      effectiveStep,
+      outgoingTexts,
+      intent,
+      latestCustomerText,
+      { hasImage: Boolean(imageUrl), messageReaction },
+    );
+  }
 
   if (!scriptKeys.length) {
     console.log(
@@ -1368,6 +1382,9 @@ async function processEgConversation(
     );
     return false;
   }
+
+  // Take/read only when we actually have something to send — prevents overnight silence.
+  await tryTakeConversationForProcessing(client, convId, "EG");
 
   console.log(
     `Pager worker: EG ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
@@ -1994,6 +2011,12 @@ async function ensureCustomerMessageEligible(
     ) {
       return true;
     }
+    // Mid-funnel / unread: never lock forever after first reply.
+    if (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection)) {
+      if (country === "EG" || country === "CM") {
+        return true;
+      }
+    }
     const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate(customerText)})`,
@@ -2020,6 +2043,12 @@ async function ensureCustomerMessageEligible(
     if (
       country === "CM" &&
       cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted))
+    ) {
+      return true;
+    }
+    if (
+      (country === "EG" || country === "CM") &&
+      (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))
     ) {
       return true;
     }
@@ -2052,13 +2081,16 @@ async function ensureCustomerMessageEligible(
       ) {
         return true;
       }
+      // Sync state for bookkeeping only — do NOT invent lastReplyAt (that locks the chat).
       await patchConversationState(deps.stateStore, state.chatId, convId, {
         conversationId: convId,
         channelId: convState.channelId,
         lastCustomerMessageId: lastIncoming.id,
         lastCustomerMessageAt: lastIncoming.createdAt,
-        lastReplyAt: convState.lastReplyAt ?? new Date().toISOString(),
       });
+      if (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection)) {
+        return true;
+      }
       const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
       console.log(
         `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (thread synced, text=${truncate(customerText)})`,
@@ -2080,14 +2112,7 @@ async function ensureCustomerMessageEligible(
     return true;
   }
 
-  if (eligibility.markSeen) {
-    await patchConversationState(deps.stateStore, state.chatId, convId, {
-      lastCustomerMessageId: lastIncoming.id,
-      lastCustomerMessageAt: lastIncoming.createdAt,
-    });
-    await client.acknowledgeConversation(convId);
-  }
-
+  // Never acknowledge/markSeen on skip — take+ack before scripts caused overnight unread silence.
   const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
   console.log(
     `Pager worker: skip ${convId.slice(0, 8)}${label} — ${eligibility.reason} (text=${truncate((lastIncoming.text || "").trim())})`,

@@ -116,6 +116,17 @@ export function shouldProcessConversation(conv: PagerConversation): boolean {
   return false;
 }
 
+/** Egypt: always queue «Без статусу» + anything actionable (previous bot parity). */
+export function shouldQueueEgConversation(conv: PagerConversation): boolean {
+  if (isNoStatusConversation(conv)) {
+    return true;
+  }
+  if (isInProgressStatusConversation(conv) && (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))) {
+    return true;
+  }
+  return shouldProcessConversation(conv);
+}
+
 export function shouldProcessIncomingMessage(lastIncomingAt?: string, conv?: PagerConversation): boolean {
   if (isFreshCustomerMessage(lastIncomingAt)) {
     return true;
@@ -139,14 +150,19 @@ export function conversationPriorityScore(conv: PagerConversation): number {
   const fresh = isFreshCustomerMessage(resolveLastMessageAt(conv));
   const newLead = isNewLeadConversation(conv);
   const staleInProgress =
-    isInProgressStatusConversation(conv) && !unread && !incoming && !fresh && !newLead;
+    isInProgressStatusConversation(conv) &&
+    !unread &&
+    !incoming &&
+    !fresh &&
+    !newLead &&
+    !isNoStatusConversation(conv);
   const lastAt = Date.parse(resolveLastMessageAt(conv) ?? "");
   return (
     (newLead ? 3_000_000 : 0) +
     (unread ? 2_000_000 : 0) +
     (fresh ? 1_000_000 : 0) +
     (incoming ? 100_000 : 0) +
-    (staleInProgress ? -10_000_000 : 0) +
+    (staleInProgress ? -1_000_000 : 0) +
     (Number.isFinite(lastAt) ? Math.floor(lastAt / 1000) : 0)
   );
 }
@@ -169,6 +185,11 @@ export function findLatestIncomingMessage(
   return sortMessagesNewestFirst(messages).find((message) => {
     if (!isCustomerMessage(message, enriched, operatorUserId)) {
       return false;
+    }
+    // Never drop clearly incoming customer messages — short Arabic/French phrases
+    // can look like script needles and were wrongly filtered as bot echoes.
+    if (isIncomingDirection(message.messageDirection)) {
+      return true;
     }
     const text = (message.text || "").trim();
     if (text && country && isAutomatedFunnelOutgoing(text, country)) {
@@ -362,11 +383,6 @@ export function cmFunnelNeedsContinuation(
   );
 }
 
-/** Queue every actionable EG thread — unread/incoming/fresh — like the previous bot. */
-export function shouldQueueEgConversation(conv: PagerConversation): boolean {
-  return shouldProcessConversation(conv);
-}
-
 export function shouldQueueConversationFromThread(
   conv: PagerConversation,
   messages: PagerMessage[],
@@ -470,7 +486,17 @@ export function assessReplyEligibility(
     ) {
       return { eligible: true };
     }
-    return { eligible: false, reason: "replied_after_in_thread", markSeen: true };
+    if (
+      options?.country === "CM" &&
+      cmFunnelNeedsContinuation(
+        (lastIncoming.text || "").trim(),
+        collectOutgoingTextsFromThread(sortedMessages),
+      )
+    ) {
+      return { eligible: true };
+    }
+    // Do NOT markSeen/acknowledge — that permanently silences unread chats overnight.
+    return { eligible: false, reason: "replied_after_in_thread" };
   }
 
   if (hasUnreadMarkers(conv)) {
