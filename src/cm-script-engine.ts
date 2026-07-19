@@ -554,7 +554,8 @@ export function resolveCmFunnelScripts(
         ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
         wantsDetailsAfterIntro(t) ||
-        isClientReadyPhrase(t)
+        isClientReadyPhrase(t) ||
+        t.length > 0
       ) {
         return ["03_steps"];
       }
@@ -569,7 +570,8 @@ export function resolveCmFunnelScripts(
         ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
         wantsDetailsAfterIntro(t) ||
-        isClientReadyPhrase(t)
+        isClientReadyPhrase(t) ||
+        t.length > 0
       ) {
         return ["03_steps"];
       }
@@ -578,7 +580,8 @@ export function resolveCmFunnelScripts(
         ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
         isReadyForRegistration(t) ||
-        isClientReadyPhrase(t)
+        isClientReadyPhrase(t) ||
+        t.length > 0
       ) {
         return ["04_tier"];
       }

@@ -21,7 +21,7 @@ const FR_INTERESTED =
 const FR_DECLINED =
   /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b|^non[.!]?$/i;
 const FR_REG_DONE =
-  /(déjà|deja).{0,32}(connect|inscription|inscrit|enregistr|1xbet)|je me suis deja connecte|compte.{0,16}(ouvert|créé|cree)|j[' ]?ai (fini|créé|cree).{0,16}(inscription|compte)/i;
+  /(déjà|deja).{0,32}(connect|inscription|inscrit|enregistr|1xbet)|je me suis deja connecte|je me suis inscrit|compte.{0,16}(ouvert|créé|cree)|j[' ]?ai (fini|créé|cree).{0,16}(inscription|compte)|c[' ]?est bon j[' ]?ai (créé|cree)|j[' ]?ai (créé|cree)\b/i;
 const FR_REG_PENDING =
   /\b(pas encore|pas fini|je m'inscris|j['']?inscris|en cours)\b/i;
 const POSITIVE_EMOJI = /[👍👌✅🔥❤️🙏😊🙂]/;
@@ -245,11 +245,11 @@ export function isAgeAnswer(text: string): boolean {
   if (!t) {
     return false;
   }
-  const ageFromMatch = (match: RegExpMatchArray | null): number | undefined => {
-    if (!match?.[1]) {
+  const ageFromMatch = (match: RegExpMatchArray | null, group = 1): number | undefined => {
+    if (!match?.[group]) {
       return undefined;
     }
-    const age = Number(match[1]);
+    const age = Number(match[group]);
     return Number.isFinite(age) ? age : undefined;
   };
   const isValidAge = (age?: number): boolean => age !== undefined && age >= 15 && age <= 99;
@@ -258,16 +258,66 @@ export function isAgeAnswer(text: string): boolean {
     return isValidAge(Number(t));
   }
   if (/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\s*an[s]?\b/i.test(t)) {
-    return isValidAge(ageFromMatch(t.match(/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\s*an[s]?\b/i)));
+    return isValidAge(ageFromMatch(t.match(/\b(?:j'ai|jai|j'?ai|ai)\s*(\d{1,2})\s*an[s]?\b/i), 1));
   }
   if (/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\b/i.test(t)) {
-    return isValidAge(ageFromMatch(t.match(/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\b/i)));
+    return isValidAge(ageFromMatch(t.match(/\b(?:j'ai|jai|j'?ai|ai)\s*(\d{1,2})\b/i), 1));
   }
   if (/\b(\d{1,2})\s*an[s]?\b/i.test(t)) {
-    return isValidAge(ageFromMatch(t.match(/\b(\d{1,2})\s*an[s]?\b/i)));
+    return isValidAge(ageFromMatch(t.match(/\b(\d{1,2})\s*an[s]?\b/i), 1));
   }
   if (/(\d{1,2})an[s]?\b/i.test(t)) {
-    return isValidAge(ageFromMatch(t.match(/(\d{1,2})an[s]?\b/i)));
+    return isValidAge(ageFromMatch(t.match(/(\d{1,2})an[s]?\b/i), 1));
+  }
+  // Written-out French ages: "j'ai vingt trois ans", "vingt-deux ans"
+  const FR_AGE_WORDS: Record<string, number> = {
+    quinze: 15,
+    seize: 16,
+    dixsept: 17,
+    "dix-sept": 17,
+    dixhuit: 18,
+    "dix-huit": 18,
+    dixneuf: 19,
+    "dix-neuf": 19,
+    vingt: 20,
+    "vingt et un": 21,
+    "vingt-et-un": 21,
+    "vingtetun": 21,
+    "vingt deux": 22,
+    "vingt-deux": 22,
+    vingtdeux: 22,
+    "vingt trois": 23,
+    "vingt-trois": 23,
+    vingttrois: 23,
+    "vingt quatre": 24,
+    "vingt-quatre": 24,
+    "vingt cinq": 25,
+    "vingt-cinq": 25,
+    "vingt six": 26,
+    "vingt-six": 26,
+    "vingt sept": 27,
+    "vingt-sept": 27,
+    "vingt huit": 28,
+    "vingt-huit": 28,
+    "vingt neuf": 29,
+    "vingt-neuf": 29,
+    trente: 30,
+    "trente cinq": 35,
+    "trente-cinq": 35,
+    quarante: 40,
+  };
+  const normalizedAge = t
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’']/g, " ")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  for (const [phrase, age] of Object.entries(FR_AGE_WORDS)) {
+    if (normalizedAge.includes(phrase) && (/\ban/.test(normalizedAge) || /j ?ai/.test(normalizedAge))) {
+      return isValidAge(age);
+    }
   }
   return false;
 }

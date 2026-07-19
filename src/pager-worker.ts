@@ -2006,8 +2006,21 @@ async function ensureCustomerMessageEligible(
     !isNewCustomerTurn &&
     convState.lastCustomerMessageId === lastIncoming.id &&
     Boolean(convState.lastReplyAt);
+  const botAlreadyReplied = hasBotReplyAfterCustomerMessage(
+    sorted,
+    lastIncoming,
+    conv,
+    options?.operatorUserId,
+    country,
+  );
+  // State can falsely lock CM/ZM after a bad thread-sync; unread + customer-last means keep going.
+  const staleStateLock =
+    country !== "EG" &&
+    alreadyRepliedInState &&
+    !botAlreadyReplied &&
+    (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection));
 
-  if (alreadyRepliedInState) {
+  if (alreadyRepliedInState && !staleStateLock) {
     if (
       country === "EG" &&
       egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
@@ -2027,16 +2040,7 @@ async function ensureCustomerMessageEligible(
     return false;
   }
 
-  if (
-    !isNewCustomerTurn &&
-    hasBotReplyAfterCustomerMessage(
-      sorted,
-      lastIncoming,
-      conv,
-      options?.operatorUserId,
-      country,
-    )
-  ) {
+  if (!isNewCustomerTurn && botAlreadyReplied) {
     if (
       country === "EG" &&
       egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
@@ -2057,15 +2061,7 @@ async function ensureCustomerMessageEligible(
   }
 
   if (isNewCustomerTurn) {
-    if (
-      hasBotReplyAfterCustomerMessage(
-        sorted,
-        lastIncoming,
-        conv,
-        options?.operatorUserId,
-        country,
-      )
-    ) {
+    if (botAlreadyReplied) {
       if (
         country === "EG" &&
         egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
@@ -2078,12 +2074,12 @@ async function ensureCustomerMessageEligible(
       ) {
         return true;
       }
+      // Bookkeeping only — do NOT invent lastReplyAt (that permanently locks the chat).
       await patchConversationState(deps.stateStore, state.chatId, convId, {
         conversationId: convId,
         channelId: convState.channelId,
         lastCustomerMessageId: lastIncoming.id,
         lastCustomerMessageAt: lastIncoming.createdAt,
-        lastReplyAt: convState.lastReplyAt ?? new Date().toISOString(),
       });
       const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
       console.log(
@@ -2094,7 +2090,7 @@ async function ensureCustomerMessageEligible(
     return true;
   }
 
-  if (options?.bypass) {
+  if (options?.bypass || staleStateLock) {
     return true;
   }
 

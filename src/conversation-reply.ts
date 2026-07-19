@@ -10,9 +10,20 @@ import { isAutomatedFunnelOutgoing } from "./funnel-outbound.js";
 import { egFunnelNeedsContinuation } from "./eg-script-engine.js";
 import {
   cmAgeQuestionSentInHistory,
+  cmScriptSentInHistory,
+  depositSentInHistory as cmDepositSentInHistory,
+  regLinkSentInHistory as cmRegLinkSentInHistory,
   stepsSentInHistory as cmStepsSentInHistory,
+  tierSentInHistory as cmTierSentInHistory,
 } from "./cm-script-engine.js";
-import { isAgeAnswer, isClientReadyPhrase } from "./cm-intent.js";
+import {
+  isAgeAnswer,
+  isClientReadyPhrase,
+  isDepositTierChoice,
+  isReadyForRegistration,
+  isRegistrationConfirmed,
+  isCmRegistrationHelpRequest,
+} from "./cm-intent.js";
 import {
   isInProgressStatusConversation,
   isNoStatusConversation,
@@ -271,7 +282,14 @@ export function isOperatorOutgoingMessage(
   operatorUserId?: string,
   country?: CountryCode,
 ): boolean {
+  // Never treat inbound customer traffic as our reply (script-needle false positives).
+  if (isIncomingDirection(message.messageDirection)) {
+    return false;
+  }
   const text = (message.text || "").trim();
+  if (isOutgoingDirection(message.messageDirection)) {
+    return true;
+  }
   if (country && text && isAutomatedFunnelOutgoing(text, country)) {
     return true;
   }
@@ -279,13 +297,7 @@ export function isOperatorOutgoingMessage(
   if (operatorUserId && author && author === operatorUserId) {
     return true;
   }
-  if (isOutgoingDirection(message.messageDirection)) {
-    return true;
-  }
   if (isCustomerMessage(message, conv, operatorUserId)) {
-    return false;
-  }
-  if (isIncomingDirection(message.messageDirection)) {
     return false;
   }
   return Boolean(text && (message.isDelivered || message.facebookMessageId));
@@ -369,20 +381,50 @@ export function isCustomerWaitingInThread(
   return false;
 }
 
-/** Egypt: queue any thread where the customer still needs a reply. */
+/** Re-open mid-funnel CM chats when the customer gave a clear next-step signal. */
 export function cmFunnelNeedsContinuation(
   customerText: string,
   outgoingTexts: string[],
 ): boolean {
-  if (!cmAgeQuestionSentInHistory(outgoingTexts) || cmStepsSentInHistory(outgoingTexts)) {
+  const text = (customerText || "").trim();
+  if (!text) {
     return false;
   }
-  const text = (customerText || "").trim();
-  return (
-    isAgeAnswer(text) ||
+  const introSent = cmScriptSentInHistory(outgoingTexts, "01_intro");
+  const ageSent = cmAgeQuestionSentInHistory(outgoingTexts);
+  const stepsSent = cmStepsSentInHistory(outgoingTexts);
+  const tierSent = cmTierSentInHistory(outgoingTexts);
+  const linkSent = cmRegLinkSentInHistory(outgoingTexts);
+  const depositSent = cmDepositSentInHistory(outgoingTexts);
+  const ready =
     isClientReadyPhrase(text) ||
-    /^(oui|ok|okay|yes|d'accord)\b/i.test(text)
-  );
+    isReadyForRegistration(text) ||
+    /^(oui|ok|okay|yes|d'accord)\b/i.test(text);
+
+  if (!introSent) {
+    return true;
+  }
+  if (!ageSent) {
+    return ready || /intéresse|interes|explique|comment|gagner/i.test(text);
+  }
+  if (!stepsSent) {
+    return isAgeAnswer(text) || ready;
+  }
+  if (!tierSent) {
+    return ready || /applique|lien|aide|explique|comment|pr[eê]t/i.test(text);
+  }
+  if (!linkSent) {
+    return (
+      isDepositTierChoice(text) ||
+      ready ||
+      isCmRegistrationHelpRequest(text) ||
+      /^\d[\d\s]*$/.test(text)
+    );
+  }
+  if (!depositSent) {
+    return isRegistrationConfirmed(text) || ready || /inscrit|cr[eé][eé]|compte|d[eé]p[oô]t/i.test(text);
+  }
+  return false;
 }
 
 export function shouldQueueConversationFromThread(
@@ -440,6 +482,20 @@ export function assessReplyEligibility(
         (lastIncoming.text || "").trim(),
         collectOutgoingTextsFromThread(sortedMessages),
       )
+    ) {
+      return { eligible: true };
+    }
+    const botReplied = hasBotReplyAfterCustomerMessage(
+      sortedMessages,
+      lastIncoming,
+      conv,
+      options?.operatorUserId,
+      options?.country,
+    );
+    if (
+      options?.country !== "EG" &&
+      !botReplied &&
+      (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))
     ) {
       return { eligible: true };
     }
