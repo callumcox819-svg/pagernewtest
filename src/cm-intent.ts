@@ -120,6 +120,19 @@ export function isDepositTierChoice(text: string): boolean {
   if (/^(1|2)\.?$/.test(t)) {
     return true;
   }
+  // "Le 1", "le 2", "numero 1", "n°1" — common tier picks after 04_tier.
+  if (/^(?:le\s+)?1\.?$/.test(t) || /^numero\s+1$/.test(t) || /^n[o°]?\s*1$/.test(t)) {
+    return true;
+  }
+  if (/^(?:le\s+)?2\.?$/.test(t) || /^numero\s+2$/.test(t) || /^n[o°]?\s*2$/.test(t)) {
+    return true;
+  }
+  if (t.length <= 16 && /\ble\s+1\b/.test(t)) {
+    return true;
+  }
+  if (t.length <= 16 && /\ble\s+2\b/.test(t)) {
+    return true;
+  }
   if (/^(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f|fc)?\.?$/i.test(t)) {
     return true;
   }
@@ -138,9 +151,6 @@ export function isDepositTierChoice(text: string): boolean {
   if (/\bpour un d[eé]but\b/i.test(t) && /\b(100|1\s?000|140|cfa)\b/i.test(t)) {
     return true;
   }
-  if (/\ble\s+1\b/i.test(t) && /\b(d'?abord|premier|pour)\b/i.test(t)) {
-    return true;
-  }
   return isCmTier1000Choice(t) || isCmTier1500Choice(t);
 }
 
@@ -150,6 +160,7 @@ export function isClientReadyPhrase(text: string): boolean {
     return false;
   }
   return (
+    /^\s*suis\s+pret[e]?\b/i.test(t) ||
     /\b(je suis pret|j'?suis pret|jsuis pret|je suis prete|j'?suis prete|jsuis prete)\b/i.test(
       t,
     ) ||
@@ -338,7 +349,7 @@ export function isCmRegistrationHelpRequest(text: string): boolean {
     /\b(je ne vois pas|je vois pas|pas de plate ?forme|plateforme|telecharg|m[' ]inscrit|je fais comment)\b/i.test(
       t,
     ) ||
-    /\b(code promo|promo code|ton number|ton lien|l'application|l application|lapplication)\b/i.test(
+    /\b(code promo|promo code|ton number|ton lien|l'application|l application|lapplication|application c'est|c'est quoi|cest quoi|comment ca marche)\b/i.test(
       t,
     )
   );
@@ -378,9 +389,12 @@ export function wantsRegistrationLink(text: string): boolean {
   if (/\benvoy\w*.*\blien\b|\blien\b.*\benvoy\w*\b/i.test(t)) {
     return true;
   }
+  if (/\b(envoi|envoyer|envoyez|donne|donner|donnez).{0,24}\b(lien|link|numero|numéro)\b/i.test(normalized)) {
+    return true;
+  }
   return (
     /\b(lien|link|inscri|register|compte|account)\b/i.test(t) &&
-    /\b(envoy|donn|send|veux|besoin|where|faut)\b/i.test(t)
+    /\b(envoi|envoy|donn|send|veux|besoin|where|faut|donne|donner)\b/i.test(t)
   );
 }
 
@@ -422,7 +436,7 @@ export function wantsDetailsAfterIntro(text: string): boolean {
   if (!t) {
     return false;
   }
-  return /\b(detail|détail|explique|comment ça|comment ca|how)\b/i.test(t);
+  return /\b(detail|détail|explique|etape|étapes|comment ça|comment ca|how)\b/i.test(t);
 }
 
 export function isReadyForRegistration(text: string): boolean {

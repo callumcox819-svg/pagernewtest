@@ -424,7 +424,7 @@ export function resolveCmFunnelScripts(
       return ["07_chrome"];
     }
     if (regLinkSentInHistory(out)) {
-      return [];
+      return ["07_chrome", "06_link"];
     }
     const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out);
     if (reg.length) {
@@ -570,6 +570,7 @@ export function resolveCmFunnelScripts(
         ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
         wantsDetailsAfterIntro(t) ||
+        wantsRegistrationLink(t) ||
         isClientReadyPhrase(t) ||
         t.length > 0
       ) {
@@ -580,6 +581,8 @@ export function resolveCmFunnelScripts(
         ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
         isReadyForRegistration(t) ||
+        wantsDetailsAfterIntro(t) ||
+        wantsRegistrationLink(t) ||
         isClientReadyPhrase(t) ||
         t.length > 0
       ) {
@@ -587,6 +590,15 @@ export function resolveCmFunnelScripts(
       }
     }
     return [];
+  }
+
+  if (effectiveStep >= 4 && tierSent && !linkSent) {
+    if (tierChoice || isDepositTierChoice(t)) {
+      return [...CM_REG_BUNDLE];
+    }
+    if (wantsRegistrationLink(t) || registrationHelp || isReadyForRegistration(t)) {
+      return ["04_tier"];
+    }
   }
 
   if (effectiveStep < 4) {
@@ -606,13 +618,18 @@ export function resolveCmFunnelScripts(
       if (
         ["positive", "ready", "interested", "question"].includes(intent) ||
         signal ||
-        isReadyForRegistration(t)
+        isReadyForRegistration(t) ||
+        wantsDetailsAfterIntro(t) ||
+        wantsRegistrationLink(t)
       ) {
         return ["04_tier"];
       }
     }
     if (tierSent && tierChoice && !linkSent) {
       return [...CM_REG_BUNDLE];
+    }
+    if (tierSent && !linkSent && t.length > 0 && t.length <= 24) {
+      return ["04_tier"];
     }
     return [];
   }
