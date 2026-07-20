@@ -975,6 +975,7 @@ export class PagerClient {
       () => this.postMessageMinimal(convId, text, userId, channelId),
     ];
 
+    let lastError: unknown;
     for (const attempt of attempts) {
       try {
         const result = await attempt();
@@ -982,7 +983,30 @@ export class PagerClient {
           return true;
         }
       } catch (error) {
+        lastError = error;
         console.warn(`Pager send attempt failed for ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+
+    // imageUrl / operator identity 500s usually mean stale session user — refresh once.
+    const errorText = formatError(lastError).toLowerCase();
+    if (errorText.includes("imageurl") || errorText.includes("operator user")) {
+      this.sessionUserId = "";
+      try {
+        const retriedUser = (await this.resolveOperatorUserId()).trim();
+        if (retriedUser && retriedUser !== userId) {
+          const result = await this.sendMessageSpa(convId, text, {
+            userId: retriedUser,
+            channelId,
+            conv,
+            attachments: options?.attachments,
+          });
+          if (messageDelivered(result)) {
+            return true;
+          }
+        }
+      } catch (error) {
+        console.warn(`Pager send identity retry failed for ${convId.slice(0, 8)}:`, formatError(error));
       }
     }
 
@@ -1217,7 +1241,7 @@ export class PagerClient {
       messageDirection: "outgoing",
       authorId: options.userId,
       author: { id: options.userId, imageUrl: imageUrl || "" },
-      recipient,
+      recipient: recipient || "",
       createdAt: now,
       updatedAt: now,
       lastMessageAt: now,
@@ -1338,7 +1362,14 @@ export class PagerClient {
     const members = await this.fetchOrganizationMembers();
     for (const member of members) {
       if (member.messageAuthorId === userId || member.candidateIds.includes(userId)) {
-        return member.imageUrl;
+        return (member.imageUrl || "").trim();
+      }
+    }
+    // Prefer any known org avatar over empty — empty author.imageUrl triggers Pager 500s.
+    for (const member of members) {
+      const url = (member.imageUrl || "").trim();
+      if (url) {
+        return url;
       }
     }
     return "";

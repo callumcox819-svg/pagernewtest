@@ -322,8 +322,8 @@ export function hasBotReplyAfterCustomerMessage(
       if (!isOperatorOutgoingMessage(message, conv, operatorUserId, country)) {
         continue;
       }
-      const text = (message.text || "").trim();
-      if (text || message.isDelivered || message.facebookMessageId) {
+      // Only real deliveries lock the chat — failed/optimistic outgoings must not.
+      if (message.isDelivered || message.facebookMessageId) {
         return true;
       }
     }
@@ -342,8 +342,7 @@ export function hasBotReplyAfterCustomerMessage(
     if (!Number.isFinite(outgoingTs) || outgoingTs <= afterTs) {
       continue;
     }
-    const text = (message.text || "").trim();
-    if (text || message.isDelivered || message.facebookMessageId) {
+    if (message.isDelivered || message.facebookMessageId) {
       return true;
     }
   }
@@ -399,16 +398,17 @@ export function cmFunnelNeedsContinuation(
   const ready =
     isClientReadyPhrase(text) ||
     isReadyForRegistration(text) ||
-    /^(oui|ok|okay|yes|d'accord)\b/i.test(text);
+    /^(oui|ok|okay|yes|d'accord)\b/i.test(text) ||
+    /intéresse|interes|investir|je veux/i.test(text);
 
   if (!introSent) {
     return true;
   }
   if (!ageSent) {
-    return ready || /intéresse|interes|explique|comment|gagner/i.test(text);
+    return ready || /explique|comment|gagner/i.test(text);
   }
   if (!stepsSent) {
-    return isAgeAnswer(text) || ready;
+    return isAgeAnswer(text) || ready || /\d{1,2}\s*ans?\b/i.test(text);
   }
   if (!tierSent) {
     return ready || /applique|lien|aide|explique|comment|pr[eê]t/i.test(text);
@@ -422,9 +422,13 @@ export function cmFunnelNeedsContinuation(
     );
   }
   if (!depositSent) {
-    return isRegistrationConfirmed(text) || ready || /inscrit|cr[eé][eé]|compte|d[eé]p[oô]t/i.test(text);
+    return (
+      isRegistrationConfirmed(text) ||
+      ready ||
+      /inscrit|cr[eé][eé]|compte|d[eé]p[oô]t|application/i.test(text)
+    );
   }
-  return false;
+  return ready || isRegistrationConfirmed(text);
 }
 
 export function shouldQueueConversationFromThread(

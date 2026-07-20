@@ -138,12 +138,12 @@ const MAX_CONVERSATIONS_PER_ACCOUNT = 500;
 const INBOX_TOP = 40;
 /** Soft fill after unread sweep — read/in-progress follow-ups. */
 const INBOX_TOP_CM_FOLLOWUP = 100;
-/** Hard cap for CM unread/incoming so ~260+ backlog still enters the queue. */
-const INBOX_TOP_CM_UNREAD = 400;
+/** Hard cap for unread/incoming so large backlogs still enter the queue. */
+const INBOX_TOP_UNREAD = 400;
 const INBOX_TOP_EG = 250;
 const INBOX_PAGES_EG = 12;
-/** Deep enough for ~2k-chat CM inboxes (pageSize 100 → ~2500 rows). */
-const INBOX_PAGES_CM = 25;
+/** Deep enough for ~2k-chat inboxes (pageSize 100 → ~2500 rows). */
+const INBOX_PAGES_DEEP = 25;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -350,9 +350,12 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     !enabledFolderIds || enabledFolderIds.size === 0 ? null : enabledFolderIds,
   );
   const accountLimit = enabledChannels.some(
-    (item) => item.runtime.country === "EG" || item.runtime.country === "CM",
+    (item) =>
+      item.runtime.country === "EG" ||
+      item.runtime.country === "CM" ||
+      item.runtime.country === "ZM",
   )
-    ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_CM_UNREAD + INBOX_TOP_CM_FOLLOWUP)
+    ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_UNREAD + INBOX_TOP_CM_FOLLOWUP)
     : 150;
   const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
   const cmChannelIds = new Set(
@@ -555,14 +558,19 @@ async function buildWorkQueue(
   const selected = new Map<string, PagerConversation>();
 
   for (const channel of enabledChannels) {
-    if (channel.runtime.country !== "CM" && channel.runtime.country !== "EG") {
+    if (
+      channel.runtime.country !== "CM" &&
+      channel.runtime.country !== "EG" &&
+      channel.runtime.country !== "ZM"
+    ) {
       continue;
     }
     const isEg = channel.runtime.country === "EG";
     const isCm = channel.runtime.country === "CM";
-    const maxPages = isEg ? INBOX_PAGES_EG : INBOX_PAGES_CM;
-    const pageSize = isCm ? 100 : 60;
-    const unreadCap = isEg ? INBOX_TOP_EG : INBOX_TOP_CM_UNREAD;
+    const isZm = channel.runtime.country === "ZM";
+    const maxPages = isEg ? INBOX_PAGES_EG : INBOX_PAGES_DEEP;
+    const pageSize = isEg ? 60 : 100;
+    const unreadCap = isEg ? INBOX_TOP_EG : INBOX_TOP_UNREAD;
     const followUpCap = isEg ? 0 : INBOX_TOP_CM_FOLLOWUP;
     let unreadAdded = 0;
     let followUpAdded = 0;
@@ -579,7 +587,7 @@ async function buildWorkQueue(
       }
       scanned += inboxPage.length;
 
-      // Unread / customer-last first — never starve a deep CM backlog behind read noise.
+      // Unread / customer-last first — never starve a deep backlog behind read noise.
       const ordered = [...inboxPage].sort(
         (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
       );
@@ -589,6 +597,10 @@ async function buildWorkQueue(
           continue;
         }
         if (isEg && !shouldQueueEgConversation(conv)) {
+          continue;
+        }
+        if ((isCm || isZm) && isOutgoingDirection(conv.lastMessageDirection) && !hasUnreadMarkers(conv)) {
+          // Never wake silent bot-last threads without an unread badge.
           continue;
         }
         if (selected.has(conv.id)) {
@@ -609,14 +621,14 @@ async function buildWorkQueue(
           continue;
         }
 
-        if (isCm && followUpAdded < followUpCap) {
+        if ((isCm || isZm) && followUpAdded < followUpCap) {
           selected.set(conv.id, conv);
           followUpAdded += 1;
         }
       }
 
       const unreadFull = unreadAdded >= unreadCap;
-      const followUpFull = !isCm || followUpAdded >= followUpCap;
+      const followUpFull = isEg || followUpAdded >= followUpCap;
       if (unreadFull && followUpFull) {
         break;
       }
@@ -644,15 +656,16 @@ async function buildWorkQueue(
   }
 
   const channelsNeedingScan = enabledChannels.filter((channel) => {
-    if (channel.runtime.country === "CM" || channel.runtime.country === "EG") {
+    if (
+      channel.runtime.country === "CM" ||
+      channel.runtime.country === "EG" ||
+      channel.runtime.country === "ZM"
+    ) {
       return false;
     }
     const queued = [...selected.values()].filter(
       (conv) => (conv.channelId || conv.channel?.id) === channel.channelId,
     ).length;
-    if (channel.runtime.country === "ZM") {
-      return queued < 10;
-    }
     return queued === 0;
   });
 
@@ -875,6 +888,13 @@ async function processCmConversation(
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} CM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
+    if (intent === "declined" && hasUnreadMarkers(conv)) {
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+    }
     return false;
   }
 
@@ -2063,67 +2083,57 @@ async function ensureCustomerMessageEligible(
     options?.operatorUserId,
     country,
   );
-  // State can falsely lock CM/ZM after a bad thread-sync; unread + customer-last means keep going.
+  const unreadOrIncoming =
+    hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection);
+  // Unread / customer-last must reach the script engine — never bury a backlog behind state locks.
+  const unreadNeedsScriptPass = unreadOrIncoming && !botAlreadyReplied;
+
+  const funnelContinuation =
+    (country === "EG" &&
+      egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))) ||
+    (country === "CM" &&
+      cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted)));
+
+  if (options?.bypass || unreadNeedsScriptPass || funnelContinuation) {
+    return true;
+  }
+
+  // State can falsely lock after a bad thread-sync; unread without a delivered bot reply stays open.
   const staleStateLock =
-    country !== "EG" &&
-    alreadyRepliedInState &&
-    !botAlreadyReplied &&
-    (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection));
+    alreadyRepliedInState && !botAlreadyReplied && unreadOrIncoming;
 
   if (alreadyRepliedInState && !staleStateLock) {
-    if (
-      country === "EG" &&
-      egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
-    ) {
-      return true;
-    }
-    if (
-      country === "CM" &&
-      cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted))
-    ) {
-      return true;
-    }
     const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate(customerText)})`,
     );
+    if (unreadOrIncoming) {
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+    }
     return false;
   }
 
   if (!isNewCustomerTurn && botAlreadyReplied) {
-    if (
-      country === "EG" &&
-      egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
-    ) {
-      return true;
-    }
-    if (
-      country === "CM" &&
-      cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted))
-    ) {
-      return true;
-    }
     const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate(customerText)})`,
     );
+    if (unreadOrIncoming) {
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+    }
     return false;
   }
 
   if (isNewCustomerTurn) {
     if (botAlreadyReplied) {
-      if (
-        country === "EG" &&
-        egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))
-      ) {
-        return true;
-      }
-      if (
-        country === "CM" &&
-        cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted))
-      ) {
-        return true;
-      }
       // Bookkeeping only — do NOT invent lastReplyAt (that permanently locks the chat).
       await patchConversationState(deps.stateStore, state.chatId, convId, {
         conversationId: convId,
@@ -2135,12 +2145,19 @@ async function ensureCustomerMessageEligible(
       console.log(
         `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (thread synced, text=${truncate(customerText)})`,
       );
+      if (unreadOrIncoming) {
+        try {
+          await client.acknowledgeConversation(convId);
+        } catch {
+          // non-fatal
+        }
+      }
       return false;
     }
     return true;
   }
 
-  if (options?.bypass || staleStateLock) {
+  if (staleStateLock) {
     return true;
   }
 
@@ -2292,9 +2309,18 @@ async function trySendSpecialCustomerResponse(
     await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
       lastCustomerMessageId: ctx.lastIncoming.id,
       lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
       currentStage: special === "declined" ? "dormant" : ctx.convState.currentStage,
     });
-    return false;
+    // Clear unread badge — no script reply for declines/scam, but chat was inspected.
+    if (hasUnreadMarkers(ctx.conv)) {
+      try {
+        await ctx.client.acknowledgeConversation(ctx.convId);
+      } catch {
+        // non-fatal
+      }
+    }
+    return true;
   }
 
   let replyText: string | undefined;
@@ -2450,17 +2476,17 @@ async function pollConversations(
   client: PagerClient,
   channelIds: string[],
 ): Promise<{ conversations: PagerConversation[]; client: PagerClient }> {
-  // CM inboxes regularly exceed 2k chats — dig deep enough that unread is not buried.
-  const hasCm = channelIds.some((channelId) => {
+  // CM/ZM inboxes regularly exceed 2k chats — dig deep enough that unread is not buried.
+  const needsDeepPoll = channelIds.some((channelId) => {
     const country =
       state.channels?.[channelId]?.country ??
       getChannelConfig(deps.config, channelId)?.country ??
       inferCountryFromChannelName(
         state.pagerAccount?.liveChannels?.find((channel) => channel.id === channelId)?.name ?? "",
       );
-    return country === "CM";
+    return country === "CM" || country === "ZM";
   });
-  const maxPages = hasCm ? 25 : 10;
+  const maxPages = needsDeepPoll ? 25 : 10;
   try {
     await client.syncOrgIdFromChannels();
     const conversations = await client.collectConversationsForChannels(channelIds, maxPages);

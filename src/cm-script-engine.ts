@@ -273,6 +273,14 @@ export function depositSentInHistory(outgoingTexts: string[]): boolean {
   return blob.includes("bouton vert") || blob.includes("déposer");
 }
 
+export function gameIdSentInHistory(outgoingTexts: string[]): boolean {
+  if (cmScriptSentInHistory(outgoingTexts, "08_game_id")) {
+    return true;
+  }
+  const blob = outgoingTexts.join("\n").toLowerCase();
+  return blob.includes("commence par 17") || blob.includes("numéro de joueur") || blob.includes("numero de joueur");
+}
+
 function stepForOutgoingText(text: string): number {
   const t = text.toLowerCase();
   if (t.includes("xtiy04zvcvw") || t.includes("t.me/+")) {
@@ -474,6 +482,9 @@ export function resolveCmFunnelScripts(
   }
 
   if (intent === "game_id_text") {
+    if (depositSentInHistory(out) && !gameIdSentInHistory(out)) {
+      return ["08_game_id"];
+    }
     return [];
   }
 
@@ -517,6 +528,20 @@ export function resolveCmFunnelScripts(
         isClientReadyPhrase(t))
     ) {
       return ["09_deposit"];
+    }
+    if (
+      depositSentInHistory(out) &&
+      !gameIdSentInHistory(out) &&
+      (intent === "positive" ||
+        intent === "ready" ||
+        intent === "deposit_done" ||
+        intent === "image_only" ||
+        options?.hasImage ||
+        isClientReadyPhrase(t) ||
+        isReadyForRegistration(t) ||
+        /^(oui|ok|okay|d'accord)\b/i.test(t))
+    ) {
+      return ["08_game_id"];
     }
     return [];
   }
@@ -650,6 +675,9 @@ export function resolveCmFunnelScripts(
       if (!depositSentInHistory(out)) {
         return ["09_deposit"];
       }
+      if (!gameIdSentInHistory(out)) {
+        return ["08_game_id"];
+      }
     }
     if (cmReadyForRegAfterTier(t, intent, tierSent, tierChoice, linkSent, signal)) {
       return [...CM_REG_BUNDLE];
@@ -673,7 +701,28 @@ export function resolveCmFunnelScripts(
     if (linkSent && !depositSentInHistory(out) && (signal || options?.hasImage || intent === "ready" || intent === "positive" || isReadyForRegistration(t))) {
       return ["09_deposit"];
     }
+    if (
+      depositSentInHistory(out) &&
+      !gameIdSentInHistory(out) &&
+      (signal || intent === "ready" || intent === "positive" || options?.hasImage)
+    ) {
+      return ["08_game_id"];
+    }
     return [];
+  }
+
+  if (
+    depositSentInHistory(out) &&
+    !gameIdSentInHistory(out) &&
+    (signal ||
+      intent === "ready" ||
+      intent === "positive" ||
+      intent === "deposit_done" ||
+      options?.hasImage ||
+      isClientReadyPhrase(t) ||
+      /^(oui|ok|okay|d'accord)\b/i.test(t))
+  ) {
+    return ["08_game_id"];
   }
 
   if (
