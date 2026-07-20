@@ -136,10 +136,14 @@ type WorkerDeps = {
 const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 500;
 const INBOX_TOP = 40;
-const INBOX_TOP_EG_CM = 150;
+/** Soft fill after unread sweep — read/in-progress follow-ups. */
+const INBOX_TOP_CM_FOLLOWUP = 100;
+/** Hard cap for CM unread/incoming so ~260+ backlog still enters the queue. */
+const INBOX_TOP_CM_UNREAD = 400;
 const INBOX_TOP_EG = 250;
 const INBOX_PAGES_EG = 12;
-const INBOX_PAGES_CM = 5;
+/** Deep enough for ~2k-chat CM inboxes (pageSize 100 → ~2500 rows). */
+const INBOX_PAGES_CM = 25;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -348,24 +352,39 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const accountLimit = enabledChannels.some(
     (item) => item.runtime.country === "EG" || item.runtime.country === "CM",
   )
-    ? MAX_CONVERSATIONS_PER_ACCOUNT
+    ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_CM_UNREAD + INBOX_TOP_CM_FOLLOWUP)
     : 150;
   const egChannelIds = new Set(enabledEgChannels.map((item) => item.channelId));
-  const prioritizedConversations = prioritizeWorkQueue(workQueue, channelIds, accountLimit, egChannelIds).sort(
-    (left, right) => {
-      const leftEg = egChannelIds.has(left.channelId || left.channel?.id || "");
-      const rightEg = egChannelIds.has(right.channelId || right.channel?.id || "");
-      if (leftEg !== rightEg) {
-        return leftEg ? -1 : 1;
-      }
-      return conversationPriorityScore(right) - conversationPriorityScore(left);
-    },
+  const cmChannelIds = new Set(
+    enabledChannels
+      .filter((item) => item.runtime.country === "CM")
+      .map((item) => item.channelId),
   );
+  const prioritizedConversations = prioritizeWorkQueue(
+    workQueue,
+    channelIds,
+    accountLimit,
+    egChannelIds,
+  ).sort((left, right) => {
+    // Interleave countries by priority — do not let EG starve a CM unread backlog.
+    return conversationPriorityScore(right) - conversationPriorityScore(left);
+  });
   const egInWork = workQueue.filter((conv) =>
     egChannelIds.has(conv.channelId || conv.channel?.id || ""),
   ).length;
+  const cmUnreadInWork = workQueue.filter((conv) => {
+    const channelId = conv.channelId || conv.channel?.id || "";
+    if (!cmChannelIds.has(channelId)) {
+      return false;
+    }
+    return (
+      hasUnreadMarkers(conv) ||
+      isIncomingDirection(conv.lastMessageDirection) ||
+      isNewLeadConversation(conv)
+    );
+  }).length;
   console.log(
-    `Pager worker: chat ${freshState.chatId} — workQueue=${workQueue.length}/${folderScopedConversations.length}/${conversations.length} egWork=${egInWork} prioritized=${prioritizedConversations.length}`,
+    `Pager worker: chat ${freshState.chatId} — workQueue=${workQueue.length}/${folderScopedConversations.length}/${conversations.length} egWork=${egInWork} cmUnread=${cmUnreadInWork} prioritized=${prioritizedConversations.length}`,
   );
 
   let checked = 0;
@@ -540,43 +559,74 @@ async function buildWorkQueue(
       continue;
     }
     const isEg = channel.runtime.country === "EG";
+    const isCm = channel.runtime.country === "CM";
     const maxPages = isEg ? INBOX_PAGES_EG : INBOX_PAGES_CM;
-    const inboxCap = isEg ? INBOX_TOP_EG : INBOX_TOP_EG_CM;
-    let addedForChannel = 0;
+    const pageSize = isCm ? 100 : 60;
+    const unreadCap = isEg ? INBOX_TOP_EG : INBOX_TOP_CM_UNREAD;
+    const followUpCap = isEg ? 0 : INBOX_TOP_CM_FOLLOWUP;
+    let unreadAdded = 0;
+    let followUpAdded = 0;
+    let scanned = 0;
+
     for (let page = 1; page <= maxPages; page += 1) {
-      const inboxPage = (
-        await client.listConversations({
-          channelId: channel.channelId,
-          page,
-          pageSize: 60,
-        })
-      ).sort(
-        (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
-      );
+      const inboxPage = await client.listConversations({
+        channelId: channel.channelId,
+        page,
+        pageSize,
+      });
       if (!inboxPage.length) {
         break;
       }
-      for (const conv of inboxPage) {
+      scanned += inboxPage.length;
+
+      // Unread / customer-last first — never starve a deep CM backlog behind read noise.
+      const ordered = [...inboxPage].sort(
+        (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
+      );
+
+      for (const conv of ordered) {
         if (!inboxConversationEligible(conv, enabledFolderIds)) {
           continue;
         }
         if (isEg && !shouldQueueEgConversation(conv)) {
           continue;
         }
-        if (!selected.has(conv.id)) {
-          selected.set(conv.id, conv);
-          addedForChannel += 1;
+        if (selected.has(conv.id)) {
+          continue;
         }
-        if (addedForChannel >= inboxCap) {
-          break;
+
+        const needsReply =
+          hasUnreadMarkers(conv) ||
+          isIncomingDirection(conv.lastMessageDirection) ||
+          isNewLeadConversation(conv);
+
+        if (needsReply) {
+          if (unreadAdded >= unreadCap) {
+            continue;
+          }
+          selected.set(conv.id, conv);
+          unreadAdded += 1;
+          continue;
+        }
+
+        if (isCm && followUpAdded < followUpCap) {
+          selected.set(conv.id, conv);
+          followUpAdded += 1;
         }
       }
-      if (addedForChannel >= inboxCap) {
+
+      const unreadFull = unreadAdded >= unreadCap;
+      const followUpFull = !isCm || followUpAdded >= followUpCap;
+      if (unreadFull && followUpFull) {
+        break;
+      }
+      if (inboxPage.length < pageSize) {
         break;
       }
     }
+
     console.log(
-      `Pager worker: channel ${channel.channelName}/${channel.runtime.country} inbox head=${addedForChannel}`,
+      `Pager worker: channel ${channel.channelName}/${channel.runtime.country} inbox scanned=${scanned} unread=${unreadAdded} followUp=${followUpAdded}`,
     );
   }
 
@@ -2400,9 +2450,20 @@ async function pollConversations(
   client: PagerClient,
   channelIds: string[],
 ): Promise<{ conversations: PagerConversation[]; client: PagerClient }> {
+  // CM inboxes regularly exceed 2k chats — dig deep enough that unread is not buried.
+  const hasCm = channelIds.some((channelId) => {
+    const country =
+      state.channels?.[channelId]?.country ??
+      getChannelConfig(deps.config, channelId)?.country ??
+      inferCountryFromChannelName(
+        state.pagerAccount?.liveChannels?.find((channel) => channel.id === channelId)?.name ?? "",
+      );
+    return country === "CM";
+  });
+  const maxPages = hasCm ? 25 : 10;
   try {
     await client.syncOrgIdFromChannels();
-    const conversations = await client.collectConversationsForChannels(channelIds, 10);
+    const conversations = await client.collectConversationsForChannels(channelIds, maxPages);
     return { conversations, client };
   } catch (error) {
     if (!isRecoverablePagerError(error) || !state.pagerAccount?.password) {
@@ -2413,7 +2474,10 @@ async function pollConversations(
     if (!refreshed) {
       throw error;
     }
-    const conversations = await refreshed.client.collectConversationsForChannels(channelIds, 10);
+    const conversations = await refreshed.client.collectConversationsForChannels(
+      channelIds,
+      maxPages,
+    );
     return { conversations, client: refreshed.client };
   }
 }
