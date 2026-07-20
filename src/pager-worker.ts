@@ -136,13 +136,13 @@ const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 500;
 const INBOX_TOP = 40;
 /** Soft fill after unread sweep — read/in-progress follow-ups. */
-const INBOX_TOP_CM_FOLLOWUP = 100;
+const INBOX_TOP_CM_FOLLOWUP = 40;
 /** Hard cap for unread/incoming so large backlogs still enter the queue. */
 const INBOX_TOP_UNREAD = 400;
 const INBOX_TOP_EG = 250;
 const INBOX_PAGES_EG = 12;
-/** Deep enough for ~2k-chat inboxes (pageSize 100 → ~2500 rows). */
-const INBOX_PAGES_DEEP = 25;
+/** Deep enough for large inboxes, with early-exit when folder filter finds nothing new. */
+const INBOX_PAGES_DEEP = 12;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -562,6 +562,7 @@ async function buildWorkQueue(
     let unreadAdded = 0;
     let followUpAdded = 0;
     let scanned = 0;
+    let idlePages = 0;
 
     for (let page = 1; page <= maxPages; page += 1) {
       const inboxPage = await client.listConversations({
@@ -573,6 +574,7 @@ async function buildWorkQueue(
         break;
       }
       scanned += inboxPage.length;
+      let addedThisPage = 0;
 
       // Unread / customer-last first — never starve a deep backlog behind read noise.
       const ordered = [...inboxPage].sort(
@@ -605,18 +607,27 @@ async function buildWorkQueue(
           }
           selected.set(conv.id, conv);
           unreadAdded += 1;
+          addedThisPage += 1;
           continue;
         }
 
         if ((isCm || isZm) && followUpAdded < followUpCap) {
           selected.set(conv.id, conv);
           followUpAdded += 1;
+          addedThisPage += 1;
         }
+      }
+
+      if (addedThisPage === 0) {
+        idlePages += 1;
+      } else {
+        idlePages = 0;
       }
 
       const unreadFull = unreadAdded >= unreadCap;
       const followUpFull = isEg || followUpAdded >= followUpCap;
-      if (unreadFull && followUpFull) {
+      // Folder-filtered inboxes often have long gaps — stop after a few empty pages once we have work.
+      if ((unreadFull && followUpFull) || (idlePages >= 3 && unreadAdded > 0)) {
         break;
       }
       if (inboxPage.length < pageSize) {

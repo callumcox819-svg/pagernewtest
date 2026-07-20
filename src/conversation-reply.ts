@@ -162,6 +162,7 @@ export function conversationPriorityScore(conv: PagerConversation): number {
   const incoming = isIncomingDirection(conv.lastMessageDirection);
   const fresh = isFreshCustomerMessage(resolveLastMessageAt(conv));
   const newLead = isNewLeadConversation(conv);
+  const noStatus = isNoStatusConversation(conv);
   const staleInProgress =
     isInProgressStatusConversation(conv) &&
     !unread &&
@@ -171,10 +172,12 @@ export function conversationPriorityScore(conv: PagerConversation): number {
     !isNoStatusConversation(conv);
   const lastAt = Date.parse(resolveLastMessageAt(conv) ?? "");
   return (
+    (noStatus && (unread || incoming || fresh) ? 5_000_000 : 0) +
     (newLead ? 3_000_000 : 0) +
     (unread ? 2_000_000 : 0) +
     (fresh ? 1_000_000 : 0) +
     (incoming ? 100_000 : 0) +
+    (noStatus ? 50_000 : 0) +
     (staleInProgress ? -1_000_000 : 0) +
     (Number.isFinite(lastAt) ? Math.floor(lastAt / 1000) : 0)
   );

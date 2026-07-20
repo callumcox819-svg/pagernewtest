@@ -100,6 +100,7 @@ export class PagerClient {
   private orgId = "";
   private orgSlug = "";
   private sessionUserId = "";
+  private cachedOperatorImageUrl = "";
   private cookieHeader: string;
 
   constructor(
@@ -826,14 +827,10 @@ export class PagerClient {
     const orgId = await this.ensureOrgId();
     const referer = this.chatReferer(convId);
     const attempts: Array<{ params: Record<string, string>; body: Record<string, unknown> }> = [
-      {
-        params: { userId: uid, orgId },
-        body: { responsibleUserId: uid, conversationState: "read" },
-      },
       { params: { userId: uid, orgId }, body: { responsibleUserId: uid } },
       {
         params: { userId: uid, orgId },
-        body: { responsibleuserId: uid, conversationState: "read" },
+        body: { responsibleuserId: uid },
       },
       { params: { userId: uid }, body: { responsibleUserId: uid } },
     ];
@@ -914,11 +911,8 @@ export class PagerClient {
       );
     }
 
-    try {
-      await this.markConversationRead(convId, userId);
-    } catch {
-      // non-fatal
-    }
+    // Do NOT mark read before a successful send — failed sends were clearing badges while
+    // leaving customers without a reply (CM «Без статусу» looked «taken» but silent).
     const afterTake = await this.openConversation(convId);
     if (afterTake) {
       convData = { ...convData, ...afterTake };
@@ -976,14 +970,28 @@ export class PagerClient {
     ];
 
     let lastError: unknown;
+    let hardApiFailure = false;
+    const markReadAfterSuccess = async () => {
+      try {
+        await this.markConversationRead(convId, userId);
+      } catch {
+        // non-fatal
+      }
+    };
+
     for (const attempt of attempts) {
       try {
         const result = await attempt();
         if (messageDelivered(result)) {
+          await markReadAfterSuccess();
           return true;
         }
       } catch (error) {
         lastError = error;
+        const errText = formatError(error).toLowerCase();
+        if (errText.includes("imageurl") || errText.includes(" 500") || errText.includes("operator user")) {
+          hardApiFailure = true;
+        }
         console.warn(`Pager send attempt failed for ${convId.slice(0, 8)}:`, formatError(error));
       }
     }
@@ -992,25 +1000,39 @@ export class PagerClient {
     const errorText = formatError(lastError).toLowerCase();
     if (errorText.includes("imageurl") || errorText.includes("operator user")) {
       this.sessionUserId = "";
+      this.cachedOperatorImageUrl = "";
       try {
         const retriedUser = (await this.resolveOperatorUserId()).trim();
-        if (retriedUser && retriedUser !== userId) {
+        if (retriedUser) {
+          const freshConv = (await this.openConversation(convId)) ?? conv;
           const result = await this.sendMessageSpa(convId, text, {
             userId: retriedUser,
             channelId,
-            conv,
+            conv: freshConv,
             attachments: options?.attachments,
           });
           if (messageDelivered(result)) {
+            await markReadAfterSuccess();
             return true;
           }
         }
       } catch (error) {
+        hardApiFailure = true;
         console.warn(`Pager send identity retry failed for ${convId.slice(0, 8)}:`, formatError(error));
       }
     }
 
-    return this.waitMessageDelivered(convId, text, userId);
+    // Never burn 45s per failed send — that starves CM «Без статусу» for minutes.
+    const delivered = await this.waitMessageDelivered(
+      convId,
+      text,
+      userId,
+      hardApiFailure ? 2_000 : 8_000,
+    );
+    if (delivered) {
+      await markReadAfterSuccess();
+    }
+    return delivered;
   }
 
   async sendImageReliable(
@@ -1277,6 +1299,7 @@ export class PagerClient {
     channelId: string,
   ): Promise<Record<string, unknown>> {
     const orgId = await this.ensureOrgId();
+    const imageUrl = await this.getOperatorImageUrl(userId);
     const params: Record<string, string> = { orgId };
     if (userId) {
       params.userId = userId;
@@ -1285,7 +1308,14 @@ export class PagerClient {
     const result = await this.request<Record<string, unknown>>("/api/message", {
       method: "POST",
       params,
-      body: { conversationId: convId, channelId, text, authorId: userId },
+      body: {
+        conversationId: convId,
+        channelId,
+        text,
+        authorId: userId,
+        author: { id: userId, imageUrl: imageUrl || "" },
+        messageDirection: "outgoing",
+      },
       referer: this.chatReferer(convId),
     });
     if (!result || typeof result !== "object") {
@@ -1350,25 +1380,35 @@ export class PagerClient {
 
   private async getOperatorImageUrl(userId: string, conv?: PagerConversation): Promise<string> {
     if (!userId) {
-      return "";
+      return this.cachedOperatorImageUrl;
     }
 
     const nested = conv as (PagerConversation & { responsibleUser?: { imageUrl?: string } }) | undefined;
     const fromConv = nested?.responsibleUser?.imageUrl?.trim();
     if (fromConv) {
+      this.cachedOperatorImageUrl = fromConv;
       return fromConv;
+    }
+
+    if (this.cachedOperatorImageUrl) {
+      return this.cachedOperatorImageUrl;
     }
 
     const members = await this.fetchOrganizationMembers();
     for (const member of members) {
       if (member.messageAuthorId === userId || member.candidateIds.includes(userId)) {
-        return (member.imageUrl || "").trim();
+        const url = (member.imageUrl || "").trim();
+        if (url) {
+          this.cachedOperatorImageUrl = url;
+          return url;
+        }
       }
     }
     // Prefer any known org avatar over empty — empty author.imageUrl triggers Pager 500s.
     for (const member of members) {
       const url = (member.imageUrl || "").trim();
       if (url) {
+        this.cachedOperatorImageUrl = url;
         return url;
       }
     }
