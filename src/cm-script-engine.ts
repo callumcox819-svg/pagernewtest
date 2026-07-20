@@ -529,17 +529,14 @@ export function resolveCmFunnelScripts(
     ) {
       return ["09_deposit"];
     }
+    // Game ID only after clear deposit proof — never on bare Oui/Ok in old threads.
     if (
       depositSentInHistory(out) &&
       !gameIdSentInHistory(out) &&
-      (intent === "positive" ||
-        intent === "ready" ||
-        intent === "deposit_done" ||
+      (intent === "deposit_done" ||
         intent === "image_only" ||
         options?.hasImage ||
-        isClientReadyPhrase(t) ||
-        isReadyForRegistration(t) ||
-        /^(oui|ok|okay|d'accord)\b/i.test(t))
+        isRegistrationConfirmed(t))
     ) {
       return ["08_game_id"];
     }
@@ -704,7 +701,7 @@ export function resolveCmFunnelScripts(
     if (
       depositSentInHistory(out) &&
       !gameIdSentInHistory(out) &&
-      (signal || intent === "ready" || intent === "positive" || options?.hasImage)
+      (intent === "deposit_done" || intent === "image_only" || options?.hasImage || isRegistrationConfirmed(t))
     ) {
       return ["08_game_id"];
     }
@@ -714,13 +711,10 @@ export function resolveCmFunnelScripts(
   if (
     depositSentInHistory(out) &&
     !gameIdSentInHistory(out) &&
-    (signal ||
-      intent === "ready" ||
-      intent === "positive" ||
-      intent === "deposit_done" ||
+    (intent === "deposit_done" ||
+      intent === "image_only" ||
       options?.hasImage ||
-      isClientReadyPhrase(t) ||
-      /^(oui|ok|okay|d'accord)\b/i.test(t))
+      isRegistrationConfirmed(t))
   ) {
     return ["08_game_id"];
   }

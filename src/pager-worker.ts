@@ -113,7 +113,6 @@ import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import {
   countApiStatusFolders,
-  expandEnabledFolderIds,
   isFunnelFollowUpFolderName,
   mergeStatusFolderList,
   conversationAllowedInFolders,
@@ -274,7 +273,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   const operatorFolderIds = getEnabledFolderIds(freshState);
-  const enabledFolderIds = expandEnabledFolderIds(freshState, operatorFolderIds);
+  // Do NOT auto-expand into «чекаю ID» / «В процесі» — operator toggle is the only scope.
+  const enabledFolderIds = operatorFolderIds;
   if (enabledFolderIds && enabledFolderIds.size === 0) {
     console.warn(
       `Pager worker: chat ${freshState.chatId} — no status folders enabled; falling back to all inbox`,
@@ -286,13 +286,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       .filter((folder) => folder.enabled)
       .map((folder) => folder.name)
       .join(", ");
-    const followUpFolderCount =
-      operatorFolderIds && enabledFolderIds
-        ? [...enabledFolderIds].filter((id) => !operatorFolderIds.has(id)).length
-        : 0;
     console.log(
-      `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}]` +
-        (followUpFolderCount ? ` +funnel=${followUpFolderCount}` : ""),
+      `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}] (strict)`,
     );
   }
 
@@ -335,13 +330,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const folderScopedConversations =
     !enabledFolderIds || enabledFolderIds.size === 0
       ? conversations
-      : conversations.filter(
-          (conv) =>
-            hasUnreadMarkers(conv) ||
-            isIncomingDirection(conv.lastMessageDirection) ||
-            isNewLeadConversation(conv) ||
-            conversationAllowedInFolders(conv, enabledFolderIds),
-        );
+      : conversations.filter((conv) => conversationAllowedInFolders(conv, enabledFolderIds));
   const workQueue = await buildWorkQueue(
     client,
     folderScopedConversations,
@@ -534,18 +523,16 @@ function inboxConversationEligible(
   conv: PagerConversation,
   enabledFolderIds: Set<string> | null,
 ): boolean {
-  // Unread / customer-last always stay in the night backlog, even if status folder
-  // is outside the operator toggle (previous bot behavior).
-  if (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection)) {
-    return true;
+  // Strict folder gate: only operator-enabled folders (e.g. «Без статусу»).
+  // Unread in «чекаю ID» / «В процесі» must NEVER be touched unless that folder is enabled.
+  if (enabledFolderIds && enabledFolderIds.size > 0) {
+    return conversationAllowedInFolders(conv, enabledFolderIds);
   }
-  if (isNewLeadConversation(conv)) {
-    return true;
-  }
-  if (!enabledFolderIds) {
-    return true;
-  }
-  return conversationAllowedInFolders(conv, enabledFolderIds);
+  return (
+    hasUnreadMarkers(conv) ||
+    isIncomingDirection(conv.lastMessageDirection) ||
+    isNewLeadConversation(conv)
+  );
 }
 
 async function buildWorkQueue(
@@ -745,6 +732,18 @@ async function processConversation(
   conv: PagerConversation,
   runtime: EnabledChannel,
 ): Promise<boolean> {
+  const enabledFolderIds = getEnabledFolderIds(state);
+  if (
+    enabledFolderIds &&
+    enabledFolderIds.size > 0 &&
+    !conversationAllowedInFolders(conv, enabledFolderIds)
+  ) {
+    console.log(
+      `Pager worker: skip ${conv.id.slice(0, 8)} — outside enabled folders (status=${conv.status?.name || "none"})`,
+    );
+    return false;
+  }
+
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
   if (channel.country === "CM") {
     return processCmConversation(deps, state, client, conv, runtime, channel);
@@ -1708,7 +1707,12 @@ async function processGenericConversation(
 }
 
 function findFunnelFollowUpStatusId(state: ChatState): string | undefined {
+  // Prefer «В процесі» / registration-in-progress — never park CM chats in «чекаю ID».
   for (const folder of state.statusFolders ?? []) {
+    const name = folder.name.trim().toLowerCase();
+    if (/чекаю\s*id|waiting.*id|attente.*id/i.test(name)) {
+      continue;
+    }
     if (isFunnelFollowUpFolderName(folder.name)) {
       return folder.id;
     }

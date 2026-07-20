@@ -428,7 +428,11 @@ export function cmFunnelNeedsContinuation(
       /inscrit|cr[eé][eé]|compte|d[eé]p[oô]t|application/i.test(text)
     );
   }
-  return ready || isRegistrationConfirmed(text);
+  // After deposit ask: only continue for proof / confirmed registration — not bare Oui.
+  return (
+    isRegistrationConfirmed(text) ||
+    /d[eé]p[oô]t|screenshot|preuve|image|inscrit|cr[eé][eé]/i.test(text)
+  );
 }
 
 export function shouldQueueConversationFromThread(
