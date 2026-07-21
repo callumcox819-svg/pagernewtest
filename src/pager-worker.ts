@@ -1194,13 +1194,6 @@ async function processZmConversation(
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} ZM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
-    if (hasUnreadMarkers(conv)) {
-      try {
-        await client.acknowledgeConversation(convId);
-      } catch {
-        // non-fatal
-      }
-    }
     return false;
   }
 
@@ -1231,6 +1224,28 @@ async function processZmConversation(
         const fallbackLink =
           loadLocalZmScript("05_link")?.trim() || "https://tinyurl.com/ZAM577";
         const sent = await client.sendMessageReliable(convId, fallbackLink, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          sentScriptKeys.push(scriptKey);
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            conversationId: convId,
+            channelId: runtime.channelId,
+            lastCustomerMessageId: lastIncoming.id,
+            lastCustomerMessageAt: lastIncoming.createdAt,
+            lastReplyAt: new Date().toISOString(),
+            lastReplyRole: scriptKey,
+            sendFailures: 0,
+          });
+          await sleep(500);
+        }
+        continue;
+      }
+      const localFallback = loadLocalZmScript(scriptKey)?.trim();
+      if (localFallback) {
+        const sent = await client.sendMessageReliable(convId, localFallback, {
           channelId: runtime.channelId,
           conv,
         });
@@ -2355,18 +2370,9 @@ async function trySendSpecialCustomerResponse(
     await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
       lastCustomerMessageId: ctx.lastIncoming.id,
       lastCustomerMessageAt: ctx.lastIncoming.createdAt,
-      lastReplyAt: new Date().toISOString(),
       currentStage: special === "declined" ? "dormant" : ctx.convState.currentStage,
     });
-    // Clear unread badge — no script reply for declines/scam, but chat was inspected.
-    if (hasUnreadMarkers(ctx.conv)) {
-      try {
-        await ctx.client.acknowledgeConversation(ctx.convId);
-      } catch {
-        // non-fatal
-      }
-    }
-    return true;
+    return false;
   }
 
   let replyText: string | undefined;

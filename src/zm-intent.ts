@@ -21,6 +21,9 @@ const READY =
 const GREETING = /^(hi|hello|hey|heyy|good morning|good evening|morning|yo)([\s,!.]|$)/i;
 const JOINED = /\b(have joined|joined|i joined|registered already|done registering|account created)\b/i;
 const DECLINED = /\b(not interested|no thanks|stop|scam|leave me alone)\b/i;
+const BARE_DECLINED = /^(no|nah|nope|never|nothing|no thanks|no thank you|no dear|not interested)\.?!*$/i;
+const DEPOSIT_DONE =
+  /\b(made my dep(?:o)?sit|i deposited|deposit done|done deposit|deposited|after i deposited|i made a deposit)\b/i;
 const GAME_ID = /\b(17\d{6,}|16\d{6,}|account\s*\d+)\b/i;
 const POSITIVE_EMOJI = /^[\s👍👌✅🔥❤️🙏😊🙂]+$/u;
 const EN_LINK_ASK =
@@ -39,8 +42,11 @@ export function classifyZmIntent(
   const t = (text || "").trim();
   const step = options?.funnelStep ?? 0;
 
-  if (DECLINED.test(t)) {
+  if (DECLINED.test(t) || BARE_DECLINED.test(t)) {
     return "declined";
+  }
+  if (DEPOSIT_DONE.test(t)) {
+    return "deposit_done";
   }
   if (/\b(no i am not|not yet|no not yet)\b/i.test(t)) {
     return "unknown";
