@@ -145,7 +145,6 @@ playbooks:
         nextTemplateRole: "deposit"
       - kind: "deposit_balance_screenshot"
         nextStage: "post_deposit"
-        nextTemplateRole: "telegram_handoff"
       - kind: "unclear_screenshot"
         nextStage: "waiting_id"
         nextTemplateRole: "ask_clear_screenshot"
@@ -161,7 +160,6 @@ playbooks:
       - name: "deposited"
         matchAny: ["عملت إيداع", "ايداع", "deposited"]
         nextStage: "post_deposit"
-        nextTemplateRole: "telegram_handoff"
 
   - country: "CM"
     language: "French"
@@ -205,7 +203,6 @@ playbooks:
         nextTemplateRole: "deposit"
       - kind: "deposit_balance_screenshot"
         nextStage: "post_deposit"
-        nextTemplateRole: "telegram_handoff"
       - kind: "unclear_screenshot"
         nextStage: "waiting_id"
         nextTemplateRole: "ask_clear_screenshot"
@@ -221,7 +218,6 @@ playbooks:
       - name: "deposited"
         matchAny: ["depot fait", "solde", "j'ai depose"]
         nextStage: "post_deposit"
-        nextTemplateRole: "telegram_handoff"
 
   - country: "ZM"
     language: "English"
@@ -255,7 +251,6 @@ playbooks:
         nextTemplateRole: "deposit"
       - kind: "deposit_balance_screenshot"
         nextStage: "post_deposit"
-        nextTemplateRole: "telegram_handoff"
       - kind: "unclear_screenshot"
         nextStage: "waiting_id"
         nextTemplateRole: "ask_clear_screenshot"
@@ -271,4 +266,3 @@ playbooks:
       - name: "deposited"
         matchAny: ["i deposited", "balance", "funded"]
         nextStage: "post_deposit"
-        nextTemplateRole: "telegram_handoff"

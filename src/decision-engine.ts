@@ -14,6 +14,7 @@ import {
   normalizeCustomerText,
   specialIntentTemplateRole,
 } from "./customer-intent.js";
+import { isDisabledOutboundTemplateRole } from "./disabled-outbound-scripts.js";
 
 export type ConversationEvent = {
   channelId: string;
@@ -44,22 +45,22 @@ export function decideNextAction(
   if (event.proofKind) {
     const proofRule = playbook.proofRules.find((rule) => rule.kind === event.proofKind);
     if (proofRule) {
-      return {
+      return sanitizeDecision({
         nextStage: proofRule.nextStage,
         templateRole: proofRule.nextTemplateRole,
         templateToSend: proofRule.nextTemplateRole
           ? templateBank.roles[proofRule.nextTemplateRole]
           : undefined,
         reason: `Matched proof rule ${proofRule.kind}`,
-      };
+      });
     }
     if (event.proofKind === "unclear_screenshot") {
-      return {
+      return sanitizeDecision({
         nextStage: "waiting_id",
         templateRole: "ask_clear_screenshot",
         templateToSend: templateBank.roles.ask_clear_screenshot,
         reason: "Unclear screenshot",
-      };
+      });
     }
   }
 
@@ -67,12 +68,12 @@ export function decideNextAction(
   const special = classifySpecialCustomerIntent(playbook, text);
   const specialRole = specialIntentTemplateRole(special);
   if (specialRole) {
-    return {
+    return sanitizeDecision({
       nextStage: special === "deferral" ? "not_ready" : "no_money",
       templateRole: specialRole,
       templateToSend: templateBank.roles[specialRole],
       reason: `Special intent ${special}`,
-    };
+    });
   }
 
   const normalizedText = normalizeCustomerText(text);
@@ -85,36 +86,46 @@ export function decideNextAction(
       matchesPlaybookKeywords([keyword], normalizedText),
     );
     if (matched) {
-      return {
+      return sanitizeDecision({
         nextStage: rule.nextStage,
         templateRole: rule.nextTemplateRole,
         templateToSend: rule.nextTemplateRole
           ? templateBank.roles[rule.nextTemplateRole]
           : undefined,
         reason: `Matched text rule ${rule.name}`,
-      };
+      });
     }
   }
 
   if (event.currentStage === "registered") {
-    return {
+    return sanitizeDecision({
       nextStage: "deposit_pending",
       templateRole: "deposit",
       templateToSend: templateBank.roles.deposit,
       reason: "Registered stage defaulted to deposit instructions",
-    };
+    });
   }
 
   if (event.currentStage === "new_lead") {
-    return {
+    return sanitizeDecision({
       nextStage: "engaged",
       templateRole: "intro",
       templateToSend: templateBank.roles.intro,
       reason: "New lead — send intro preset",
-    };
+    });
   }
 
   return undefined;
+}
+
+function sanitizeDecision(decision: DecisionResult): DecisionResult {
+  if (!decision.templateRole || !isDisabledOutboundTemplateRole(decision.templateRole)) {
+    return decision;
+  }
+  return {
+    nextStage: decision.nextStage,
+    reason: `${decision.reason} (telegram template blocked)`,
+  };
 }
 
 export function inferProofKindFromCaption(

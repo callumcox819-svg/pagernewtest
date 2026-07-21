@@ -51,7 +51,6 @@ export const ZM_FOLDER_NAME_HINTS = ["замб", "zamb", "zambia"];
 export const ZM_REG_SEND_KEYS = new Set(["04_registration", "05_link"]);
 export const ZM_STATUS_MOVE_KEYS = new Set(["04_registration", "05_link"]);
 export const ZM_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works", "03_zmw_table"]);
-export const ZM_TG_SEND_KEYS = new Set(["08_tg_invite", "09_tg_link"]);
 
 const ZM_REG_BUNDLE = ["04_registration", "05_link"] as const;
 const ZM_REGISTRATION_LINK = "https://tinyurl.com/ZAM577";
@@ -233,15 +232,7 @@ export function funnelStepFromScriptGaps(outgoingTexts: string[], storedStep = 0
   if (!depositSentInHistory(outgoingTexts)) {
     return Math.min(step, 5);
   }
-  step = Math.max(step, 6);
-  if (!zmTgInviteSentInHistory(outgoingTexts)) {
-    return Math.min(step, 7);
-  }
-  step = Math.max(step, 8);
-  if (!tgLinkSentInHistory(outgoingTexts)) {
-    return Math.min(step, 8);
-  }
-  return Math.max(step, 9);
+  return Math.max(step, 6);
 }
 
 export function collectOutgoingTexts(messages: PagerMessage[]): string[] {
@@ -294,17 +285,6 @@ export function limitZmScriptsForCustomerTurn(
       return ["05_link"];
     }
     return [];
-  }
-  if (
-    scriptKeys.some((key) => ZM_TG_SEND_KEYS.has(key)) &&
-    !tgLinkSentInHistory(outgoingTexts)
-  ) {
-    if (scriptKeys.includes("08_tg_invite") && !zmTgInviteSentInHistory(outgoingTexts)) {
-      return ["08_tg_invite"];
-    }
-    if (scriptKeys.includes("09_tg_link") && zmTgInviteSentInHistory(outgoingTexts)) {
-      return ["09_tg_link"];
-    }
   }
   return [scriptKeys[0]!];
 }
@@ -447,14 +427,6 @@ export function resolveZmFunnelScripts(
     if (!depositSent && (idReceived || signal || options?.hasImage)) {
       return ["06_deposit"];
     }
-    const helpTgInviteSent = zmTgInviteSentInHistory(out);
-    const helpTgLinkSent = tgLinkSentInHistory(out);
-    if (depositSent && !helpTgInviteSent) {
-      return ["08_tg_invite"];
-    }
-    if (helpTgInviteSent && !helpTgLinkSent) {
-      return ["09_tg_link"];
-    }
     return [];
   }
 
@@ -520,33 +492,6 @@ export function resolveZmFunnelScripts(
       return ["06_deposit"];
     }
     return [];
-  }
-
-  const tgInviteSent = zmTgInviteSentInHistory(out);
-  const tgLinkSent = tgLinkSentInHistory(out);
-  const depositConfirmed =
-    intent === "deposit_done" ||
-    /\b(made my dep(?:o)?sit|i deposited|deposit done|done deposit|deposited)\b/i.test(t);
-
-  if (depositSent) {
-    if (!tgInviteSent) {
-      if (
-        depositConfirmed ||
-        signal ||
-        intent === "ready" ||
-        intent === "positive" ||
-        intent === "joined" ||
-        idReceived ||
-        options?.hasImage
-      ) {
-        return ["08_tg_invite"];
-      }
-    }
-    if (tgInviteSent && !tgLinkSent) {
-      if (depositConfirmed || signal || intent === "ready" || intent === "positive") {
-        return ["09_tg_link"];
-      }
-    }
   }
 
   return [];

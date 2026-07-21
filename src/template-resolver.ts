@@ -22,6 +22,10 @@ import {
   scriptSnippet as zmScriptSnippet,
 } from "./zm-script-engine.js";
 import type { PagerClient, PagerSavedReply } from "./pager-client.js";
+import {
+  isDisabledOutboundScriptKey,
+  isDisabledOutboundTemplateRole,
+} from "./disabled-outbound-scripts.js";
 
 const replyCache = new Map<string, PagerSavedReply[]>();
 
@@ -32,7 +36,6 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
     registration: ["05_registration", "CASH056", "06_link", "Camerun01"],
     deposit: ["09_deposit", "bouton vert"],
     ask_id: ["08_game_id", "commence par 17"],
-    telegram_handoff: ["11_tg_link", "XtIY04zvcVw2YzZi", "10_tg_invite"],
     no_money: ["pas d'argent", "plus tard"],
     reactivation: ["Il reste encore"],
   },
@@ -42,7 +45,6 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
     registration: ["04_registration", "هبعتلك اللينك", "05_link", "Egypt0011"],
     deposit: ["06_deposit", "الأخضر"],
     ask_id: ["07_game_id", "يبدأ ب 17"],
-    telegram_handoff: ["10_tg_link", "t7iYS46b2Ls2YWRk", "09_tg_invite"],
     no_money: ["مش معايه فلوس", "no money"],
     reactivation: ["لسه عندنا"],
   },
@@ -52,7 +54,6 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
     registration: ["04_registration", "ZAM577", "05_link"],
     deposit: ["06_deposit", "click \"Deposit\""],
     ask_id: ["07_game_id", "begins with 17"],
-    telegram_handoff: ["09_tg_link", "t.me/+"],
     no_money: ["No problem", "when you are ready"],
     reactivation: ["still a spot"],
   },
@@ -137,6 +138,10 @@ export async function resolveScriptTextByKey(
   },
 ): Promise<string | undefined> {
   const country = options.country ?? "CM";
+  if (isDisabledOutboundScriptKey(options.scriptKey)) {
+    console.warn(`${country} script blocked (telegram removed): key=${options.scriptKey}`);
+    return undefined;
+  }
   const folderId =
     country === "ZM"
       ? await resolveZmTemplateFolderId(client, options.folderId, options.liveBanks)
@@ -197,6 +202,10 @@ export async function resolveTemplateText(
     country: CountryCode;
   },
 ): Promise<string | undefined> {
+  if (isDisabledOutboundTemplateRole(options.role)) {
+    console.warn(`${options.country} template blocked (telegram removed): role=${options.role}`);
+    return undefined;
+  }
   if (options.folderId) {
     const replies = await loadFolderReplies(client, options.folderId);
     const fromPager = matchReplyByRole(replies, options.country, options.role);

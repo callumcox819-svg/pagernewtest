@@ -111,6 +111,7 @@ import { loadLocalCmScript } from "./cm-local-scripts.js";
 import { loadLocalEgScript } from "./eg-local-scripts.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
+import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
 import {
   countApiStatusFolders,
   isFunnelFollowUpFolderName,
@@ -917,6 +918,7 @@ async function processCmConversation(
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
+  scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
   if (!scriptKeys.length) {
     console.log(
@@ -1189,6 +1191,7 @@ async function processZmConversation(
     },
   );
   scriptKeys = limitZmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
+  scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
   if (!scriptKeys.length) {
     console.log(
@@ -1224,28 +1227,6 @@ async function processZmConversation(
         const fallbackLink =
           loadLocalZmScript("05_link")?.trim() || "https://tinyurl.com/ZAM577";
         const sent = await client.sendMessageReliable(convId, fallbackLink, {
-          channelId: runtime.channelId,
-          conv,
-        });
-        if (sent) {
-          sentAny = true;
-          sentScriptKeys.push(scriptKey);
-          await patchConversationState(deps.stateStore, state.chatId, convId, {
-            conversationId: convId,
-            channelId: runtime.channelId,
-            lastCustomerMessageId: lastIncoming.id,
-            lastCustomerMessageAt: lastIncoming.createdAt,
-            lastReplyAt: new Date().toISOString(),
-            lastReplyRole: scriptKey,
-            sendFailures: 0,
-          });
-          await sleep(500);
-        }
-        continue;
-      }
-      const localFallback = loadLocalZmScript(scriptKey)?.trim();
-      if (localFallback) {
-        const sent = await client.sendMessageReliable(convId, localFallback, {
           channelId: runtime.channelId,
           conv,
         });
@@ -1510,6 +1491,7 @@ async function processEgConversation(
       { hasImage: Boolean(imageUrl), messageReaction },
     );
   }
+  scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
   if (!scriptKeys.length) {
     console.log(

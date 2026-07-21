@@ -11,8 +11,6 @@ const CM_KEY_ALIASES: Record<string, string> = {
   "05_link": "06_link",
   "06_deposit": "09_deposit",
   "07_game_id": "08_game_id",
-  "08_tg_invite": "10_tg_invite",
-  "09_tg_link": "11_tg_link",
 };
 
 export function resolveCmScriptKey(key: string): string {
