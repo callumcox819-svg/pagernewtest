@@ -116,6 +116,7 @@ import {
   isFunnelFollowUpFolderName,
   mergeStatusFolderList,
   conversationAllowedInFolders,
+  expandEnabledFolderIds,
   getEnabledFolderIds,
   hasEnabledStatusFolders,
   isNoStatusConversation,
@@ -141,8 +142,8 @@ const INBOX_TOP_CM_FOLLOWUP = 40;
 const INBOX_TOP_UNREAD = 400;
 const INBOX_TOP_EG = 250;
 const INBOX_PAGES_EG = 12;
-/** Deep enough for large inboxes, with early-exit when folder filter finds nothing new. */
-const INBOX_PAGES_DEEP = 12;
+/** Deep enough for large inboxes (2500+ chats) — do not stop until unread cap or end. */
+const INBOX_PAGES_DEEP = 25;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -200,6 +201,19 @@ function accountHasEgOrCm(state: ChatState, config: BotConfig): boolean {
     }
   }
   return false;
+}
+
+function resolveEnabledFolderIds(
+  state: ChatState,
+  enabledChannels: Array<{ runtime: { country: string } }>,
+): Set<string> | null {
+  const operatorFolderIds = getEnabledFolderIds(state);
+  const hasZmChannel = enabledChannels.some((item) => item.runtime.country === "ZM");
+  const hasCmChannel = enabledChannels.some((item) => item.runtime.country === "CM");
+  if (hasZmChannel && !hasCmChannel && operatorFolderIds) {
+    return expandEnabledFolderIds(state, operatorFolderIds);
+  }
+  return operatorFolderIds;
 }
 
 async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promise<void> {
@@ -273,8 +287,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   const operatorFolderIds = getEnabledFolderIds(freshState);
-  // Do NOT auto-expand into «чекаю ID» / «В процесі» — operator toggle is the only scope.
-  const enabledFolderIds = operatorFolderIds;
+  const enabledFolderIds = resolveEnabledFolderIds(freshState, enabledChannels);
   if (enabledFolderIds && enabledFolderIds.size === 0) {
     console.warn(
       `Pager worker: chat ${freshState.chatId} — no status folders enabled; falling back to all inbox`,
@@ -286,8 +299,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       .filter((folder) => folder.enabled)
       .map((folder) => folder.name)
       .join(", ");
+    const hasZmChannel = enabledChannels.some((item) => item.runtime.country === "ZM");
+    const hasCmChannel = enabledChannels.some((item) => item.runtime.country === "CM");
+    const folderMode =
+      hasZmChannel && !hasCmChannel && enabledFolderIds !== operatorFolderIds
+        ? "zm+funnel"
+        : "strict";
     console.log(
-      `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}] (strict)`,
+      `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}] (${folderMode})`,
     );
   }
 
@@ -404,7 +423,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       egChecked += 1;
     }
     try {
-      const didReply = await processConversation(deps, freshState, client, conv, runtime);
+      const didReply = await processConversation(
+        deps,
+        freshState,
+        client,
+        conv,
+        runtime,
+        enabledFolderIds,
+      );
       if (didReply) {
         replied += 1;
         if (isEg) {
@@ -423,7 +449,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
           freshState = hydrateOperatorState(refreshed.state);
           client = refreshed.client;
           try {
-            const didReply = await processConversation(deps, freshState, client, conv, runtime);
+            const didReply = await processConversation(
+              deps,
+              freshState,
+              client,
+              conv,
+              runtime,
+              enabledFolderIds,
+            );
             if (didReply) {
               replied += 1;
               if (isEg) {
@@ -562,8 +595,6 @@ async function buildWorkQueue(
     let unreadAdded = 0;
     let followUpAdded = 0;
     let scanned = 0;
-    let idlePages = 0;
-
     for (let page = 1; page <= maxPages; page += 1) {
       const inboxPage = await client.listConversations({
         channelId: channel.channelId,
@@ -618,16 +649,9 @@ async function buildWorkQueue(
         }
       }
 
-      if (addedThisPage === 0) {
-        idlePages += 1;
-      } else {
-        idlePages = 0;
-      }
-
       const unreadFull = unreadAdded >= unreadCap;
       const followUpFull = isEg || followUpAdded >= followUpCap;
-      // Folder-filtered inboxes often have long gaps — stop after a few empty pages once we have work.
-      if ((unreadFull && followUpFull) || (idlePages >= 3 && unreadAdded > 0)) {
+      if (unreadFull && followUpFull) {
         break;
       }
       if (inboxPage.length < pageSize) {
@@ -742,8 +766,8 @@ async function processConversation(
   client: PagerClient,
   conv: PagerConversation,
   runtime: EnabledChannel,
+  enabledFolderIds: Set<string> | null,
 ): Promise<boolean> {
-  const enabledFolderIds = getEnabledFolderIds(state);
   if (
     enabledFolderIds &&
     enabledFolderIds.size > 0 &&
@@ -1170,6 +1194,13 @@ async function processZmConversation(
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} ZM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
+    if (hasUnreadMarkers(conv)) {
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+    }
     return false;
   }
 

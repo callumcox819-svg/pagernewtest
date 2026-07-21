@@ -115,14 +115,15 @@ export function isConversationUnread(conv: PagerConversation): boolean {
 
 /** Process chats where the customer spoke last and the thread still needs a reply. */
 export function shouldProcessConversation(conv: PagerConversation): boolean {
+  // Unread badge wins over stale list direction — common in «В процесі» after bot moved the chat.
+  if (hasUnreadMarkers(conv)) {
+    return true;
+  }
   // Bot/operator already has the last word — wait for a new customer message.
   if (isOutgoingDirection(conv.lastMessageDirection)) {
     return false;
   }
   if (isFreshCustomerMessage(resolveLastMessageAt(conv))) {
-    return true;
-  }
-  if (hasUnreadMarkers(conv)) {
     return true;
   }
   if (isIncomingDirection(conv.lastMessageDirection)) {
@@ -133,10 +134,6 @@ export function shouldProcessConversation(conv: PagerConversation): boolean {
 
 /** Egypt: same queue gate as CM/ZM — only unread / incoming / fresh customer turns. */
 export function shouldQueueEgConversation(conv: PagerConversation): boolean {
-  // Never wake a thread where the bot (or operator) already spoke last.
-  if (isOutgoingDirection(conv.lastMessageDirection)) {
-    return false;
-  }
   return shouldProcessConversation(conv);
 }
 
