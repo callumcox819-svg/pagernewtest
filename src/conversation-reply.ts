@@ -134,7 +134,17 @@ export function shouldProcessConversation(conv: PagerConversation): boolean {
 
 /** Egypt: same queue gate as CM/ZM — only unread / incoming / fresh customer turns. */
 export function shouldQueueEgConversation(conv: PagerConversation): boolean {
-  return shouldProcessConversation(conv);
+  if (hasUnreadMarkers(conv)) {
+    return true;
+  }
+  if (isOutgoingDirection(conv.lastMessageDirection)) {
+    return false;
+  }
+  const lastAt = resolveLastMessageAt(conv);
+  if (!isFreshCustomerMessage(lastAt)) {
+    return false;
+  }
+  return isIncomingDirection(conv.lastMessageDirection) || isNewLeadConversation(conv);
 }
 
 export function shouldProcessIncomingMessage(lastIncomingAt?: string, conv?: PagerConversation): boolean {
@@ -501,7 +511,6 @@ export function assessReplyEligibility(
       options?.country,
     );
     if (
-      options?.country !== "EG" &&
       !botReplied &&
       (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))
     ) {

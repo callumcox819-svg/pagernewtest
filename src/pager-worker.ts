@@ -116,6 +116,8 @@ import {
   countApiStatusFolders,
   isFunnelFollowUpFolderName,
   mergeStatusFolderList,
+  ALL_INBOX_FOLDER_ID,
+  NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
   expandEnabledFolderIds,
   getEnabledFolderIds,
@@ -142,7 +144,7 @@ const INBOX_TOP_CM_FOLLOWUP = 40;
 /** Hard cap for unread/incoming so large backlogs still enter the queue. */
 const INBOX_TOP_UNREAD = 400;
 const INBOX_TOP_EG = 250;
-const INBOX_PAGES_EG = 12;
+const INBOX_PAGES_EG = 25;
 /** Deep enough for large inboxes (2500+ chats) — do not stop until unread cap or end. */
 const INBOX_PAGES_DEEP = 25;
 
@@ -289,6 +291,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
 
   const operatorFolderIds = getEnabledFolderIds(freshState);
   const enabledFolderIds = resolveEnabledFolderIds(freshState, enabledChannels);
+  const hasCmChannel = enabledChannels.some((item) => item.runtime.country === "CM");
+  const hasEgChannel = enabledChannels.some((item) => item.runtime.country === "EG");
+  const hasZmChannel = enabledChannels.some((item) => item.runtime.country === "ZM");
   if (enabledFolderIds && enabledFolderIds.size === 0) {
     console.warn(
       `Pager worker: chat ${freshState.chatId} — no status folders enabled; falling back to all inbox`,
@@ -300,12 +305,12 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       .filter((folder) => folder.enabled)
       .map((folder) => folder.name)
       .join(", ");
-    const hasZmChannel = enabledChannels.some((item) => item.runtime.country === "ZM");
-    const hasCmChannel = enabledChannels.some((item) => item.runtime.country === "CM");
     const folderMode =
       hasZmChannel && !hasCmChannel && enabledFolderIds !== operatorFolderIds
         ? "zm+funnel"
-        : "strict";
+        : hasEgChannel && hasCmChannel
+          ? "cm+eg"
+          : "strict";
     console.log(
       `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}] (${folderMode})`,
     );
@@ -347,16 +352,35 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
-  const folderScopedConversations =
-    !enabledFolderIds || enabledFolderIds.size === 0
-      ? conversations
-      : conversations.filter((conv) => conversationAllowedInFolders(conv, enabledFolderIds));
+  const folderScopedConversations = conversations.filter((conv) => {
+    if (!enabledFolderIds || enabledFolderIds.size === 0) {
+      return true;
+    }
+    const channelId = conv.channelId || conv.channel?.id || "";
+    const runtime = enabledChannels.find((item) => item.channelId === channelId);
+    const country = runtime?.runtime.country;
+    const folderIds =
+      country === "EG" || country === "CM" || country === "ZM"
+        ? resolveChannelEnabledFolderIds(
+            enabledFolderIds,
+            country,
+            hasCmChannel,
+            hasEgChannel,
+          )
+        : enabledFolderIds;
+    if (!folderIds || folderIds.size === 0) {
+      return true;
+    }
+    return conversationAllowedInFolders(conv, folderIds);
+  });
   const workQueue = await buildWorkQueue(
     client,
     folderScopedConversations,
     enabledChannels,
     channelIds,
     !enabledFolderIds || enabledFolderIds.size === 0 ? null : enabledFolderIds,
+    hasCmChannel,
+    hasEgChannel,
   );
   const accountLimit = enabledChannels.some(
     (item) =>
@@ -395,8 +419,15 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       isNewLeadConversation(conv)
     );
   }).length;
+  const egUnreadInWork = workQueue.filter((conv) => {
+    const channelId = conv.channelId || conv.channel?.id || "";
+    if (!egChannelIds.has(channelId)) {
+      return false;
+    }
+    return shouldQueueEgConversation(conv);
+  }).length;
   console.log(
-    `Pager worker: chat ${freshState.chatId} — workQueue=${workQueue.length}/${folderScopedConversations.length}/${conversations.length} egWork=${egInWork} cmUnread=${cmUnreadInWork} prioritized=${prioritizedConversations.length}`,
+    `Pager worker: chat ${freshState.chatId} — workQueue=${workQueue.length}/${folderScopedConversations.length}/${conversations.length} egWork=${egInWork} egUnread=${egUnreadInWork} cmUnread=${cmUnreadInWork} prioritized=${prioritizedConversations.length}`,
   );
 
   let checked = 0;
@@ -431,6 +462,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
         conv,
         runtime,
         enabledFolderIds,
+        hasCmChannel,
+        hasEgChannel,
       );
       if (didReply) {
         replied += 1;
@@ -457,6 +490,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
               conv,
               runtime,
               enabledFolderIds,
+              hasCmChannel,
+              hasEgChannel,
             );
             if (didReply) {
               replied += 1;
@@ -569,12 +604,30 @@ function inboxConversationEligible(
   );
 }
 
+function resolveChannelEnabledFolderIds(
+  enabledFolderIds: Set<string> | null,
+  country: "ZM" | "CM" | "EG",
+  hasCmChannel: boolean,
+  hasEgChannel: boolean,
+): Set<string> | null {
+  if (!enabledFolderIds || enabledFolderIds.size === 0) {
+    return null;
+  }
+  // Shared CM+EG account: Egypt unread often sits outside CM's «Без статусу» filter.
+  if (country === "EG" && hasCmChannel && hasEgChannel && !enabledFolderIds.has(ALL_INBOX_FOLDER_ID)) {
+    return new Set([...enabledFolderIds, ALL_INBOX_FOLDER_ID]);
+  }
+  return enabledFolderIds;
+}
+
 async function buildWorkQueue(
   client: PagerClient,
   folderScopedConversations: PagerConversation[],
   enabledChannels: EnabledChannel[],
   channelIds: string[],
   enabledFolderIds: Set<string> | null,
+  hasCmChannel: boolean,
+  hasEgChannel: boolean,
 ): Promise<PagerConversation[]> {
   const selected = new Map<string, PagerConversation>();
 
@@ -589,8 +642,14 @@ async function buildWorkQueue(
     const isEg = channel.runtime.country === "EG";
     const isCm = channel.runtime.country === "CM";
     const isZm = channel.runtime.country === "ZM";
+    const channelFolderIds = resolveChannelEnabledFolderIds(
+      enabledFolderIds,
+      channel.runtime.country,
+      hasCmChannel,
+      hasEgChannel,
+    );
     const maxPages = isEg ? INBOX_PAGES_EG : INBOX_PAGES_DEEP;
-    const pageSize = isEg ? 60 : 100;
+    const pageSize = isEg ? 100 : 100;
     const unreadCap = isEg ? INBOX_TOP_EG : INBOX_TOP_UNREAD;
     const followUpCap = isEg ? 0 : INBOX_TOP_CM_FOLLOWUP;
     let unreadAdded = 0;
@@ -614,13 +673,17 @@ async function buildWorkQueue(
       );
 
       for (const conv of ordered) {
-        if (!inboxConversationEligible(conv, enabledFolderIds)) {
+        if (!inboxConversationEligible(conv, channelFolderIds)) {
           continue;
         }
         if (isEg && !shouldQueueEgConversation(conv)) {
           continue;
         }
-        if ((isCm || isZm) && isOutgoingDirection(conv.lastMessageDirection) && !hasUnreadMarkers(conv)) {
+        if (
+          (isCm || isZm || isEg) &&
+          isOutgoingDirection(conv.lastMessageDirection) &&
+          !hasUnreadMarkers(conv)
+        ) {
           // Never wake silent bot-last threads without an unread badge.
           continue;
         }
@@ -628,10 +691,11 @@ async function buildWorkQueue(
           continue;
         }
 
-        const needsReply =
-          hasUnreadMarkers(conv) ||
-          isIncomingDirection(conv.lastMessageDirection) ||
-          isNewLeadConversation(conv);
+        const needsReply = isEg
+          ? shouldQueueEgConversation(conv)
+          : hasUnreadMarkers(conv) ||
+            isIncomingDirection(conv.lastMessageDirection) ||
+            isNewLeadConversation(conv);
 
         if (needsReply) {
           if (unreadAdded >= unreadCap) {
@@ -768,11 +832,19 @@ async function processConversation(
   conv: PagerConversation,
   runtime: EnabledChannel,
   enabledFolderIds: Set<string> | null,
+  hasCmChannel: boolean,
+  hasEgChannel: boolean,
 ): Promise<boolean> {
+  const channelFolderIds = resolveChannelEnabledFolderIds(
+    enabledFolderIds,
+    runtime.runtime.country,
+    hasCmChannel,
+    hasEgChannel,
+  );
   if (
-    enabledFolderIds &&
-    enabledFolderIds.size > 0 &&
-    !conversationAllowedInFolders(conv, enabledFolderIds)
+    channelFolderIds &&
+    channelFolderIds.size > 0 &&
+    !conversationAllowedInFolders(conv, channelFolderIds)
   ) {
     console.log(
       `Pager worker: skip ${conv.id.slice(0, 8)} — outside enabled folders (status=${conv.status?.name || "none"})`,
@@ -1367,9 +1439,9 @@ async function processEgConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  // Thread mirror of list gate: bot already spoke last → wait for customer.
+  // Thread mirror of list gate: bot already spoke last → wait unless unread badge says otherwise.
   const newest = sorted[0];
-  if (newest && isOutgoingDirection(newest.messageDirection)) {
+  if (newest && isOutgoingDirection(newest.messageDirection) && !hasUnreadMarkers(conv)) {
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} EG — bot_spoke_last (awaiting_customer)`,
     );
@@ -2518,7 +2590,7 @@ async function pollConversations(
       inferCountryFromChannelName(
         state.pagerAccount?.liveChannels?.find((channel) => channel.id === channelId)?.name ?? "",
       );
-    return country === "CM" || country === "ZM";
+    return country === "CM" || country === "ZM" || country === "EG";
   });
   const maxPages = needsDeepPoll ? 25 : 10;
   try {
