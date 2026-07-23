@@ -132,19 +132,32 @@ export function shouldProcessConversation(conv: PagerConversation): boolean {
   return false;
 }
 
-/** Egypt: same queue gate as CM/ZM — only unread / incoming / fresh customer turns. */
+/** Egypt: only unread new work — never wake 2-week-old threads with ghost badges. */
 export function shouldQueueEgConversation(conv: PagerConversation): boolean {
-  if (hasUnreadMarkers(conv)) {
-    return true;
-  }
   if (isOutgoingDirection(conv.lastMessageDirection)) {
     return false;
   }
   const lastAt = resolveLastMessageAt(conv);
-  if (!isFreshCustomerMessage(lastAt)) {
-    return false;
+  const fresh = isFreshCustomerMessage(lastAt);
+
+  if (hasUnreadMarkers(conv)) {
+    // Unread badge on a thread whose last customer line is days/weeks old = do not touch.
+    if (lastAt && !fresh && !isNewLeadConversation(conv)) {
+      return false;
+    }
+    return true;
   }
-  return isIncomingDirection(conv.lastMessageDirection) || isNewLeadConversation(conv);
+
+  // API sometimes omits unread on brand-new «Без статусу» leads — allow only fresh first contact.
+  if (
+    isNewLeadConversation(conv) &&
+    fresh &&
+    isIncomingDirection(conv.lastMessageDirection)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 export function shouldProcessIncomingMessage(lastIncomingAt?: string, conv?: PagerConversation): boolean {

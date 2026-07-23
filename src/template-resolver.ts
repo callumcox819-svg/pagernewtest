@@ -371,6 +371,14 @@ function isScriptReplyAcceptable(text: string, scriptKey: string, country: Count
     return body.includes("eg011") || body.includes("هبعتلك اللينك") || body.includes("google chrome");
   }
 
+  if (country === "EG") {
+    const needles = scriptSearchNeedlesForCountry(country)(scriptKey);
+    if (needles.some((needle) => body.includes(needle.trim().toLowerCase()))) {
+      return /[\u0600-\u06FF]/.test(body);
+    }
+    return false;
+  }
+
   if (scriptKey === "05_link") {
     return (
       body.includes("tinyurl.com/zam577") ||

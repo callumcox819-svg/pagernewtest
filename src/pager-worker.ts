@@ -17,6 +17,7 @@ import {
   findLatestIncomingMessage,
   hasBotReplyAfterCustomerMessage,
   hasUnreadMarkers,
+  isFreshCustomerMessage,
   isNewLeadConversation,
   recentCustomerMessageTexts,
   shouldProcessConversation,
@@ -49,7 +50,8 @@ import {
   classifyEgMessage,
   collectOutgoingTexts as collectEgOutgoingTexts,
   egFunnelNeedsContinuation,
-  egScriptSentInHistory,
+  egIntroSentInHistory,
+  isEgScriptTextAcceptable,
   explainScriptsSentInHistory,
   funnelStepFromScriptGaps as egFunnelStepFromScriptGaps,
   inferStepFromThread as egInferStepFromThread,
@@ -1455,6 +1457,20 @@ async function processEgConversation(
     return false;
   }
 
+  if (!isFreshCustomerMessage(lastIncoming.createdAt)) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} EG — stale_customer_message (at=${lastIncoming.createdAt ?? "?"})`,
+    );
+    if (hasUnreadMarkers(conv)) {
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+    }
+    return false;
+  }
+
   const outgoingTexts = collectEgOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
@@ -1465,8 +1481,9 @@ async function processEgConversation(
     (isEgDepositTierChoice(latestCustomerText) || tierChosenRecently);
   const egNewLeadBypass =
     isNoStatusConversation(conv) &&
-    !egScriptSentInHistory(outgoingTexts, "01_intro") &&
-    Boolean(latestCustomerText);
+    !egIntroSentInHistory(outgoingTexts) &&
+    Boolean(latestCustomerText) &&
+    isFreshCustomerMessage(lastIncoming.createdAt);
 
   const operatorUserId = await client.probeOperatorUserId();
 
@@ -1588,12 +1605,23 @@ async function processEgConversation(
   let sentAny = false;
   const allowMultiSend = egAllowsMultiSend(scriptKeys);
   for (const scriptKey of scriptKeys) {
-    const replyText = await resolveScriptTextByKey(client, {
+    let replyText = await resolveScriptTextByKey(client, {
       folderId,
       liveBanks: currentState.pagerAccount?.liveTemplateBanks,
       scriptKey,
       country: "EG",
     });
+    if (replyText?.trim() && !isEgScriptTextAcceptable(scriptKey, replyText)) {
+      const localArabic = loadLocalEgScript(scriptKey);
+      if (localArabic?.trim()) {
+        console.warn(
+          `EG script forced local Arabic key=${scriptKey} (pager text rejected, chars=${replyText.length})`,
+        );
+        replyText = localArabic;
+      } else {
+        replyText = undefined;
+      }
+    }
     if (!replyText?.trim()) {
       if (scriptKey === "05_link" && sentAny) {
         const fallbackLink =
@@ -2200,8 +2228,12 @@ async function ensureCustomerMessageEligible(
   );
   const unreadOrIncoming =
     hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection);
+  const customerMessageFresh = isFreshCustomerMessage(lastIncoming.createdAt);
   // Unread / customer-last must reach the script engine — never bury a backlog behind state locks.
-  const unreadNeedsScriptPass = unreadOrIncoming && !botAlreadyReplied;
+  const unreadNeedsScriptPass =
+    unreadOrIncoming &&
+    !botAlreadyReplied &&
+    (country !== "EG" || customerMessageFresh);
 
   const funnelContinuation =
     (country === "EG" &&

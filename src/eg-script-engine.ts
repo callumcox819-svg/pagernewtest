@@ -29,7 +29,7 @@ export const EG_SCRIPT_SNIPPETS: Record<string, string> = {
 };
 
 export const EG_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
-  "01_intro": ["إنت من مصر", "انت من مصر", "بساعد ناس يعملوا شوية دخل"],
+  "01_intro": ["إنت من مصر", "انت من مصر", "بساعد ناس يعملوا شوية دخل", "أهلا", "إنت من مصر؟"],
   "02_how_it_works": ["تمام كده", "كود eg011", "365-550", "730-1100"],
   "04_registration": ["هبعتلك اللينك دلوقتي", "جنيه مصري", "كود eg011"],
   "05_link": ["tinyurl.com/egypt0011", "egypt0011"],
@@ -59,8 +59,45 @@ export function scriptSnippet(key: string): string {
   return EG_SCRIPT_SNIPPETS[key] ?? "";
 }
 
+/** Reject Latin/ZM templates masquerading as Egypt saved replies. */
+export function containsArabicScript(text: string): boolean {
+  return /[\u0600-\u06FF]/.test(text);
+}
+
+export function isEgScriptTextAcceptable(scriptKey: string, text: string): boolean {
+  const body = (text || "").trim();
+  if (!body) {
+    return false;
+  }
+  if (scriptKey === "05_link") {
+    return /tinyurl\.com\/egypt0011/i.test(body) || /^https?:\/\//i.test(body);
+  }
+  if (!containsArabicScript(body)) {
+    return false;
+  }
+  return egScriptSentInHistory([body], scriptKey) || scriptSearchNeedles(scriptKey).some((needle) =>
+    body.toLowerCase().includes(needle.toLowerCase()),
+  );
+}
+
 export function scriptSearchNeedles(key: string): string[] {
   return EG_SCRIPT_SEARCH_NEEDLES[key] ?? [scriptSnippet(key)].filter(Boolean);
+}
+
+/** Human or bot already sent an Arabic intro pitch — do not re-send 01_intro. */
+export function egIntroSentInHistory(outgoingTexts: string[]): boolean {
+  if (egScriptSentInHistory(outgoingTexts, "01_intro")) {
+    return true;
+  }
+  return outgoingTexts.some((text) => {
+    const body = text.trim();
+    if (!containsArabicScript(body) || body.length < 50) {
+      return false;
+    }
+    return /أهلا|بساعد|مصر|365|530|1100|eg011|شوية دخل|كازين|casino|analytical|artificial intelligence/i.test(
+      body,
+    );
+  });
 }
 
 export function scriptSentInHistory(outgoingTexts: string[], snippet: string): boolean {
@@ -162,7 +199,7 @@ export function inferStepFromThread(messages: PagerMessage[]): number {
 /** Matches pager-ai-bot funnel_step_from_script_gaps for geo=eg. */
 export function funnelStepFromScriptGaps(outgoingTexts: string[], storedStep = 0): number {
   let step = Math.max(storedStep, 0);
-  if (!egScriptSentInHistory(outgoingTexts, "01_intro")) {
+  if (!egIntroSentInHistory(outgoingTexts)) {
     return 0;
   }
   step = Math.max(step, 1);
@@ -207,7 +244,7 @@ export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
  * Never treat bare text / unread as a reason to push deposit / game_id.
  */
 export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: string[]): boolean {
-  const introSent = egScriptSentInHistory(outgoingTexts, "01_intro");
+  const introSent = egIntroSentInHistory(outgoingTexts);
   const explainSent = explainScriptsSentInHistory(outgoingTexts);
   const linkSent = regLinkSentInHistory(outgoingTexts);
   const depositSent = depositSentInHistory(outgoingTexts);
@@ -309,7 +346,7 @@ export function resolveEgFunnelScripts(
   }
 
   if (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t)) {
-    if (!egScriptSentInHistory(out, "01_intro")) {
+    if (!egIntroSentInHistory(out)) {
       return ["01_intro"];
     }
     if (!howSent) {
@@ -349,7 +386,7 @@ export function resolveEgFunnelScripts(
   }
 
   if (effectiveStep < 1) {
-    if (egScriptSentInHistory(out, "01_intro")) {
+    if (egIntroSentInHistory(out)) {
       if (signal || intent === "question" || wantsDetailsAfterIntro(t) || t.length > 0) {
         return howSent ? egRegScripts(linkSent) : ["02_how_it_works"];
       }
@@ -493,7 +530,7 @@ export function resolveEgBacklogFallback(
   options?: { hasImage?: boolean; messageReaction?: string },
 ): string[] {
   const out = outgoingTexts;
-  const introSent = egScriptSentInHistory(out, "01_intro");
+  const introSent = egIntroSentInHistory(out);
   const howSent = explainScriptsSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
   const depositSent = depositSentInHistory(out);
@@ -565,7 +602,7 @@ export function limitEgScriptsForCustomerTurn(
   if (!scriptKeys.length) {
     return scriptKeys;
   }
-  if (scriptKeys.includes("01_intro") && !egScriptSentInHistory(outgoingTexts, "01_intro")) {
+  if (scriptKeys.includes("01_intro") && !egIntroSentInHistory(outgoingTexts)) {
     return ["01_intro"];
   }
   if (
