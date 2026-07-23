@@ -39,6 +39,7 @@ import {
   buildMainMenuKeyboard,
   buildPagerAccountKeyboard,
   buildTemplateKeyboard,
+  getDeployLabel,
   type TelegramMessage,
   type TelegramUpdate,
 } from "./telegram-api.js";
@@ -56,7 +57,7 @@ const telegram = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
 
 async function main() {
   stateStore = await createStateStore(env);
-  console.log(`Starting ${env.TELEGRAM_BOT_NAME}...`);
+  console.log(`Starting ${env.TELEGRAM_BOT_NAME} build=${getDeployLabel()}...`);
   await telegram.setMyCommands([
     { command: "start", description: "Открыть меню" },
     { command: "pause", description: "Пауза авто-ответов" },
@@ -1428,7 +1429,7 @@ function buildMainMenuCaption(state: ChatState): string {
   const account = state.pagerAccount;
   const hasPager = Boolean(account?.cookies?.trim() || (account?.email && account?.password));
   if (!hasPager) {
-    return "Pager не подключён — открой «Pager аккаунт».";
+    return `Pager не подключён — открой «Pager аккаунт».\nbuild ${getDeployLabel()}`;
   }
 
   const org = account?.organizationName || account?.organizationSlug || "Pager";
@@ -1437,7 +1438,7 @@ function buildMainMenuCaption(state: ChatState): string {
   );
   const liveCount = account?.liveChannels?.length ?? enabledChannels.length;
   if (!enabledChannels.length) {
-    return `Pager: ${org}\nКаналы не включены (${liveCount} доступно).`;
+    return `Pager: ${org}\nКаналы не включены (${liveCount} доступно).\nbuild ${getDeployLabel()}`;
   }
 
   const summary = enabledChannels
@@ -1446,7 +1447,7 @@ function buildMainMenuCaption(state: ChatState): string {
     .join("\n");
   const extra =
     enabledChannels.length > 4 ? `\n… ещё ${enabledChannels.length - 4}` : "";
-  return `Pager: ${org}\nВключено ${enabledChannels.length}/${liveCount}:\n${summary}${extra}`;
+  return `Pager: ${org}\nВключено ${enabledChannels.length}/${liveCount}:\n${summary}${extra}\nbuild ${getDeployLabel()}`;
 }
 
 function buildChannelsMenuCaption(state: ChatState): string {

@@ -139,7 +139,7 @@ export class TelegramApi {
     text: string,
     replyMarkup?: ReplyMarkup,
   ): Promise<number | undefined> {
-    const result = await this.request<{ message_id: number }>("sendMessage", {
+    const result = await this.requestWithMarkupFallback<{ message_id: number }>("sendMessage", {
       chat_id: chatId,
       text,
       reply_markup: replyMarkup,
@@ -161,7 +161,7 @@ export class TelegramApi {
     messageId: number,
     replyMarkup: ReplyMarkup,
   ): Promise<void> {
-    await this.request("editMessageReplyMarkup", {
+    await this.requestWithMarkupFallback("editMessageReplyMarkup", {
       chat_id: chatId,
       message_id: messageId,
       reply_markup: replyMarkup,
@@ -174,7 +174,7 @@ export class TelegramApi {
     text: string,
     replyMarkup?: ReplyMarkup,
   ): Promise<void> {
-    await this.request("editMessageText", {
+    await this.requestWithMarkupFallback("editMessageText", {
       chat_id: chatId,
       message_id: messageId,
       text,
@@ -208,6 +208,42 @@ export class TelegramApi {
     return Buffer.from(arrayBuffer);
   }
 
+  private async requestWithMarkupFallback<T>(
+    method: string,
+    body: Record<string, unknown>,
+  ): Promise<T> {
+    const markup = body.reply_markup as ReplyMarkup | undefined;
+    try {
+      return await this.request<T>(method, body);
+    } catch (error) {
+      if (!markup || !isMarkupFeatureError(error)) {
+        throw error;
+      }
+      console.warn(
+        `Telegram ${method}: premium emoji rejected, retrying without custom emoji:`,
+        formatTelegramError(error),
+      );
+      try {
+        return await this.request<T>(method, {
+          ...body,
+          reply_markup: stripCustomEmoji(markup),
+        });
+      } catch (retryError) {
+        if (!isMarkupFeatureError(retryError)) {
+          throw retryError;
+        }
+        console.warn(
+          `Telegram ${method}: styled buttons rejected, retrying plain markup:`,
+          formatTelegramError(retryError),
+        );
+        return await this.request<T>(method, {
+          ...body,
+          reply_markup: stripButtonStyles(stripCustomEmoji(markup)),
+        });
+      }
+    }
+  }
+
   private async request<T = unknown>(
     method: string,
     body?: Record<string, unknown>,
@@ -218,17 +254,73 @@ export class TelegramApi {
       body: JSON.stringify(body ?? {}),
     });
 
-    if (!response.ok) {
-      throw new Error(`Telegram request failed: ${method} ${response.status}`);
-    }
-
     const payload = (await response.json()) as TelegramResponse<T>;
-    if (!payload.ok) {
-      throw new Error(payload.description ?? `Telegram API error on ${method}`);
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.description ?? `Telegram request failed: ${method} ${response.status}`);
     }
 
     return payload.result;
   }
+}
+
+function formatTelegramError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function isMarkupFeatureError(error: unknown): boolean {
+  const message = formatTelegramError(error).toLowerCase();
+  return (
+    message.includes("icon_custom_emoji") ||
+    message.includes("custom emoji") ||
+    message.includes("button_type") ||
+    message.includes("reply markup") ||
+    message.includes("reply_markup") ||
+    message.includes("style is invalid") ||
+    message.includes("can't parse")
+  );
+}
+
+function stripCustomEmoji(markup: ReplyMarkup): ReplyMarkup {
+  const next: ReplyMarkup = { ...markup };
+  if (markup.inline_keyboard) {
+    next.inline_keyboard = markup.inline_keyboard.map((row) =>
+      row.map(({ icon_custom_emoji_id: _icon, ...button }) => button),
+    );
+  }
+  if (markup.keyboard) {
+    next.keyboard = markup.keyboard.map((row) =>
+      row.map(({ icon_custom_emoji_id: _icon, ...button }) => button),
+    );
+  }
+  return next;
+}
+
+function stripButtonStyles(markup: ReplyMarkup): ReplyMarkup {
+  const next: ReplyMarkup = { ...markup };
+  if (markup.inline_keyboard) {
+    next.inline_keyboard = markup.inline_keyboard.map((row) =>
+      row.map(({ style: _style, ...button }) => button),
+    );
+  }
+  if (markup.keyboard) {
+    next.keyboard = markup.keyboard.map((row) =>
+      row.map(({ style: _style, ...button }) => button),
+    );
+  }
+  return next;
+}
+
+/** Short git sha for deploy verification in Telegram menus. */
+export function getDeployLabel(): string {
+  const sha =
+    process.env.RAILWAY_GIT_COMMIT_SHA ||
+    process.env.RAILWAY_GIT_COMMIT ||
+    process.env.GIT_COMMIT ||
+    "";
+  return sha ? sha.slice(0, 7) : "local";
 }
 
 const COUNTRY_LABELS: Record<string, string> = {
