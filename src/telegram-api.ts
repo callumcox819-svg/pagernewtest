@@ -1,12 +1,62 @@
+type ButtonStyle = "primary" | "success" | "danger";
+
 type InlineKeyboardButton = {
   text: string;
   callback_data: string;
+  icon_custom_emoji_id?: string;
+  style?: ButtonStyle;
+};
+
+type ReplyKeyboardButton = {
+  text: string;
+  icon_custom_emoji_id?: string;
+  style?: ButtonStyle;
 };
 
 type ReplyMarkup = {
   inline_keyboard?: InlineKeyboardButton[][];
+  keyboard?: ReplyKeyboardButton[][];
+  resize_keyboard?: boolean;
+  is_persistent?: boolean;
   remove_keyboard?: boolean;
 };
+
+/** RestrictedEmoji pack IDs — animated icons on bot owner Premium (Bot API 9.4+). */
+const PREMIUM_EMOJI = {
+  lock: "5472308992514464048",
+  channels: "5373330964372004748",
+  folder: "5433653135799228968",
+  status: "5431577498364158238",
+  reset: "5264727218734524899",
+  robot: "5372981976804366741",
+  email: "5406631276042002796",
+  link: "5375129357373165375",
+  back: "5264727218734524899",
+} as const;
+
+function inlineBtn(
+  text: string,
+  callbackData: string,
+  options?: { emojiId?: string; style?: ButtonStyle },
+): InlineKeyboardButton {
+  return {
+    text,
+    callback_data: callbackData,
+    ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
+    ...(options?.style ? { style: options.style } : {}),
+  };
+}
+
+function replyBtn(
+  text: string,
+  options?: { emojiId?: string; style?: ButtonStyle },
+): ReplyKeyboardButton {
+  return {
+    text,
+    ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
+    ...(options?.style ? { style: options.style } : {}),
+  };
+}
 
 type TelegramResponse<T> = {
   ok: boolean;
@@ -301,15 +351,47 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        { text: "Pager аккаунт", callback_data: "menu:pager_account" },
-        { text: "Каналы", callback_data: "menu:channels" },
+        inlineBtn("Pager аккаунт", "menu:pager_account", {
+          emojiId: PREMIUM_EMOJI.lock,
+          style: "primary",
+        }),
+        inlineBtn("Каналы", "menu:channels", {
+          emojiId: PREMIUM_EMOJI.channels,
+          style: "primary",
+        }),
       ],
       [
-        { text: "Папки", callback_data: "menu:folders" },
-        { text: "Статус", callback_data: "menu:status" },
+        inlineBtn("Папки", "menu:folders", { emojiId: PREMIUM_EMOJI.folder }),
+        inlineBtn("Статус", "menu:status", {
+          emojiId: PREMIUM_EMOJI.status,
+          style: "success",
+        }),
       ],
-      [{ text: "Сброс", callback_data: "menu:reset" }],
+      [
+        inlineBtn("Сброс", "menu:reset", {
+          emojiId: PREMIUM_EMOJI.reset,
+          style: "danger",
+        }),
+      ],
     ],
+  };
+}
+
+/** Bottom quick menu with the same labels as inline buttons (Premium animated icons). */
+export function buildOperatorReplyKeyboard(): ReplyMarkup {
+  return {
+    keyboard: [
+      [
+        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
+        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
+      ],
+      [
+        replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
+        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
+      ],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
   };
 }
 
@@ -317,16 +399,20 @@ export function buildPagerAccountKeyboard(isConnected: boolean): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        { text: "Email + пароль", callback_data: "pager:login_password" },
-        { text: "Импорт cookies", callback_data: "pager:import_cookies" },
+        inlineBtn("Email + пароль", "pager:login_password", {
+          emojiId: PREMIUM_EMOJI.email,
+        }),
+        inlineBtn("Импорт cookies", "pager:import_cookies", {
+          emojiId: PREMIUM_EMOJI.link,
+        }),
       ],
       [
-        {
-          text: isConnected ? "Отключить" : "Очистить",
-          callback_data: "pager:disconnect",
-        },
+        inlineBtn(isConnected ? "Отключить" : "Очистить", "pager:disconnect", {
+          emojiId: PREMIUM_EMOJI.reset,
+          style: isConnected ? "danger" : "primary",
+        }),
       ],
-      [{ text: "Назад", callback_data: "menu:main" }],
+      [inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })],
     ],
   };
 }

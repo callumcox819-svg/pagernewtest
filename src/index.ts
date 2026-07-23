@@ -564,7 +564,6 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
   const command = normalizeTelegramCommand(commandText);
 
   if (command === "/start") {
-    await telegram.removeReplyKeyboard(chatId).catch(() => {});
     await sendMainMenu(chatId, state);
     return;
   }
@@ -1425,7 +1424,7 @@ async function sendMainMenu(chatId: number, state: ChatState) {
       `Канал: ${effectiveChannel.name} | ${effectiveChannel.country}`,
       `Банк шаблонов: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
       `Pager: ${state.pagerAccount?.organizationName ?? (state.pagerAccount ? "connected" : "not connected")}`,
-      "Выбери нужное действие кнопками ниже.",
+      "Выбери действие кнопками ниже.",
     ].join("\n"),
     buildMainMenuKeyboard(),
   );
