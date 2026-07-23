@@ -50,6 +50,7 @@ import {
   classifyEgMessage,
   collectOutgoingTexts as collectEgOutgoingTexts,
   egFunnelNeedsContinuation,
+  egFullRegistrationInstructionsSentInHistory,
   egIntroSentInHistory,
   isEgScriptTextAcceptable,
   explainScriptsSentInHistory,
@@ -1605,19 +1606,21 @@ async function processEgConversation(
   );
 
   let sentAny = false;
+  const sentScriptKeys: string[] = [];
   const allowMultiSend = egAllowsMultiSend(scriptKeys);
   for (const scriptKey of scriptKeys) {
+    let activeScriptKey = scriptKey;
     let replyText = await resolveScriptTextByKey(client, {
       folderId,
       liveBanks: currentState.pagerAccount?.liveTemplateBanks,
-      scriptKey,
+      scriptKey: activeScriptKey,
       country: "EG",
     });
-    if (replyText?.trim() && !isEgScriptTextAcceptable(scriptKey, replyText)) {
-      const localArabic = loadLocalEgScript(scriptKey);
+    if (replyText?.trim() && !isEgScriptTextAcceptable(activeScriptKey, replyText)) {
+      const localArabic = loadLocalEgScript(activeScriptKey);
       if (localArabic?.trim()) {
         console.warn(
-          `EG script forced local Arabic key=${scriptKey} (pager text rejected, chars=${replyText.length})`,
+          `EG script forced local Arabic key=${activeScriptKey} (pager text rejected, chars=${replyText.length})`,
         );
         replyText = localArabic;
       } else {
@@ -1625,23 +1628,40 @@ async function processEgConversation(
       }
     }
     if (!replyText?.trim()) {
-      if (scriptKey === "05_link" && sentAny) {
-        const fallbackLink =
-          loadLocalEgScript("05_link")?.trim() || "https://tinyurl.com/Egypt0011";
-        const sent = await client.sendMessageReliable(convId, fallbackLink, {
-          channelId: runtime.channelId,
-          conv,
-        });
-        if (sent) {
-          sentAny = true;
-          await sleep(500);
+      const localFallback = loadLocalEgScript(activeScriptKey);
+      if (localFallback?.trim()) {
+        console.log(`EG script local fallback key=${activeScriptKey}`);
+        replyText = localFallback;
+      }
+    }
+    if (
+      activeScriptKey === "05_link" &&
+      !sentScriptKeys.includes("04_registration") &&
+      !egFullRegistrationInstructionsSentInHistory(outgoingTexts)
+    ) {
+      const localReg = loadLocalEgScript("04_registration");
+      if (localReg?.trim()) {
+        console.warn(`EG defer bare link — sending 04_registration first ${convId.slice(0, 8)}`);
+        replyText = localReg;
+        activeScriptKey = "04_registration";
+      }
+    }
+    if (!replyText?.trim()) {
+      if (activeScriptKey === "05_link") {
+        const regReady =
+          sentScriptKeys.includes("04_registration") ||
+          egFullRegistrationInstructionsSentInHistory(outgoingTexts);
+        if (!regReady) {
+          console.warn(`EG skip bare link ${convId.slice(0, 8)} — registration text missing`);
+          continue;
         }
+        replyText = loadLocalEgScript("05_link")?.trim() || "https://tinyurl.com/Egypt0011";
+      } else {
+        console.warn(
+          `EG script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${activeScriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
+        );
         continue;
       }
-      console.warn(
-        `EG script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${scriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
-      );
-      continue;
     }
 
     const sent = await client.sendMessageReliable(convId, replyText.trim(), {
@@ -1657,13 +1677,14 @@ async function processEgConversation(
       return sentAny;
     }
     sentAny = true;
+    sentScriptKeys.push(activeScriptKey);
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,
       lastCustomerMessageId: lastIncoming.id,
       lastCustomerMessageAt: lastIncoming.createdAt,
       lastReplyAt: new Date().toISOString(),
-      lastReplyRole: scriptKey,
+      lastReplyRole: activeScriptKey,
       sendFailures: 0,
     });
     await sleep(500);

@@ -128,11 +128,35 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
 }
 
 export function egRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
+  return egFullRegistrationInstructionsSentInHistory(outgoingTexts);
+}
+
+/** Full Arabic reg text (EG011 + country/currency), not a bare link or partial operator line. */
+export function egFullRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
   if (egScriptSentInHistory(outgoingTexts, "04_registration")) {
-    return true;
+    return outgoingTexts.some((text) => isEgFullRegistrationBody(text));
   }
-  const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("هبعتلك اللينك") || blob.includes("جنيه مصري");
+  return outgoingTexts.some((text) => isEgFullRegistrationBody(text));
+}
+
+function isEgFullRegistrationBody(text: string): boolean {
+  const body = (text || "").trim();
+  if (!body || !containsArabicScript(body) || body.length < 60) {
+    return false;
+  }
+  const lower = body.toLowerCase();
+  if (/^https?:\/\/\S+$/i.test(body)) {
+    return false;
+  }
+  return (
+    lower.includes("eg011") &&
+    (lower.includes("chrome") ||
+      lower.includes("google") ||
+      lower.includes("مصر") ||
+      lower.includes("egp") ||
+      lower.includes("جنيه") ||
+      lower.includes("هبعتلك اللينك"))
+  );
 }
 
 export function depositSentInHistory(outgoingTexts: string[]): boolean {
@@ -615,9 +639,9 @@ export function limitEgScriptsForCustomerTurn(
     return ["08_app_or_browser"];
   }
   if (scriptKeys.some((key) => EG_REG_SEND_KEYS.has(key))) {
-    const instructionsSent = egRegistrationInstructionsSentInHistory(outgoingTexts);
+    const fullRegSent = egFullRegistrationInstructionsSentInHistory(outgoingTexts);
     const linkSent = regLinkSentInHistory(outgoingTexts);
-    if (!instructionsSent) {
+    if (!fullRegSent) {
       return [...EG_REG_BUNDLE];
     }
     if (!linkSent) {

@@ -167,6 +167,18 @@ export async function resolveScriptTextByKey(
         return fullReg;
       }
     }
+    if (
+      country === "EG" &&
+      options.scriptKey === "04_registration" &&
+      fromPager?.text?.trim() &&
+      /^https?:\/\/\S+$/i.test(fromPager.text.trim())
+    ) {
+      const fullReg = loadLocalEgScript("04_registration");
+      if (fullReg?.trim()) {
+        console.warn(`${country} script bare link replaced with 04_registration`);
+        return fullReg;
+      }
+    }
     if (fromPager?.text?.trim()) {
       console.warn(
         `${country} script pager rejected weak match key=${options.scriptKey} chars=${fromPager.text.length}`,
