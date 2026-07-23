@@ -484,8 +484,7 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
         inlineBtn("Папки", "menu:folders", {
           emojiId: PREMIUM_EMOJI.folder,
         }),
-        inlineBtn("Статус", "menu:status", {
-          emojiId: PREMIUM_EMOJI.status,
+        inlineBtn("Настройки", "menu:status", {
           style: "success",
         }),
       ],
@@ -499,18 +498,12 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
   };
 }
 
-/** Bottom quick menu with the same labels as inline buttons (Premium animated icons). */
+/** Bottom quick menu — plain text labels so words stay visible on all Telegram clients. */
 export function buildOperatorReplyKeyboard(): ReplyMarkup {
   return {
     keyboard: [
-      [
-        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
-        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
-      ],
-      [
-        replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
-        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
-      ],
+      [{ text: "🔐 Pager аккаунт" }, { text: "📡 Каналы" }],
+      [{ text: "📁 Папки" }, { text: "⚙️ Настройки" }],
     ],
     resize_keyboard: true,
     is_persistent: true,

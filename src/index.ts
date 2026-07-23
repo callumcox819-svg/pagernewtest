@@ -37,6 +37,7 @@ import {
   buildFoldersRetryKeyboard,
   FOLDERS_PAGE_SIZE,
   buildMainMenuKeyboard,
+  buildOperatorReplyKeyboard,
   buildPagerAccountKeyboard,
   buildTemplateKeyboard,
   getDeployLabel,
@@ -1420,6 +1421,9 @@ async function sendMainMenu(chatId: number, state: ChatState, messageId?: number
   const keyboard = buildMainMenuKeyboard();
   if (!messageId) {
     await telegram.sendMessage(chatId, text, keyboard);
+    await telegram
+      .sendMessage(chatId, "Быстрые кнопки", buildOperatorReplyKeyboard())
+      .catch(() => {});
     return;
   }
   await safeEditMenu(chatId, messageId, text, keyboard);
@@ -1569,6 +1573,7 @@ async function sendStatus(chatId: number, state: ChatState) {
   await telegram.sendMessage(
     chatId,
     [
+      "Настройки",
       `Channel: ${effectiveChannel.name}`,
       `Country: ${effectiveChannel.country}`,
       `Stage: ${state.currentStage}`,
