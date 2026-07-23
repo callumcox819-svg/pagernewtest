@@ -54,19 +54,24 @@ const FLAG_EMOJI: Record<string, string> = {
 function inlineBtn(
   text: string,
   callbackData: string,
-  options?: { emojiId?: string },
+  options?: { emojiId?: string; style?: ButtonStyle },
 ): InlineKeyboardButton {
   return {
     text,
     callback_data: callbackData,
     ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
+    ...(options?.style ? { style: options.style } : {}),
   };
 }
 
-function replyBtn(text: string, options?: { emojiId?: string }): ReplyKeyboardButton {
+function replyBtn(
+  text: string,
+  options?: { emojiId?: string; style?: ButtonStyle },
+): ReplyKeyboardButton {
   return {
     text,
     ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
+    ...(options?.style ? { style: options.style } : {}),
   };
 }
 
@@ -250,21 +255,33 @@ export function buildChannelKeyboard(
 ): ReplyMarkup {
   return {
     inline_keyboard: [
-      ...channels.map((channel, index) => [
-        inlineBtn(truncateLabel(channel.name, 18), `channel_toggle:${index}`, {
-          emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
-        }),
-        inlineBtn(COUNTRY_LABELS[channel.country] ?? channel.country, `channel_country:${index}`, {
-          emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
-        }),
-        inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 14), `channel_bank:${index}`, {
-          emojiId: PREMIUM_EMOJI.openFolder,
-        }),
-      ]),
+      ...channels.map((channel, index) => {
+        const activeStyle: ButtonStyle | undefined = channel.enabled ? "success" : undefined;
+        return [
+          inlineBtn(truncateLabel(channel.name, 18), `channel_toggle:${index}`, {
+            emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+            style: activeStyle,
+          }),
+          inlineBtn(COUNTRY_LABELS[channel.country] ?? channel.country, `channel_country:${index}`, {
+            emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
+            style: activeStyle,
+          }),
+          inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 14), `channel_bank:${index}`, {
+            emojiId: PREMIUM_EMOJI.openFolder,
+            style: activeStyle,
+          }),
+        ];
+      }),
       [inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh })],
       [
-        inlineBtn("Включить все", "channels:all_on", { emojiId: PREMIUM_EMOJI.check }),
-        inlineBtn("Снять все", "channels:all_off", { emojiId: PREMIUM_EMOJI.cross }),
+        inlineBtn("Включить все", "channels:all_on", {
+          emojiId: PREMIUM_EMOJI.check,
+          style: "success",
+        }),
+        inlineBtn("Снять все", "channels:all_off", {
+          emojiId: PREMIUM_EMOJI.cross,
+          style: "danger",
+        }),
       ],
     ],
   };
@@ -316,6 +333,7 @@ export function buildFoldersKeyboard(
   const rows = slice.map((folder, offset) => [
     inlineBtn(truncateLabel(folder.name, 28), `folder_toggle:${start + offset}`, {
       emojiId: folder.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+      style: folder.enabled ? "success" : undefined,
     }),
   ]);
 
@@ -335,8 +353,12 @@ export function buildFoldersKeyboard(
   rows.push([
     inlineBtn(allEnabled ? "Все вкл." : "Включить все", "folders:all_on", {
       emojiId: PREMIUM_EMOJI.check,
+      style: "success",
     }),
-    inlineBtn("Снять все", "folders:all_off", { emojiId: PREMIUM_EMOJI.cross }),
+    inlineBtn("Снять все", "folders:all_off", {
+      emojiId: PREMIUM_EMOJI.cross,
+      style: "danger",
+    }),
   ]);
   rows.push([inlineBtn("Обновить папки", "folders:refresh", { emojiId: PREMIUM_EMOJI.refresh })]);
   rows.push([inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })]);
@@ -357,14 +379,30 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn("Pager аккаунт", "menu:pager_account", { emojiId: PREMIUM_EMOJI.lock }),
-        inlineBtn("Каналы", "menu:channels", { emojiId: PREMIUM_EMOJI.channels }),
+        inlineBtn("Pager аккаунт", "menu:pager_account", {
+          emojiId: PREMIUM_EMOJI.lock,
+          style: "primary",
+        }),
+        inlineBtn("Каналы", "menu:channels", {
+          emojiId: PREMIUM_EMOJI.channels,
+          style: "primary",
+        }),
       ],
       [
-        inlineBtn("Папки", "menu:folders", { emojiId: PREMIUM_EMOJI.folder }),
-        inlineBtn("Статус", "menu:status", { emojiId: PREMIUM_EMOJI.status }),
+        inlineBtn("Папки", "menu:folders", {
+          emojiId: PREMIUM_EMOJI.folder,
+        }),
+        inlineBtn("Статус", "menu:status", {
+          emojiId: PREMIUM_EMOJI.status,
+          style: "success",
+        }),
       ],
-      [inlineBtn("Сброс", "menu:reset", { emojiId: PREMIUM_EMOJI.reset })],
+      [
+        inlineBtn("Сброс", "menu:reset", {
+          emojiId: PREMIUM_EMOJI.reset,
+          style: "danger",
+        }),
+      ],
     ],
   };
 }
@@ -374,12 +412,12 @@ export function buildOperatorReplyKeyboard(): ReplyMarkup {
   return {
     keyboard: [
       [
-        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock }),
-        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels }),
+        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
+        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
       ],
       [
         replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
-        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status }),
+        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
       ],
     ],
     resize_keyboard: true,
