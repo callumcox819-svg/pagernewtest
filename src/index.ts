@@ -366,7 +366,7 @@ async function handleCallback(
     await telegram.answerCallbackQuery(callbackId);
 
     if (value === "main") {
-      await sendMainMenu(chatId, state);
+      await sendMainMenu(chatId, state, messageId);
       return;
     }
 
@@ -707,7 +707,7 @@ async function safeEditMenu(
   chatId: number,
   messageId: number | undefined,
   text: string,
-  keyboard: ReturnType<typeof buildChannelKeyboard>,
+  keyboard: ReturnType<typeof buildMainMenuKeyboard>,
   callbackId?: string,
 ) {
   if (!messageId) {
@@ -954,8 +954,7 @@ function buildChannelRuntimeMap(
 }
 
 async function showChannelsMenu(chatId: number, state: ChatState, messageId?: number) {
-  const text =
-    "Слева 🟢/🔴 — вкл/выкл канал, по центру страна, справа — папка шаблонов (saved replies). Статусные папки чатов — в меню «Папки».";
+  const text = buildChannelsMenuCaption(state);
   const keyboard = buildChannelKeyboard(getSelectableChannels(state));
 
   if (!messageId) {
@@ -1415,19 +1414,49 @@ async function handlePendingInput(
   return false;
 }
 
-async function sendMainMenu(chatId: number, state: ChatState) {
-  const effectiveChannel = getEffectiveChannel(state);
-  await telegram.sendMessage(
-    chatId,
-    [
-      "Pager test bot is running.",
-      `Канал: ${effectiveChannel.name} | ${effectiveChannel.country}`,
-      `Банк шаблонов: ${state.templateBankOverride ?? effectiveChannel.templateBank}`,
-      `Pager: ${state.pagerAccount?.organizationName ?? (state.pagerAccount ? "connected" : "not connected")}`,
-      "Выбери действие кнопками ниже.",
-    ].join("\n"),
-    buildMainMenuKeyboard(),
+async function sendMainMenu(chatId: number, state: ChatState, messageId?: number) {
+  const text = buildMainMenuCaption(state);
+  const keyboard = buildMainMenuKeyboard();
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+function buildMainMenuCaption(state: ChatState): string {
+  const account = state.pagerAccount;
+  const hasPager = Boolean(account?.cookies?.trim() || (account?.email && account?.password));
+  if (!hasPager) {
+    return "Pager не подключён — открой «Pager аккаунт».";
+  }
+
+  const org = account?.organizationName || account?.organizationSlug || "Pager";
+  const enabledChannels = getSelectableChannels(state).filter((channel) =>
+    isChannelEnabled(state, channel.id, getChannelRuntime(state, channel.id, channel.country).enabled),
   );
+  const liveCount = account?.liveChannels?.length ?? enabledChannels.length;
+  if (!enabledChannels.length) {
+    return `Pager: ${org}\nКаналы не включены (${liveCount} доступно).`;
+  }
+
+  const summary = enabledChannels
+    .slice(0, 4)
+    .map((channel) => `${channel.name} · ${channel.country}`)
+    .join("\n");
+  const extra =
+    enabledChannels.length > 4 ? `\n… ещё ${enabledChannels.length - 4}` : "";
+  return `Pager: ${org}\nВключено ${enabledChannels.length}/${liveCount}:\n${summary}${extra}`;
+}
+
+function buildChannelsMenuCaption(state: ChatState): string {
+  const account = state.pagerAccount;
+  const org = account?.organizationName || account?.organizationSlug || "Pager";
+  const channels = getSelectableChannels(state);
+  const enabled = channels.filter((channel) =>
+    isChannelEnabled(state, channel.id, getChannelRuntime(state, channel.id, channel.country).enabled),
+  ).length;
+  return `Pager: ${org} · каналы ${enabled}/${channels.length}\nСлева вкл/выкл · центр страна · справа шаблоны.`;
 }
 
 async function sendPagerAccountMenu(chatId: number, state: ChatState) {
@@ -1499,9 +1528,14 @@ function resolveMenuTextAction(text?: string): MenuAction | undefined {
   return undefined;
 }
 
-async function dispatchMenuAction(chatId: number, state: ChatState, action: MenuAction): Promise<void> {
+async function dispatchMenuAction(
+  chatId: number,
+  state: ChatState,
+  action: MenuAction,
+  messageId?: number,
+): Promise<void> {
   if (action === "main") {
-    await sendMainMenu(chatId, state);
+    await sendMainMenu(chatId, state, messageId);
     return;
   }
   if (action === "pager_account") {

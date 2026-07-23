@@ -21,40 +21,52 @@ type ReplyMarkup = {
   remove_keyboard?: boolean;
 };
 
-/** RestrictedEmoji pack IDs — animated icons on bot owner Premium (Bot API 9.4+). */
+/** RestrictedEmoji pack IDs — animated icons (bot owner Telegram Premium, Bot API 9.4+). */
 const PREMIUM_EMOJI = {
   lock: "5472308992514464048",
   channels: "5373330964372004748",
   folder: "5433653135799228968",
+  openFolder: "5431721976769027887",
   status: "5431577498364158238",
   reset: "5264727218734524899",
   robot: "5372981976804366741",
   email: "5406631276042002796",
   link: "5375129357373165375",
   back: "5264727218734524899",
+  refresh: "5264727218734524899",
+  check: "5427009714745517609",
+  cross: "5465665476971471368",
+  flagEg: "5226476858471626962",
+  flagZm: "5339279432857171449",
+  flagCm: "5474681124426884947",
+  globe: "5399898266265475100",
+  chart: "5431577498364158238",
+  left: "5264727218734524899",
+  right: "5264727218734524899",
 } as const;
+
+const FLAG_EMOJI: Record<string, string> = {
+  EG: PREMIUM_EMOJI.flagEg,
+  ZM: PREMIUM_EMOJI.flagZm,
+  CM: PREMIUM_EMOJI.flagCm,
+};
 
 function inlineBtn(
   text: string,
   callbackData: string,
-  options?: { emojiId?: string; style?: ButtonStyle },
+  options?: { emojiId?: string },
 ): InlineKeyboardButton {
   return {
     text,
     callback_data: callbackData,
     ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
-    ...(options?.style ? { style: options.style } : {}),
   };
 }
 
-function replyBtn(
-  text: string,
-  options?: { emojiId?: string; style?: ButtonStyle },
-): ReplyKeyboardButton {
+function replyBtn(text: string, options?: { emojiId?: string }): ReplyKeyboardButton {
   return {
     text,
     ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
-    ...(options?.style ? { style: options.style } : {}),
   };
 }
 
@@ -215,9 +227,9 @@ export class TelegramApi {
 }
 
 const COUNTRY_LABELS: Record<string, string> = {
-  ZM: "🇿🇲 ZM",
-  EG: "🇪🇬 EG",
-  CM: "🇨🇲 CM",
+  ZM: "ZM",
+  EG: "EG",
+  CM: "CM",
 };
 
 function truncateLabel(value: string, max = 14): string {
@@ -239,23 +251,20 @@ export function buildChannelKeyboard(
   return {
     inline_keyboard: [
       ...channels.map((channel, index) => [
-        {
-          text: `${channel.enabled ? "🟢" : "🔴"} ${channel.name}`,
-          callback_data: `channel_toggle:${index}`,
-        },
-        {
-          text: COUNTRY_LABELS[channel.country] ?? channel.country,
-          callback_data: `channel_country:${index}`,
-        },
-        {
-          text: truncateLabel(channel.templateBank ?? "Шаблоны"),
-          callback_data: `channel_bank:${index}`,
-        },
+        inlineBtn(truncateLabel(channel.name, 18), `channel_toggle:${index}`, {
+          emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+        }),
+        inlineBtn(COUNTRY_LABELS[channel.country] ?? channel.country, `channel_country:${index}`, {
+          emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
+        }),
+        inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 14), `channel_bank:${index}`, {
+          emojiId: PREMIUM_EMOJI.openFolder,
+        }),
       ]),
-      [{ text: "🔄 Обновить каналы", callback_data: "channels:refresh" }],
+      [inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh })],
       [
-        { text: "🟢 Включить все", callback_data: "channels:all_on" },
-        { text: "🔴 Снять все", callback_data: "channels:all_off" },
+        inlineBtn("Включить все", "channels:all_on", { emojiId: PREMIUM_EMOJI.check }),
+        inlineBtn("Снять все", "channels:all_off", { emojiId: PREMIUM_EMOJI.cross }),
       ],
     ],
   };
@@ -265,12 +274,12 @@ export function buildCountryKeyboard(channelIndex: number): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        { text: "🇿🇲 Замбия", callback_data: `country_pick:${channelIndex}:ZM` },
-        { text: "🇪🇬 Египет", callback_data: `country_pick:${channelIndex}:EG` },
+        inlineBtn("Замбия", `country_pick:${channelIndex}:ZM`, { emojiId: PREMIUM_EMOJI.flagZm }),
+        inlineBtn("Египет", `country_pick:${channelIndex}:EG`, { emojiId: PREMIUM_EMOJI.flagEg }),
       ],
       [
-        { text: "🇨🇲 Камерун", callback_data: `country_pick:${channelIndex}:CM` },
-        { text: "« Назад", callback_data: "channels:back" },
+        inlineBtn("Камерун", `country_pick:${channelIndex}:CM`, { emojiId: PREMIUM_EMOJI.flagCm }),
+        inlineBtn("Назад", "channels:back", { emojiId: PREMIUM_EMOJI.back }),
       ],
     ],
   };
@@ -281,13 +290,12 @@ export function buildTemplateKeyboard(
   templateBanks: Array<{ id: string; name: string }>,
 ): ReplyMarkup {
   const rows = templateBanks.map((bank, folderIndex) => [
-    {
-      text: bank.name,
-      callback_data: `template_pick:${channelIndex}:${folderIndex}`,
-    },
+    inlineBtn(bank.name, `template_pick:${channelIndex}:${folderIndex}`, {
+      emojiId: PREMIUM_EMOJI.openFolder,
+    }),
   ]);
 
-  rows.push([{ text: "« Назад", callback_data: "channels:back" }]);
+  rows.push([inlineBtn("Назад", "channels:back", { emojiId: PREMIUM_EMOJI.back })]);
 
   return {
     inline_keyboard: rows,
@@ -306,34 +314,32 @@ export function buildFoldersKeyboard(
   const slice = folders.slice(start, start + FOLDERS_PAGE_SIZE);
 
   const rows = slice.map((folder, offset) => [
-    {
-      text: `${folder.enabled ? "✅" : "⬜"} ${truncateLabel(folder.name, 28)}`,
-      callback_data: `folder_toggle:${start + offset}`,
-    },
+    inlineBtn(truncateLabel(folder.name, 28), `folder_toggle:${start + offset}`, {
+      emojiId: folder.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+    }),
   ]);
 
   if (totalPages > 1) {
     const nav: InlineKeyboardButton[] = [];
     if (safePage > 0) {
-      nav.push({ text: "◀️", callback_data: `folders:page:${safePage - 1}` });
+      nav.push(inlineBtn("◀", `folders:page:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }));
     }
-    nav.push({ text: `${safePage + 1}/${totalPages}`, callback_data: "folders:noop" });
+    nav.push(inlineBtn(`${safePage + 1}/${totalPages}`, "folders:noop"));
     if (safePage < totalPages - 1) {
-      nav.push({ text: "▶️", callback_data: `folders:page:${safePage + 1}` });
+      nav.push(inlineBtn("▶", `folders:page:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }));
     }
     rows.push(nav);
   }
 
   const allEnabled = folders.length > 0 && folders.every((folder) => folder.enabled);
   rows.push([
-    {
-      text: allEnabled ? "✅ Все вкл." : "📂 Включить все",
-      callback_data: "folders:all_on",
-    },
-    { text: "⬜ Снять все", callback_data: "folders:all_off" },
+    inlineBtn(allEnabled ? "Все вкл." : "Включить все", "folders:all_on", {
+      emojiId: PREMIUM_EMOJI.check,
+    }),
+    inlineBtn("Снять все", "folders:all_off", { emojiId: PREMIUM_EMOJI.cross }),
   ]);
-  rows.push([{ text: "🔄 Обновить папки", callback_data: "folders:refresh" }]);
-  rows.push([{ text: "« Назад", callback_data: "menu:main" }]);
+  rows.push([inlineBtn("Обновить папки", "folders:refresh", { emojiId: PREMIUM_EMOJI.refresh })]);
+  rows.push([inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })]);
 
   return { inline_keyboard: rows };
 }
@@ -341,8 +347,8 @@ export function buildFoldersKeyboard(
 export function buildFoldersRetryKeyboard(): ReplyMarkup {
   return {
     inline_keyboard: [
-      [{ text: "🔄 Обновить папки", callback_data: "folders:refresh" }],
-      [{ text: "« Назад", callback_data: "menu:main" }],
+      [inlineBtn("Обновить папки", "folders:refresh", { emojiId: PREMIUM_EMOJI.refresh })],
+      [inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })],
     ],
   };
 }
@@ -351,28 +357,14 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn("Pager аккаунт", "menu:pager_account", {
-          emojiId: PREMIUM_EMOJI.lock,
-          style: "primary",
-        }),
-        inlineBtn("Каналы", "menu:channels", {
-          emojiId: PREMIUM_EMOJI.channels,
-          style: "primary",
-        }),
+        inlineBtn("Pager аккаунт", "menu:pager_account", { emojiId: PREMIUM_EMOJI.lock }),
+        inlineBtn("Каналы", "menu:channels", { emojiId: PREMIUM_EMOJI.channels }),
       ],
       [
         inlineBtn("Папки", "menu:folders", { emojiId: PREMIUM_EMOJI.folder }),
-        inlineBtn("Статус", "menu:status", {
-          emojiId: PREMIUM_EMOJI.status,
-          style: "success",
-        }),
+        inlineBtn("Статус", "menu:status", { emojiId: PREMIUM_EMOJI.status }),
       ],
-      [
-        inlineBtn("Сброс", "menu:reset", {
-          emojiId: PREMIUM_EMOJI.reset,
-          style: "danger",
-        }),
-      ],
+      [inlineBtn("Сброс", "menu:reset", { emojiId: PREMIUM_EMOJI.reset })],
     ],
   };
 }
@@ -382,12 +374,12 @@ export function buildOperatorReplyKeyboard(): ReplyMarkup {
   return {
     keyboard: [
       [
-        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
-        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
+        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock }),
+        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels }),
       ],
       [
         replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
-        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
+        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status }),
       ],
     ],
     resize_keyboard: true,
@@ -399,17 +391,12 @@ export function buildPagerAccountKeyboard(isConnected: boolean): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn("Email + пароль", "pager:login_password", {
-          emojiId: PREMIUM_EMOJI.email,
-        }),
-        inlineBtn("Импорт cookies", "pager:import_cookies", {
-          emojiId: PREMIUM_EMOJI.link,
-        }),
+        inlineBtn("Email + пароль", "pager:login_password", { emojiId: PREMIUM_EMOJI.email }),
+        inlineBtn("Импорт cookies", "pager:import_cookies", { emojiId: PREMIUM_EMOJI.link }),
       ],
       [
         inlineBtn(isConnected ? "Отключить" : "Очистить", "pager:disconnect", {
-          emojiId: PREMIUM_EMOJI.reset,
-          style: isConnected ? "danger" : "primary",
+          emojiId: PREMIUM_EMOJI.cross,
         }),
       ],
       [inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })],
