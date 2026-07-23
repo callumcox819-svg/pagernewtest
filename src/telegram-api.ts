@@ -4,7 +4,8 @@ type InlineKeyboardButton = {
 };
 
 type ReplyMarkup = {
-  inline_keyboard: InlineKeyboardButton[][];
+  inline_keyboard?: InlineKeyboardButton[][];
+  remove_keyboard?: boolean;
 };
 
 type TelegramResponse<T> = {
@@ -77,6 +78,15 @@ export class TelegramApi {
       reply_markup: replyMarkup,
     });
     return result.message_id;
+  }
+
+  /** Drop stale Telegram reply-keyboard menus from older bot builds. */
+  async removeReplyKeyboard(chatId: number): Promise<void> {
+    await this.request("sendMessage", {
+      chat_id: chatId,
+      text: "Меню обновлено — используй кнопки под сообщением.",
+      reply_markup: { remove_keyboard: true },
+    });
   }
 
   async editMessageReplyMarkup(

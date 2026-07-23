@@ -469,6 +469,12 @@ async function handleMessage(message: TelegramMessage) {
     }
   }
 
+  const menuAction = resolveMenuTextAction(message.text);
+  if (menuAction) {
+    await dispatchMenuAction(chatId, state, menuAction);
+    return;
+  }
+
   const effectiveChannel = getEffectiveChannel(state);
   const playbook = getPlaybook(config, effectiveChannel.country);
 
@@ -558,6 +564,7 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
   const command = normalizeTelegramCommand(commandText);
 
   if (command === "/start") {
+    await telegram.removeReplyKeyboard(chatId).catch(() => {});
     await sendMainMenu(chatId, state);
     return;
   }
@@ -1454,6 +1461,72 @@ async function sendPagerAccountMenu(chatId: number, state: ChatState) {
     chatId,
     lines.join("\n"),
     buildPagerAccountKeyboard(Boolean(account)),
+  );
+}
+
+type MenuAction = "main" | "pager_account" | "channels" | "folders" | "status" | "reset";
+
+function normalizeMenuButtonText(text: string): string {
+  return text
+    .replace(/[^\p{L}\p{N}\s/:-]+/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function resolveMenuTextAction(text?: string): MenuAction | undefined {
+  if (!text?.trim()) {
+    return undefined;
+  }
+  const normalized = normalizeMenuButtonText(text);
+  if (/^(pager аккаунт|pager account|account)$/.test(normalized)) {
+    return "pager_account";
+  }
+  if (/^(каналы|channels)$/.test(normalized)) {
+    return "channels";
+  }
+  if (/^(выбор папок|папки|folders)$/.test(normalized)) {
+    return "folders";
+  }
+  if (/^(статус|status|настройки|settings)$/.test(normalized)) {
+    return "status";
+  }
+  if (/^(сброс|reset)$/.test(normalized)) {
+    return "reset";
+  }
+  if (/^(меню|menu|start)$/.test(normalized)) {
+    return "main";
+  }
+  return undefined;
+}
+
+async function dispatchMenuAction(chatId: number, state: ChatState, action: MenuAction): Promise<void> {
+  if (action === "main") {
+    await sendMainMenu(chatId, state);
+    return;
+  }
+  if (action === "pager_account") {
+    await sendPagerAccountMenu(chatId, state);
+    return;
+  }
+  if (action === "channels") {
+    await showChannelsMenu(chatId, state);
+    return;
+  }
+  if (action === "folders") {
+    await showFoldersMenu(chatId, state);
+    return;
+  }
+  if (action === "status") {
+    await sendStatus(chatId, state);
+    return;
+  }
+  await stateStore.delete(chatId);
+  const nextState = await getOrCreateState(chatId);
+  await telegram.sendMessage(
+    chatId,
+    `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
+    buildMainMenuKeyboard(),
   );
 }
 
