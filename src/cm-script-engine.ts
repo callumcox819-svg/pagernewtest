@@ -209,42 +209,19 @@ function canSendCmRegistration(
   return tierSent && tierChoice;
 }
 
-/** After tier table: interest / app / ready → registration (same as previous Python bot). */
+/** After tier table: registration only once the client picked 1000 or 1500 CFA. */
 function cmReadyForRegAfterTier(
   text: string,
   intent: CmIntent,
   tierSent: boolean,
   tierChoice: boolean,
   linkSent: boolean,
-  signal: boolean,
+  _signal: boolean,
 ): boolean {
   if (!tierSent || linkSent) {
     return false;
   }
-  if (tierChoice) {
-    return true;
-  }
-  const t = (text || "").trim();
-  if (!t && !signal) {
-    return false;
-  }
-  if (
-    intent === "interested" ||
-    intent === "positive" ||
-    intent === "ready" ||
-    intent === "question" ||
-    signal
-  ) {
-    return true;
-  }
-  return (
-    isReadyForRegistration(t) ||
-    isClientReadyPhrase(t) ||
-    wantsRegistrationLink(t) ||
-    isCmRegistrationHelpRequest(t) ||
-    isRegistrationAccountQuestion(t) ||
-    /\b(application|appli|lien|inscri|enregistr|commencer|continuer|ok|oui|d'accord)\b/i.test(t)
-  );
+  return tierChoice;
 }
 
 function cmRegBundleIfEligible(
@@ -770,6 +747,14 @@ export function limitCmScriptsForCustomerTurn(
 ): string[] {
   if (!scriptKeys.length) {
     return scriptKeys;
+  }
+  const tierPending = scriptKeys.includes("04_tier");
+  const regPending = scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
+  if (tierPending && regPending) {
+    return tierSentInHistory(outgoingTexts) ? limitCmScriptsForCustomerTurn(
+      scriptKeys.filter((key) => CM_REG_SEND_KEYS.has(key)),
+      outgoingTexts,
+    ) : ["04_tier"];
   }
   if (
     scriptKeys.includes("01_intro") &&

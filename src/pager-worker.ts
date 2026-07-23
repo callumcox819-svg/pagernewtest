@@ -319,7 +319,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   const channelIds = enabledChannels.map((item) => item.channelId);
-  const channelNames = enabledChannels.map((item) => item.channelName).join(", ");
+  const channelSummary = enabledChannels
+    .map((item) => `${item.channelName}:${item.runtime.country}`)
+    .join(", ");
   if (liveCoverage.missingFromLive.length) {
     console.warn(
       `Pager worker: chat ${freshState.chatId} — enabled channels missing from live session: ${liveCoverage.missingFromLive.join(", ")}`,
@@ -342,7 +344,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   console.log(
     [
       `Pager worker: chat ${freshState.chatId}`,
-      `channels=[${channelNames}]`,
+      `channels=[${channelSummary}]`,
       `fetched=${conversations.length} conversations`,
       `egPoll=${enabledEgChannels.map((item) => item.channelName).join(",") || "none"}`,
     ].join(" | "),

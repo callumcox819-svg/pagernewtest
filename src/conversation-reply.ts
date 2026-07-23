@@ -23,6 +23,8 @@ import {
   isReadyForRegistration,
   isRegistrationConfirmed,
   isCmRegistrationHelpRequest,
+  isRegistrationAccountQuestion,
+  wantsRegistrationLink,
 } from "./cm-intent.js";
 import {
   isInProgressStatusConversation,
@@ -439,9 +441,9 @@ export function cmFunnelNeedsContinuation(
   if (!linkSent) {
     return (
       isDepositTierChoice(text) ||
-      ready ||
       isCmRegistrationHelpRequest(text) ||
-      /^\d[\d\s]*$/.test(text)
+      isRegistrationAccountQuestion(text) ||
+      wantsRegistrationLink(text)
     );
   }
   if (!depositSent) {
