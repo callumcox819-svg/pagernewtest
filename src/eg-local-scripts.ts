@@ -72,28 +72,21 @@ export function isEgBareLinkOnlyMessage(text: string): boolean {
   return /tinyurl\.com\/egypt0011/i.test(trimmed) && trimmed.length < 160 && !/هبعتلك اللينك/i.test(trimmed);
 }
 
-/** Arabic registration instructions + link in one Pager message (EG funnel). */
-export function buildEgRegistrationWithLinkMessage(): string {
-  const reg = loadLocalEgScript("04_registration")?.trim() ?? EMBEDDED_EG_SCRIPTS["04_registration"];
-  const link = loadLocalEgScript("05_link")?.trim() || DEFAULT_EG_LINK;
-  return `${reg}\n\n${link}`;
+export function buildEgRegistrationOnlyMessage(): string | undefined {
+  return loadLocalEgScript("04_registration")?.trim() ?? EMBEDDED_EG_SCRIPTS["04_registration"];
 }
 
 export function buildEgLinkOnlyMessage(): string {
   return loadLocalEgScript("05_link")?.trim() || DEFAULT_EG_LINK;
 }
 
-/** Never send a bare Egypt URL when the reg template was not sent yet. */
-export function ensureEgRegistrationBeforeLink(
+/** Block a lone URL when registration text has not gone out yet (caller sends reg first). */
+export function shouldBlockEgBareLinkSend(
   replyText: string,
   options: { regAlreadyInHistory: boolean; regSentThisTurn: boolean },
-): string {
-  const trimmed = replyText.trim();
-  if (!isEgBareLinkOnlyMessage(trimmed)) {
-    return trimmed;
-  }
+): boolean {
   if (options.regAlreadyInHistory || options.regSentThisTurn) {
-    return trimmed;
+    return false;
   }
-  return buildEgRegistrationWithLinkMessage();
+  return isEgBareLinkOnlyMessage(replyText);
 }

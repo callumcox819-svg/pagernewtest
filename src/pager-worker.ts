@@ -111,7 +111,7 @@ import type {
   StateStore,
 } from "./state-store.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
-import { buildEgLinkOnlyMessage, buildEgRegistrationWithLinkMessage, ensureEgRegistrationBeforeLink, loadLocalEgScript } from "./eg-local-scripts.js";
+import { buildEgLinkOnlyMessage, buildEgRegistrationOnlyMessage, loadLocalEgScript, shouldBlockEgBareLinkSend } from "./eg-local-scripts.js";
 import { getDeployLabel } from "./telegram-api.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
@@ -1421,6 +1421,31 @@ async function processZmConversation(
   return true;
 }
 
+async function sendEgRegistrationThenLink(
+  client: PagerClient,
+  convId: string,
+  runtime: EnabledChannel,
+  conv: PagerConversation,
+): Promise<boolean> {
+  const regText = buildEgRegistrationOnlyMessage();
+  if (!regText?.trim()) {
+    return false;
+  }
+  const linkText = buildEgLinkOnlyMessage();
+  const sentReg = await client.sendMessageReliable(convId, regText.trim(), {
+    channelId: runtime.channelId,
+    conv,
+  });
+  if (!sentReg) {
+    return false;
+  }
+  await sleep(500);
+  return client.sendMessageReliable(convId, linkText.trim(), {
+    channelId: runtime.channelId,
+    conv,
+  });
+}
+
 async function processEgConversation(
   deps: WorkerDeps,
   state: ChatState,
@@ -1623,24 +1648,12 @@ async function processEgConversation(
       !egFullRegistrationInstructionsSentInHistory(outgoingTexts) &&
       !sentScriptKeys.includes("04_registration")
     ) {
-      const combined = buildEgRegistrationWithLinkMessage();
-      if (combined.trim()) {
-        const sent = await client.sendMessageReliable(convId, combined.trim(), {
-          channelId: runtime.channelId,
-          conv,
-        });
-        if (!sent) {
-          const failures = (convState.sendFailures ?? 0) + 1;
-          await patchConversationState(deps.stateStore, state.chatId, convId, {
-            sendFailures: failures,
-          });
-          console.error(`Pager worker: EG send failed ${convId.slice(0, 8)} key=04_registration+05_link`);
-          return sentAny;
-        }
+      const sentBundle = await sendEgRegistrationThenLink(client, convId, runtime, conv);
+      if (sentBundle) {
         sentAny = true;
         sentScriptKeys.push("04_registration", "05_link");
         console.log(
-          `Pager worker: EG ${convId.slice(0, 8)} sent registration text + link (combined) build=${getDeployLabel()}`,
+          `Pager worker: EG ${convId.slice(0, 8)} sent registration text then link (2 messages) build=${getDeployLabel()}`,
         );
         await patchConversationState(deps.stateStore, state.chatId, convId, {
           conversationId: convId,
@@ -1653,6 +1666,12 @@ async function processEgConversation(
         });
         continue;
       }
+      const failures = (convState.sendFailures ?? 0) + 1;
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: failures,
+      });
+      console.error(`Pager worker: EG send failed ${convId.slice(0, 8)} key=04_registration+05_link`);
+      return sentAny;
     }
 
     let activeScriptKey = scriptKey;
@@ -1685,10 +1704,21 @@ async function processEgConversation(
       !sentScriptKeys.includes("04_registration") &&
       !egFullRegistrationInstructionsSentInHistory(outgoingTexts)
     ) {
-      const combined = buildEgRegistrationWithLinkMessage();
-      if (combined.trim()) {
-        console.warn(`EG defer bare link — sending combined reg+link ${convId.slice(0, 8)}`);
-        replyText = combined;
+      const regText = buildEgRegistrationOnlyMessage();
+      if (regText?.trim()) {
+        console.warn(`EG defer bare link — sending registration text first ${convId.slice(0, 8)}`);
+        const sentReg = await client.sendMessageReliable(convId, regText.trim(), {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (!sentReg) {
+          console.warn(`EG registration text send failed ${convId.slice(0, 8)}`);
+          continue;
+        }
+        sentAny = true;
+        sentScriptKeys.push("04_registration");
+        await sleep(500);
+        replyText = buildEgLinkOnlyMessage();
         activeScriptKey = "05_link";
       }
     }
@@ -1710,10 +1740,15 @@ async function processEgConversation(
       }
     }
 
-    replyText = ensureEgRegistrationBeforeLink(replyText, {
-      regAlreadyInHistory: egFullRegistrationInstructionsSentInHistory(outgoingTexts),
-      regSentThisTurn: sentScriptKeys.includes("04_registration"),
-    });
+    if (
+      shouldBlockEgBareLinkSend(replyText, {
+        regAlreadyInHistory: egFullRegistrationInstructionsSentInHistory(outgoingTexts),
+        regSentThisTurn: sentScriptKeys.includes("04_registration"),
+      })
+    ) {
+      console.warn(`EG skip bare link ${convId.slice(0, 8)} — registration text must go first`);
+      continue;
+    }
 
     const sent = await client.sendMessageReliable(convId, replyText.trim(), {
       channelId: runtime.channelId,
@@ -1728,15 +1763,7 @@ async function processEgConversation(
       return sentAny;
     }
     sentAny = true;
-    if (
-      activeScriptKey === "05_link" &&
-      replyText.includes("هبعتلك اللينك") &&
-      !sentScriptKeys.includes("04_registration")
-    ) {
-      sentScriptKeys.push("04_registration", "05_link");
-    } else {
-      sentScriptKeys.push(activeScriptKey);
-    }
+    sentScriptKeys.push(activeScriptKey);
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,
