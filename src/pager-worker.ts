@@ -111,7 +111,7 @@ import type {
   StateStore,
 } from "./state-store.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
-import { loadLocalEgScript } from "./eg-local-scripts.js";
+import { buildEgLinkOnlyMessage, buildEgRegistrationWithLinkMessage, loadLocalEgScript } from "./eg-local-scripts.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
@@ -1609,6 +1609,49 @@ async function processEgConversation(
   const sentScriptKeys: string[] = [];
   const allowMultiSend = egAllowsMultiSend(scriptKeys);
   for (const scriptKey of scriptKeys) {
+    if (
+      (scriptKey === "04_registration" || scriptKey === "05_link") &&
+      sentScriptKeys.includes("04_registration") &&
+      sentScriptKeys.includes("05_link")
+    ) {
+      continue;
+    }
+
+    if (
+      (scriptKey === "04_registration" || scriptKey === "05_link") &&
+      !egFullRegistrationInstructionsSentInHistory(outgoingTexts) &&
+      !sentScriptKeys.includes("04_registration")
+    ) {
+      const combined = buildEgRegistrationWithLinkMessage();
+      if (combined?.trim()) {
+        const sent = await client.sendMessageReliable(convId, combined.trim(), {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (!sent) {
+          const failures = (convState.sendFailures ?? 0) + 1;
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            sendFailures: failures,
+          });
+          console.error(`Pager worker: EG send failed ${convId.slice(0, 8)} key=04_registration+05_link`);
+          return sentAny;
+        }
+        sentAny = true;
+        sentScriptKeys.push("04_registration", "05_link");
+        console.log(`Pager worker: EG ${convId.slice(0, 8)} sent registration text + link (combined)`);
+        await patchConversationState(deps.stateStore, state.chatId, convId, {
+          conversationId: convId,
+          channelId: runtime.channelId,
+          lastCustomerMessageId: lastIncoming.id,
+          lastCustomerMessageAt: lastIncoming.createdAt,
+          lastReplyAt: new Date().toISOString(),
+          lastReplyRole: "05_link",
+          sendFailures: 0,
+        });
+        continue;
+      }
+    }
+
     let activeScriptKey = scriptKey;
     let replyText = await resolveScriptTextByKey(client, {
       folderId,
@@ -1639,11 +1682,11 @@ async function processEgConversation(
       !sentScriptKeys.includes("04_registration") &&
       !egFullRegistrationInstructionsSentInHistory(outgoingTexts)
     ) {
-      const localReg = loadLocalEgScript("04_registration");
-      if (localReg?.trim()) {
-        console.warn(`EG defer bare link — sending 04_registration first ${convId.slice(0, 8)}`);
-        replyText = localReg;
-        activeScriptKey = "04_registration";
+      const combined = buildEgRegistrationWithLinkMessage();
+      if (combined?.trim()) {
+        console.warn(`EG defer bare link — sending combined reg+link ${convId.slice(0, 8)}`);
+        replyText = combined;
+        activeScriptKey = "05_link";
       }
     }
     if (!replyText?.trim()) {
@@ -1655,7 +1698,7 @@ async function processEgConversation(
           console.warn(`EG skip bare link ${convId.slice(0, 8)} — registration text missing`);
           continue;
         }
-        replyText = loadLocalEgScript("05_link")?.trim() || "https://tinyurl.com/Egypt0011";
+        replyText = buildEgLinkOnlyMessage();
       } else {
         console.warn(
           `EG script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${activeScriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
@@ -1677,7 +1720,15 @@ async function processEgConversation(
       return sentAny;
     }
     sentAny = true;
-    sentScriptKeys.push(activeScriptKey);
+    if (
+      activeScriptKey === "05_link" &&
+      replyText.includes("هبعتلك اللينك") &&
+      !sentScriptKeys.includes("04_registration")
+    ) {
+      sentScriptKeys.push("04_registration", "05_link");
+    } else {
+      sentScriptKeys.push(activeScriptKey);
+    }
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,

@@ -72,6 +72,9 @@ export function isEgScriptTextAcceptable(scriptKey: string, text: string): boole
   if (scriptKey === "05_link") {
     return /tinyurl\.com\/egypt0011/i.test(body) || /^https?:\/\//i.test(body);
   }
+  if (scriptKey === "04_registration" && isEgHowItWorksPitchBody(body)) {
+    return false;
+  }
   if (!containsArabicScript(body)) {
     return false;
   }
@@ -133,14 +136,11 @@ export function egRegistrationInstructionsSentInHistory(outgoingTexts: string[])
 
 /** Full Arabic reg text (EG011 + country/currency), not a bare link or partial operator line. */
 export function egFullRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
-  if (egScriptSentInHistory(outgoingTexts, "04_registration")) {
-    return outgoingTexts.some((text) => isEgFullRegistrationBody(text));
-  }
   return outgoingTexts.some((text) => isEgFullRegistrationBody(text));
 }
 
 /** 02_how_it_works mentions EG011 + جنيه — must not count as 04_registration sent. */
-function isEgHowItWorksPitchBody(text: string): boolean {
+export function isEgHowItWorksPitchBody(text: string): boolean {
   const lower = (text || "").trim().toLowerCase();
   if (!lower.includes("تمام كده")) {
     return false;
@@ -398,6 +398,9 @@ export function resolveEgFunnelScripts(
   }
 
   if (wantsRegistrationLink(t)) {
+    if (!egFullRegistrationInstructionsSentInHistory(out)) {
+      return ["04_registration", "05_link"];
+    }
     return registrationLinkScriptKeys("EG", linkSent);
   }
 

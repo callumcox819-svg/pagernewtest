@@ -12,6 +12,7 @@ import {
 import {
   EG_FOLDER_NAME_HINTS,
   EG_SCRIPT_EXCLUDE_SNIPPETS,
+  isEgHowItWorksPitchBody,
   scriptSearchNeedles as egScriptSearchNeedles,
   scriptSnippet as egScriptSnippet,
 } from "./eg-script-engine.js";
@@ -141,6 +142,12 @@ export async function resolveScriptTextByKey(
   if (isDisabledOutboundScriptKey(options.scriptKey)) {
     console.warn(`${country} script blocked (telegram removed): key=${options.scriptKey}`);
     return undefined;
+  }
+  if (country === "EG" && options.scriptKey === "04_registration") {
+    const localReg = loadLocalEgScript("04_registration");
+    if (localReg?.trim()) {
+      return localReg;
+    }
   }
   const folderId =
     country === "ZM"
@@ -380,6 +387,9 @@ function isScriptReplyAcceptable(text: string, scriptKey: string, country: Count
   }
 
   if (scriptKey === "04_registration" && country === "EG") {
+    if (isEgHowItWorksPitchBody(text)) {
+      return false;
+    }
     return body.includes("eg011") || body.includes("هبعتلك اللينك") || body.includes("google chrome");
   }
 

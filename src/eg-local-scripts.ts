@@ -23,3 +23,19 @@ export function loadLocalEgScript(scriptKey: string): string | undefined {
   cache.set(scriptKey, text);
   return text;
 }
+
+const DEFAULT_EG_LINK = "https://tinyurl.com/Egypt0011";
+
+/** Arabic registration instructions + link in one Pager message (EG funnel). */
+export function buildEgRegistrationWithLinkMessage(): string | undefined {
+  const reg = loadLocalEgScript("04_registration")?.trim();
+  if (!reg) {
+    return undefined;
+  }
+  const link = loadLocalEgScript("05_link")?.trim() || DEFAULT_EG_LINK;
+  return `${reg}\n\n${link}`;
+}
+
+export function buildEgLinkOnlyMessage(): string {
+  return loadLocalEgScript("05_link")?.trim() || DEFAULT_EG_LINK;
+}
