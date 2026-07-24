@@ -1,8 +1,41 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const SCRIPTS_DIR = join(process.cwd(), "scripts", "eg");
+const DEFAULT_EG_LINK = "https://tinyurl.com/Egypt0011";
+
+/** Bundled fallbacks if `scripts/eg/*.txt` is missing on the host (Railway cwd, etc.). */
+const EMBEDDED_EG_SCRIPTS: Record<string, string> = {
+  "04_registration": `هبعتلك اللينك دلوقتي
+انسخه وحطه في Chrome أو أي متصفح
+
+لما تسجل:
+مصر 🇪🇬
+EGP جنيه مصري
+كود EG011
+
+الإيميل أحسن من الموبايل — SMS بيتأخر ساعات
+
+خلصت؟ ابعتلي`,
+  "05_link": DEFAULT_EG_LINK,
+};
+
 const cache = new Map<string, string>();
+
+function resolveEgScriptsDir(): string {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(moduleDir, "..", "scripts", "eg"),
+    join(process.cwd(), "scripts", "eg"),
+    join(process.cwd(), "dist", "scripts", "eg"),
+  ];
+  for (const dir of candidates) {
+    if (existsSync(join(dir, "04_registration.txt"))) {
+      return dir;
+    }
+  }
+  return candidates[0]!;
+}
 
 export function loadLocalEgScript(scriptKey: string): string | undefined {
   const cached = cache.get(scriptKey);
@@ -10,32 +43,57 @@ export function loadLocalEgScript(scriptKey: string): string | undefined {
     return cached;
   }
 
-  const path = join(SCRIPTS_DIR, `${scriptKey}.txt`);
-  if (!existsSync(path)) {
-    return undefined;
+  const path = join(resolveEgScriptsDir(), `${scriptKey}.txt`);
+  if (existsSync(path)) {
+    const text = readFileSync(path, "utf8").trim();
+    if (text) {
+      cache.set(scriptKey, text);
+      return text;
+    }
   }
 
-  const text = readFileSync(path, "utf8").trim();
-  if (!text) {
-    return undefined;
+  const embedded = EMBEDDED_EG_SCRIPTS[scriptKey]?.trim();
+  if (embedded) {
+    cache.set(scriptKey, embedded);
+    return embedded;
   }
 
-  cache.set(scriptKey, text);
-  return text;
+  return undefined;
 }
 
-const DEFAULT_EG_LINK = "https://tinyurl.com/Egypt0011";
+export function isEgBareLinkOnlyMessage(text: string): boolean {
+  const trimmed = (text || "").trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/^https?:\/\/\S+$/i.test(trimmed)) {
+    return true;
+  }
+  return /tinyurl\.com\/egypt0011/i.test(trimmed) && trimmed.length < 160 && !/هبعتلك اللينك/i.test(trimmed);
+}
 
 /** Arabic registration instructions + link in one Pager message (EG funnel). */
-export function buildEgRegistrationWithLinkMessage(): string | undefined {
-  const reg = loadLocalEgScript("04_registration")?.trim();
-  if (!reg) {
-    return undefined;
-  }
+export function buildEgRegistrationWithLinkMessage(): string {
+  const reg = loadLocalEgScript("04_registration")?.trim() ?? EMBEDDED_EG_SCRIPTS["04_registration"];
   const link = loadLocalEgScript("05_link")?.trim() || DEFAULT_EG_LINK;
   return `${reg}\n\n${link}`;
 }
 
 export function buildEgLinkOnlyMessage(): string {
   return loadLocalEgScript("05_link")?.trim() || DEFAULT_EG_LINK;
+}
+
+/** Never send a bare Egypt URL when the reg template was not sent yet. */
+export function ensureEgRegistrationBeforeLink(
+  replyText: string,
+  options: { regAlreadyInHistory: boolean; regSentThisTurn: boolean },
+): string {
+  const trimmed = replyText.trim();
+  if (!isEgBareLinkOnlyMessage(trimmed)) {
+    return trimmed;
+  }
+  if (options.regAlreadyInHistory || options.regSentThisTurn) {
+    return trimmed;
+  }
+  return buildEgRegistrationWithLinkMessage();
 }

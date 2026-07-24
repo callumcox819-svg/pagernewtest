@@ -111,7 +111,8 @@ import type {
   StateStore,
 } from "./state-store.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
-import { buildEgLinkOnlyMessage, buildEgRegistrationWithLinkMessage, loadLocalEgScript } from "./eg-local-scripts.js";
+import { buildEgLinkOnlyMessage, buildEgRegistrationWithLinkMessage, ensureEgRegistrationBeforeLink, loadLocalEgScript } from "./eg-local-scripts.js";
+import { getDeployLabel } from "./telegram-api.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
@@ -1596,7 +1597,7 @@ async function processEgConversation(
   await tryTakeConversationForProcessing(client, convId, "EG");
 
   console.log(
-    `Pager worker: EG ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+    `Pager worker: EG ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}] build=${getDeployLabel()}`,
   );
 
   const folderId = await resolveEgTemplateFolderId(
@@ -1623,7 +1624,7 @@ async function processEgConversation(
       !sentScriptKeys.includes("04_registration")
     ) {
       const combined = buildEgRegistrationWithLinkMessage();
-      if (combined?.trim()) {
+      if (combined.trim()) {
         const sent = await client.sendMessageReliable(convId, combined.trim(), {
           channelId: runtime.channelId,
           conv,
@@ -1638,7 +1639,9 @@ async function processEgConversation(
         }
         sentAny = true;
         sentScriptKeys.push("04_registration", "05_link");
-        console.log(`Pager worker: EG ${convId.slice(0, 8)} sent registration text + link (combined)`);
+        console.log(
+          `Pager worker: EG ${convId.slice(0, 8)} sent registration text + link (combined) build=${getDeployLabel()}`,
+        );
         await patchConversationState(deps.stateStore, state.chatId, convId, {
           conversationId: convId,
           channelId: runtime.channelId,
@@ -1683,7 +1686,7 @@ async function processEgConversation(
       !egFullRegistrationInstructionsSentInHistory(outgoingTexts)
     ) {
       const combined = buildEgRegistrationWithLinkMessage();
-      if (combined?.trim()) {
+      if (combined.trim()) {
         console.warn(`EG defer bare link — sending combined reg+link ${convId.slice(0, 8)}`);
         replyText = combined;
         activeScriptKey = "05_link";
@@ -1706,6 +1709,11 @@ async function processEgConversation(
         continue;
       }
     }
+
+    replyText = ensureEgRegistrationBeforeLink(replyText, {
+      regAlreadyInHistory: egFullRegistrationInstructionsSentInHistory(outgoingTexts),
+      regSentThisTurn: sentScriptKeys.includes("04_registration"),
+    });
 
     const sent = await client.sendMessageReliable(convId, replyText.trim(), {
       channelId: runtime.channelId,

@@ -4,7 +4,7 @@
   "description": "Clean Pager bot foundation with country playbooks and proof-driven transitions.",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs');fs.cpSync('scripts','dist/scripts',{recursive:true,force:true})\"",
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js"
