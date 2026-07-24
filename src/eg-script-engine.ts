@@ -139,23 +139,41 @@ export function egFullRegistrationInstructionsSentInHistory(outgoingTexts: strin
   return outgoingTexts.some((text) => isEgFullRegistrationBody(text));
 }
 
+/** 02_how_it_works mentions EG011 + جنيه — must not count as 04_registration sent. */
+function isEgHowItWorksPitchBody(text: string): boolean {
+  const lower = (text || "").trim().toLowerCase();
+  if (!lower.includes("تمام كده")) {
+    return false;
+  }
+  return (
+    lower.includes("365-550") ||
+    lower.includes("730-1100") ||
+    lower.includes("هتعمل إيداع") ||
+    lower.includes("باخد 5%") ||
+    lower.includes("هتعمل حساب من اللينك")
+  );
+}
+
 function isEgFullRegistrationBody(text: string): boolean {
   const body = (text || "").trim();
-  if (!body || !containsArabicScript(body) || body.length < 60) {
+  if (!body || !containsArabicScript(body) || body.length < 40) {
     return false;
   }
   const lower = body.toLowerCase();
   if (/^https?:\/\/\S+$/i.test(body)) {
     return false;
   }
+  if (isEgHowItWorksPitchBody(body)) {
+    return false;
+  }
   return (
-    lower.includes("eg011") &&
-    (lower.includes("chrome") ||
-      lower.includes("google") ||
-      lower.includes("مصر") ||
-      lower.includes("egp") ||
-      lower.includes("جنيه") ||
-      lower.includes("هبعتلك اللينك"))
+    lower.includes("هبعتلك اللينك") ||
+    (lower.includes("انسخه") &&
+      (lower.includes("chrome") || lower.includes("google") || lower.includes("متصفح"))) ||
+    (lower.includes("egp") && lower.includes("جنيه مصري")) ||
+    (lower.includes("كود eg011") &&
+      lower.includes("خلصت") &&
+      (lower.includes("chrome") || lower.includes("متصفح") || lower.includes("إيميل")))
   );
 }
 
