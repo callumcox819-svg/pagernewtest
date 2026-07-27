@@ -199,6 +199,39 @@ export function shouldQueueZmConversation(conv: PagerConversation): boolean {
 }
 
 /**
+ * Thread already ends with our reply — do not run scripts/AI again until the customer writes.
+ * With a stale unread badge, also skip when we already delivered after the last customer line.
+ */
+export function shouldSkipConversationBotSpokeLast(
+  conv: PagerConversation,
+  sortedMessages: PagerMessage[],
+  lastIncoming?: PagerMessage,
+  options?: { operatorUserId?: string; country?: CountryCode },
+): boolean {
+  const newest = sortedMessages[0];
+  if (!newest || !isOutgoingDirection(newest.messageDirection)) {
+    return false;
+  }
+  if (!hasUnreadMarkers(conv)) {
+    return true;
+  }
+  if (
+    lastIncoming &&
+    hasBotReplyAfterCustomerMessage(
+      sortedMessages,
+      lastIncoming,
+      conv,
+      options?.operatorUserId,
+      options?.country,
+    ) &&
+    !isFreshCustomerMessage(lastIncoming.createdAt)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * May the bot send a new reply (script or AI) to this customer line?
  * History stays in thread for context; stale/ghost unread must not trigger answers.
  */

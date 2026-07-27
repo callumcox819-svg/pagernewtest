@@ -4,7 +4,8 @@ import {
   getSupportFunnelConfig,
   type SupportSnapshot,
 } from "./ai-support-phase.js";
-import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion } from "./customer-clarity.js";
+import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion, isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
+import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import {
   type AiAssistContext,
   type AiVisionContext,
@@ -53,6 +54,9 @@ export function customerWantsSupportAgentReply(text: string, intent: string): bo
   if (!t) {
     return false;
   }
+  if (isCustomerSaysNotRegisteredYet(t)) {
+    return false;
+  }
   if (intent === "declined") {
     return false;
   }
@@ -97,6 +101,9 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
 
   const text = ctx.customerText.trim();
   if (ctx.support?.active) {
+    if (isCustomerSaysNotRegisteredYet(text)) {
+      return false;
+    }
     return customerWantsSupportAgentReply(text, ctx.intent);
   }
 
@@ -150,7 +157,17 @@ export function shouldUseAiAgentForImage(options: {
   proofKind: string;
   caption: string;
   support?: SupportSnapshot;
+  country?: CountryCode;
+  outgoingTexts?: string[];
+  ocrCombinedText?: string;
 }): boolean {
+  const echoText = [options.ocrCombinedText, options.caption].filter(Boolean).join("\n");
+  if (
+    options.country &&
+    looksLikeOwnScriptEcho(echoText, options.country, options.outgoingTexts)
+  ) {
+    return false;
+  }
   if (options.support?.active) {
     if (
       options.proofKind === "registration_screenshot" ||
@@ -190,7 +207,14 @@ export async function runAiAgentVisionTurn(
   if (!env.AI_ENABLED || !env.AI_API_KEY?.trim()) {
     return undefined;
   }
-  if (!shouldUseAiAgentForImage({ proofKind: ctx.proofKind, caption: ctx.caption, support: ctx.support })) {
+  if (!shouldUseAiAgentForImage({
+    proofKind: ctx.proofKind,
+    caption: ctx.caption,
+    support: ctx.support,
+    country: ctx.country,
+    outgoingTexts: ctx.outgoingTexts,
+    ocrCombinedText: ctx.ocrCombinedText,
+  })) {
     return undefined;
   }
   return maybeAiAssistVision(env, ctx);

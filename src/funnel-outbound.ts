@@ -40,3 +40,34 @@ export function isAutomatedFunnelOutgoing(text: string, country: CountryCode): b
   }
   return false;
 }
+
+/** OCR/caption that mostly mirrors our funnel scripts (e.g. chat screenshot with bot bubbles). */
+export function looksLikeOwnScriptEcho(
+  text: string,
+  country: CountryCode,
+  recentOutgoingTexts?: string[],
+): boolean {
+  const t = (text || "").trim();
+  if (!t || t.length < 24) {
+    return false;
+  }
+  if (isAutomatedFunnelOutgoing(t, country)) {
+    return true;
+  }
+  const lower = t.toLowerCase();
+  let snippetHits = 0;
+  for (const out of recentOutgoingTexts ?? []) {
+    const normalized = out.trim();
+    if (normalized.length < MIN_OUTBOUND_NEEDLE_LEN) {
+      continue;
+    }
+    const head = normalized.slice(0, 56).toLowerCase();
+    if (head.length >= MIN_OUTBOUND_NEEDLE_LEN && lower.includes(head.slice(0, 40))) {
+      snippetHits += 1;
+    }
+  }
+  if (snippetHits >= 2) {
+    return true;
+  }
+  return snippetHits >= 1 && t.length >= 100;
+}

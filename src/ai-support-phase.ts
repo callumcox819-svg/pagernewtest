@@ -10,6 +10,7 @@ import {
   gameIdSentInHistory as egGameIdSent,
   regLinkSentInHistory as egRegLinkSent,
 } from "./eg-script-engine.js";
+import { registrationHelpScriptKeys } from "./funnel-common.js";
 import { isLinkAccessProblemMessage } from "./customer-clarity.js";
 import {
   depositSentInHistory as zmDepositSent,
@@ -132,11 +133,11 @@ export function describeSupportPhase(support: SupportSnapshot): string {
   const base = `Country ${support.country}; reply ONLY in ${describeAiMarketLanguage(support.country)}. Folder «в процессе регистрации» — scripts already sent link and steps.`;
   switch (support.phase) {
     case "pre_deposit":
-      return `${base} Coach first deposit on the official app/site, payment method for this market, ask for balance screenshot when done.`;
+      return `${base} Coach first deposit on the official app/site, payment method for this market, ask for balance screenshot when done. If the customer says they have NO account yet / not registered — do NOT ask for account ID or deposit; scripts resend the registration link.`;
     case "awaiting_deposit_proof":
-      return `${base} Deposit instructions sent — reassure, answer questions, acknowledge «will send later», remind to send deposit screenshot.`;
+      return `${base} Deposit instructions sent — reassure, answer questions, acknowledge «will send later», remind to send deposit screenshot. Never coach deposit if they said they are not registered yet.`;
     case "awaiting_game_id":
-      return `${base} Deposit done — help with confusion, remind player/account ID is next.`;
+      return `${base} Deposit done — help with confusion, remind player/account ID is next. Never ask for ID if they said they have no account yet.`;
     default:
       return base;
   }
@@ -174,7 +175,12 @@ export function supportAgentSkipsEarlyAi(
     return false;
   }
   const cfg = getSupportFunnelConfig(country);
-  const mechanical = new Set([...cfg.depositScriptKeys, ...cfg.gameIdScriptKeys]);
+  const mechanical = new Set([
+    ...cfg.depositScriptKeys,
+    ...cfg.gameIdScriptKeys,
+    ...cfg.linkResendScriptKeys,
+    ...registrationHelpScriptKeys(country),
+  ]);
   return scriptKeys.some((key) => mechanical.has(key));
 }
 

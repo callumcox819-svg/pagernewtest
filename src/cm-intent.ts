@@ -1,4 +1,5 @@
 import { isPositiveMessageReaction } from "./message-attachments.js";
+import { isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
 
 export type CmIntent =
   | "interested"
@@ -42,6 +43,9 @@ export function classifyCmIntent(
   const normalized = normalizeFrText(text);
   const step = options?.funnelStep ?? 0;
 
+  if (isCustomerSaysNotRegisteredYet(t) || isCustomerSaysNotRegisteredYet(normalized)) {
+    return "question";
+  }
   if (FR_DECLINED.test(t) || /nigerian|scam|arnaque|escroc/i.test(t)) {
     return "declined";
   }

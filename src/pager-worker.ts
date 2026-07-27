@@ -18,6 +18,7 @@ import {
   maybeAiVisionExtractCmProof,
 } from "./ai-assist.js";
 import { extractCmClientLoginId17 } from "./cm-proof.js";
+import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import { isLinkAccessProblemMessage, isCustomerClarificationMessage } from "./customer-clarity.js";
 import { isInProgressStatusConversation } from "./status-folders.js";
 import {
@@ -41,6 +42,7 @@ import {
   isActionableCustomerMessage,
   shouldQueueCmConversation,
   shouldQueueZmConversation,
+  shouldSkipConversationBotSpokeLast,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -960,6 +962,19 @@ async function processCmConversation(
     return false;
   }
 
+  const operatorUserIdEarly = await client.probeOperatorUserId();
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId: operatorUserIdEarly,
+      country: "CM",
+    })
+  ) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} CM — bot_spoke_last (awaiting_customer)`,
+    );
+    return false;
+  }
+
   const outgoingTexts = collectCmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
@@ -976,7 +991,7 @@ async function processCmConversation(
     !cmScriptSentInHistory(outgoingTexts, "01_intro") &&
     Boolean(latestCustomerText);
 
-  const operatorUserId = await client.probeOperatorUserId();
+  const operatorUserId = operatorUserIdEarly;
 
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts);
@@ -1042,6 +1057,8 @@ async function processCmConversation(
       playbook,
       outgoingTexts,
       funnelStep: effectiveStep,
+      sortedMessages: sorted,
+      operatorUserId,
     });
     if (imageHandled) {
       return true;
@@ -1309,6 +1326,19 @@ async function processZmConversation(
     return false;
   }
 
+  const operatorUserIdEarly = await client.probeOperatorUserId();
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId: operatorUserIdEarly,
+      country: "ZM",
+    })
+  ) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} ZM — bot_spoke_last (awaiting_customer)`,
+    );
+    return false;
+  }
+
   const outgoingTexts = collectZmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
@@ -1317,7 +1347,7 @@ async function processZmConversation(
     !zmScriptSentInHistory(outgoingTexts, "01_intro") &&
     Boolean(latestCustomerText);
 
-  const operatorUserId = await client.probeOperatorUserId();
+  const operatorUserId = operatorUserIdEarly;
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("ZM", isInProgressStatusConversation(conv), outgoingTexts);
   const zmInProgressBypass =
@@ -1382,6 +1412,8 @@ async function processZmConversation(
       playbook,
       outgoingTexts,
       funnelStep: effectiveStep,
+      sortedMessages: sorted,
+      operatorUserId,
     });
     if (imageHandled) {
       return true;
@@ -1682,6 +1714,11 @@ async function tryRunAiAgentTurn(
     agentTrigger?: import("./ai-assist.js").AiAgentTrigger;
   },
 ): Promise<boolean> {
+  if (
+    looksLikeOwnScriptEcho(options.customerText, options.country, options.outgoingTexts)
+  ) {
+    return false;
+  }
   const aiText = await runAiAgentTextTurn(deps.env, {
     country: options.country,
     customerText: options.customerText,
@@ -1801,18 +1838,23 @@ async function processEgConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  // Thread mirror of list gate: bot already spoke last → wait unless unread badge says otherwise.
-  const newest = sorted[0];
-  if (newest && isOutgoingDirection(newest.messageDirection) && !hasUnreadMarkers(conv)) {
-    console.log(
-      `Pager worker: skip ${convId.slice(0, 8)} EG — bot_spoke_last (awaiting_customer)`,
-    );
-    return false;
-  }
   const lastIncoming = findLatestIncomingFromThread(sorted, conv, "EG");
   if (!lastIncoming) {
     console.log(
       `Pager worker: EG ${convId.slice(0, 8)} — no_customer_message (msgs=${messages.length}, dir=${sorted[0]?.messageDirection ?? "?"})`,
+    );
+    return false;
+  }
+
+  const operatorUserIdEarly = await client.probeOperatorUserId();
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId: operatorUserIdEarly,
+      country: "EG",
+    })
+  ) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} EG — bot_spoke_last (awaiting_customer)`,
     );
     return false;
   }
@@ -1845,7 +1887,7 @@ async function processEgConversation(
     Boolean(latestCustomerText) &&
     isFreshCustomerMessage(lastIncoming.createdAt);
 
-  const operatorUserId = await client.probeOperatorUserId();
+  const operatorUserId = operatorUserIdEarly;
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("EG", isInProgressStatusConversation(conv), outgoingTexts);
   const egInProgressBypass =
@@ -1910,6 +1952,8 @@ async function processEgConversation(
       playbook,
       outgoingTexts,
       funnelStep: effectiveStep,
+      sortedMessages: sorted,
+      operatorUserId,
     });
     if (imageHandled) {
       return true;
@@ -3107,6 +3151,8 @@ async function tryHandleCustomerImage(
     imageUrl: string;
     outgoingTexts: string[];
     funnelStep?: number;
+    sortedMessages?: PagerMessage[];
+    operatorUserId?: string;
   },
 ): Promise<boolean> {
   if (!ctx.imageUrl) {
@@ -3181,6 +3227,31 @@ async function tryHandleCustomerImage(
   }
 
   if (deps.env.AI_ENABLED && image.length > 0) {
+    const sorted = ctx.sortedMessages ?? [];
+    const botAlreadyAnswered =
+      sorted.length > 0 &&
+      hasBotReplyAfterCustomerMessage(
+        sorted,
+        ctx.lastIncoming,
+        ctx.conv,
+        ctx.operatorUserId,
+        ctx.channel.country,
+      );
+    const echoBlob = [ocrCombinedText, ctx.text].filter(Boolean).join("\n");
+    const scriptEchoOnImage = looksLikeOwnScriptEcho(
+      echoBlob,
+      ctx.channel.country,
+      ctx.outgoingTexts,
+    );
+    if (botAlreadyAnswered) {
+      console.log(
+        `Pager worker: skip ${ctx.convId.slice(0, 8)} ${ctx.channel.country} AI vision — bot_already_replied`,
+      );
+    } else if (scriptEchoOnImage) {
+      console.log(
+        `Pager worker: skip ${ctx.convId.slice(0, 8)} ${ctx.channel.country} AI vision — script_echo_on_screenshot`,
+      );
+    } else {
     const visionReply = await runAiAgentVisionTurn(deps.env, {
       country: ctx.channel.country,
       caption: ctx.text,
@@ -3190,6 +3261,7 @@ async function tryHandleCustomerImage(
       imageBase64: image.toString("base64"),
       mimeType: detectImageMimeType(image),
       support,
+      ocrCombinedText: ocrCombinedText,
     });
     if (visionReply) {
       const sent = await ctx.client.sendMessageReliable(ctx.convId, visionReply, {
@@ -3211,6 +3283,7 @@ async function tryHandleCustomerImage(
         });
         return true;
       }
+    }
     }
   }
 

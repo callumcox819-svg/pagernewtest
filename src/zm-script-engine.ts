@@ -1,6 +1,11 @@
 import type { PagerMessage } from "./pager-client.js";
 import type { ProofKind } from "./config.js";
 import {
+  isCustomerSaysNotRegisteredYet,
+  recentTextsIndicateNotRegistered,
+} from "./customer-clarity.js";
+import { registrationResendScriptKeys } from "./funnel-common.js";
+import {
   type ZmIntent,
   classifyZmIntent,
   isFunnelPositiveReaction,
@@ -284,6 +289,9 @@ export function limitZmScriptsForCustomerTurn(
     if (!linkSent) {
       return ["05_link"];
     }
+    if (scriptKeys.length === 1 && scriptKeys[0] === "05_link") {
+      return ["05_link"];
+    }
     return [];
   }
   return [scriptKeys[0]!];
@@ -403,6 +411,9 @@ export function resolveZmFunnelScripts(
     return [];
   }
 
+  const notRegisteredYet =
+    isCustomerSaysNotRegisteredYet(t) || recentTextsIndicateNotRegistered(recentTexts);
+
   const introSent = zmScriptSentInHistory(out, "01_intro");
   const explainSent = explainScriptsSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
@@ -410,6 +421,16 @@ export function resolveZmFunnelScripts(
   const depositSent = depositSentInHistory(out);
   const signal = positiveSignal(t, intent, effectiveStep);
   const idReceived = customerIdReceived(t, recentTexts, options?.proofKind, options?.proofText);
+
+  if (notRegisteredYet) {
+    if (!introSent) {
+      return ["01_intro"];
+    }
+    if (!explainSent) {
+      return ["02_how_it_works", "03_zmw_table"];
+    }
+    return registrationResendScriptKeys("ZM", linkSent);
+  }
 
   if (isRegistrationHelpRequest(t) || isZmRegistrationAccountQuestion(t)) {
     if (!introSent) {

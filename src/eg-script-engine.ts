@@ -1,6 +1,11 @@
 import type { PagerMessage } from "./pager-client.js";
 import { isPositiveMessageReaction } from "./message-attachments.js";
-import { isCustomerClarificationMessage } from "./customer-clarity.js";
+import {
+  isCustomerClarificationMessage,
+  isCustomerSaysNotRegisteredYet,
+  recentTextsIndicateNotRegistered,
+} from "./customer-clarity.js";
+import { registrationHelpScriptKeys, registrationLinkScriptKeys, registrationResendScriptKeys } from "./funnel-common.js";
 import {
   type EgIntent,
   classifyEgIntent,
@@ -16,7 +21,6 @@ import {
   wantsDetailsAfterIntro,
   wantsRegistrationLink,
 } from "./eg-intent.js";
-import { registrationHelpScriptKeys, registrationLinkScriptKeys } from "./funnel-common.js";
 
 /** Matching pager-ai-bot EG snippets (no Telegram handoff auto-send). */
 export const EG_SCRIPT_SNIPPETS: Record<string, string> = {
@@ -383,12 +387,26 @@ export function resolveEgFunnelScripts(
 ): string[] {
   const t = (text || "").trim();
   const out = outgoingTexts;
+  const recentTexts = options?.recentCustomerTexts ?? [];
   const howSent = explainScriptsSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
   const signal = positiveSignal(t, intent, effectiveStep);
 
   if (intent === "declined") {
     return [];
+  }
+
+  const notRegisteredYet =
+    isCustomerSaysNotRegisteredYet(t) || recentTextsIndicateNotRegistered(recentTexts);
+
+  if (notRegisteredYet) {
+    if (!egIntroSentInHistory(out)) {
+      return ["01_intro"];
+    }
+    if (!howSent) {
+      return ["02_how_it_works"];
+    }
+    return registrationResendScriptKeys("EG", linkSent);
   }
 
   if (isRegistrationHelpRequest(t) || isEgJoinOrRegistrationQuestion(t)) {
@@ -672,7 +690,9 @@ export function limitEgScriptsForCustomerTurn(
     if (!linkSent) {
       return ["05_link"];
     }
-    // Already sent full reg bundle — fall through to next stage instead of empty.
+    if (scriptKeys.length === 1 && scriptKeys[0] === "05_link") {
+      return ["05_link"];
+    }
     return scriptKeys.filter((key) => !EG_REG_SEND_KEYS.has(key)).slice(0, 1);
   }
   return [scriptKeys[0]!];

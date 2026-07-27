@@ -35,6 +35,7 @@ export type AiVisionContext = {
   imageBase64: string;
   mimeType: string;
   support?: SupportSnapshot;
+  ocrCombinedText?: string;
 };
 
 const SERVICE_FRAMING = [
@@ -54,6 +55,7 @@ const COUNTRY_RULES: Record<CountryCode, string> = {
     "Link will not open: Wi‑Fi, different network, open in browser — calm steps, NEVER paste a new URL.",
     "On «هل ده نصب»: calm reassurance, official platform, step-by-step help.",
     "Do not repeat deposit script bullets verbatim — human follow-up only.",
+    "If they say NOT registered yet / no account / «لا» to finishing registration — do NOT ask for ID or deposit; registration link scripts handle that.",
     "Max 4 short sentences. No markdown. No URLs.",
     buildAiLanguageLockRule("EG"),
   ].join(" "),
@@ -67,6 +69,7 @@ const COUNTRY_RULES: Record<CountryCode, string> = {
     "Link/MTN/Orange issues: Wi‑Fi, other operator, Google Chrome — no new URL.",
     "On «arnaque»: calm reassurance.",
     "Do not repeat deposit script verbatim.",
+    "If they say NOT registered yet / no account / «Non» or «No» to finishing registration — do NOT ask for ID or deposit; registration link scripts handle that.",
     "Max 4 short sentences. No markdown. No URLs.",
     buildAiLanguageLockRule("CM"),
   ].join(" "),
@@ -76,6 +79,8 @@ const COUNTRY_RULES: Record<CountryCode, string> = {
     "SUPPORT AGENT mode after scripts: warm, patient, like a real operator.",
     "Guide first deposit (Deposit button / green +), mobile money as in thread — do not invent amounts.",
     "Registration proof: congratulate, ask for deposit screenshot when ready.",
+    "If they say NOT registered yet / no account — do NOT ask for ID or deposit; registration link scripts handle that.",
+    "If they say they are NOT registered yet or have no account: do NOT coach deposit or ask for ID — registration link scripts handle that.",
     "Link or network issues: Wi‑Fi, try again in Chrome, different network — no new URL.",
     "On «scam»: calm reassurance.",
     "Do not repeat deposit script verbatim.",
@@ -151,9 +156,12 @@ function buildUserPrompt(ctx: AiAssistContext): string {
   }
   if (ctx.recentOutgoingTexts.length) {
     parts.push(
-      `Recent operator/bot outgoings:\n${ctx.recentOutgoingTexts.slice(-4).join("\n---\n")}`,
+      `Recent operator/bot outgoings (context only — do NOT reply to these unless the customer quoted them):\n${ctx.recentOutgoingTexts.slice(-4).join("\n---\n")}`,
     );
   }
+  parts.push(
+    "Reply ONLY to the latest customer message above. Scripts already sent mechanical steps — do not echo or expand our own script text.",
+  );
   return parts.join("\n\n");
 }
 
@@ -204,6 +212,8 @@ function buildVisionSystemPrompt(country: CountryCode, support?: SupportSnapshot
     : "Describe briefly what you see if relevant, then reply to the customer.";
   return [
     "You see a customer screenshot (registration / app / deposit proof).",
+    "If the image shows a Telegram/chat thread: ignore operator/bot bubbles (our scripts) — only react to the customer's new app screenshot or their caption.",
+    "Do not reply to or repeat text visible from our own automated messages in the screenshot.",
     buildSystemPrompt(country, support ? { country, support } as AiAssistContext : undefined),
     supportHint,
     "Plain text reply only. No URLs.",

@@ -1,4 +1,5 @@
 import { isPositiveMessageReaction } from "./message-attachments.js";
+import { isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
 
 export type ZmIntent =
   | "interested"
@@ -42,6 +43,9 @@ export function classifyZmIntent(
   const t = (text || "").trim();
   const step = options?.funnelStep ?? 0;
 
+  if (isCustomerSaysNotRegisteredYet(t)) {
+    return "question";
+  }
   if (DECLINED.test(t) || BARE_DECLINED.test(t)) {
     return "declined";
   }

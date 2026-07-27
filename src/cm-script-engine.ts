@@ -1,5 +1,10 @@
 import type { PagerMessage } from "./pager-client.js";
 import {
+  isCustomerSaysNotRegisteredYet,
+  recentTextsIndicateNotRegistered,
+} from "./customer-clarity.js";
+import { registrationResendScriptKeys } from "./funnel-common.js";
+import {
   type CmIntent,
   classifyCmIntent,
   isAgeAnswer,
@@ -394,6 +399,9 @@ export function resolveCmFunnelScripts(
     return [];
   }
 
+  const notRegisteredYet =
+    isCustomerSaysNotRegisteredYet(t) || recentTextsIndicateNotRegistered(recentTexts);
+
   const introSent = cmScriptSentInHistory(out, "01_intro");
   const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
   const ageSent = cmScriptSentInHistory(out, "02_age") || ageQuestionSentInHistory(out);
@@ -403,6 +411,28 @@ export function resolveCmFunnelScripts(
   const tierChoice =
     isDepositTierChoice(t) || recentTexts.some((line) => isDepositTierChoice(line));
   const signal = positiveSignal(t, intent, effectiveStep);
+
+  if (notRegisteredYet) {
+    if (!introSent) {
+      return ["01_intro", "01_intro_2"];
+    }
+    if (!intro2Sent) {
+      return ["01_intro_2"];
+    }
+    if (!ageSent) {
+      return ["02_age"];
+    }
+    if (!stepsSent) {
+      return ["03_steps"];
+    }
+    if (!tierSent) {
+      return ["04_tier"];
+    }
+    if (!linkSent) {
+      return [...CM_REG_BUNDLE];
+    }
+    return registrationResendScriptKeys("CM", true);
+  }
 
   if (registrationHelp) {
     if (regLinkSentInHistory(out) && !cmChromeReminderSentInHistory(out)) {
@@ -774,7 +804,13 @@ export function limitCmScriptsForCustomerTurn(
     if (!chromeSent) {
       remaining.push("07_chrome");
     }
-    return remaining;
+    if (remaining.length) {
+      return remaining;
+    }
+    if (scriptKeys.includes("06_link")) {
+      return scriptKeys.filter((key) => key === "06_link" || key === "07_chrome");
+    }
+    return [];
   }
   return [scriptKeys[0]!];
 }

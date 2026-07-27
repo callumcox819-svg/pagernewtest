@@ -22,3 +22,17 @@ export function registrationHelpScriptKeys(country: CountryCode): string[] {
   }
   return ["04_registration", "05_link"];
 }
+
+/** Customer still not registered — resend link/scripts, never deposit / game ID. */
+export function registrationResendScriptKeys(
+  country: CountryCode,
+  linkAlreadySent: boolean,
+): string[] {
+  if (linkAlreadySent) {
+    if (country === "CM") {
+      return ["06_link", "07_chrome"];
+    }
+    return ["05_link"];
+  }
+  return registrationHelpScriptKeys(country);
+}

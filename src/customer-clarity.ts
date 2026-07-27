@@ -51,3 +51,45 @@ export function isScamOrTrustQuestion(text: string): boolean {
   }
   return /(scam|скам|мошен|развод|обман|arnaque|escroc|fraude|fake|n'?est\s*pas\s*vrai|احتيال|نصب|نصبة|هل\s*.*نصب|حقيق)/i.test(t);
 }
+
+/** Customer says they are not registered / have no account yet — funnel must resend reg+link, not ID/deposit. */
+export function isCustomerSaysNotRegisteredYet(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  if (/^no\.?!*$/i.test(t) || /^non[.!]?$/i.test(t) || /^لا[.!]?$/.test(t)) {
+    return true;
+  }
+  if (/\b(no i am not|not yet|no not yet|no i haven'?t|no i have not)\b/i.test(t)) {
+    return true;
+  }
+  if (
+    /\b(not|still|never)\s+(registered|registed|regestered|inscrit|inscri)\b/i.test(t) ||
+    /\bhaven'?t\s+registered\b/i.test(t) ||
+    /\bdidn'?t\s+register\b/i.test(t) ||
+    /\b(don'?t|do not|dont|dono?t)\s+have\s+(an?\s+)?accounts?\b/i.test(t) ||
+    /\b(no|without)\s+accounts?\b/i.test(t) ||
+    /\b(i\s+)?do\s+not\s+have\s+(an?\s+)?accounts?\b/i.test(t) ||
+    /\b(pas encore|pas fini|pas inscrit|pas de compte|je n['']ai pas de compte|j['']ai pas de compte|pas de compte)\b/i.test(t) ||
+    /\b(je ne suis pas inscrit|pas encore inscrit|pas encore enregistr)\b/i.test(t)
+  ) {
+    return true;
+  }
+  if (
+    /(مش\s*مسجل|لسه\s*مسجل|ما\s*سجلت|لم\s*أسجل|لم\s*اسجل|مش\s*عملت\s*حساب|معنديش\s*حساب|مفيش\s*حساب|لا\s*.*?حساب|مش\s*خلصت\s*التسجيل)/i.test(t)
+  ) {
+    return true;
+  }
+  return (
+    /\b(still registering|trying to register|its not registering|it'?s not registering|failing to register|couldn'?t manage|in progress)\b/i.test(
+      t,
+    ) ||
+    /\b(pas encore|je m'inscris|j['']?inscr|en cours d['']inscription)\b/i.test(t) ||
+    /(لسه|لسا|مش خلصت|بحاول|جاري التسجيل|not yet registering)/i.test(t)
+  );
+}
+
+export function recentTextsIndicateNotRegistered(texts: string[]): boolean {
+  return texts.some((line) => isCustomerSaysNotRegisteredYet(line));
+}
