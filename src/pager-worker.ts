@@ -14,6 +14,20 @@ import {
 import { decideNextAction } from "./decision-engine.js";
 import { runAiAgentTextTurn, runAiAgentVisionTurn, detectImageMimeType } from "./ai-agent.js";
 import {
+  cmVisionExtractToCombinedText,
+  maybeAiVisionExtractCmProof,
+} from "./ai-assist.js";
+import { extractCmClientLoginId17 } from "./cm-proof.js";
+import { isLinkAccessProblemMessage, isCustomerClarificationMessage } from "./customer-clarity.js";
+import { isInProgressStatusConversation } from "./status-folders.js";
+import {
+  buildSupportSnapshot,
+  filterScriptKeysForSupportAgent,
+  inProgressFollowUpEligible,
+  scriptKeysIncludeDeposit,
+  supportAgentSkipsEarlyAi,
+} from "./ai-support-phase.js";
+import {
   assessReplyEligibility,
   conversationPriorityScore,
   findLatestIncomingMessage,
@@ -105,7 +119,11 @@ import {
   resolveLastMessageAt,
 } from "./pager-client.js";
 import { buildPagerAccountPatch, ensurePagerSession, refreshPagerSessionWithCredentials } from "./pager-session.js";
-import { classifyProofFromImage, classifyProofFromText } from "./proof-classifier.js";
+import {
+  classifyProofFromImage,
+  classifyProofFromText,
+  resolveCmProofScriptFromCombinedText,
+} from "./proof-classifier.js";
 import type {
   ChannelRuntimeState,
   ChatState,
@@ -157,6 +175,19 @@ const INBOX_PAGES_DEEP = 25;
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
   console.log(`Pager worker started (every ${deps.config.bot.pollIntervalSeconds}s)`);
+  if (deps.env.AI_ENABLED) {
+    const key = deps.env.AI_API_KEY?.trim();
+    const openRouterKey = key?.startsWith("sk-or-");
+    const base = deps.env.AI_BASE_URL;
+    console.log(
+      `AI agent: enabled model=${deps.env.AI_MODEL} vision=${deps.env.AI_VISION_MODEL} base=${base}`,
+    );
+    if (openRouterKey && base.includes("api.openai.com")) {
+      console.warn(
+        "AI agent: OpenRouter key (sk-or-v1) but AI_BASE_URL points to OpenAI — set AI_BASE_URL=https://openrouter.ai/api/v1/chat/completions",
+      );
+    }
+  }
 
   while (true) {
     const started = Date.now();
@@ -920,6 +951,12 @@ async function processCmConversation(
 
   const operatorUserId = await client.probeOperatorUserId();
 
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts);
+  const cmInProgressFollowUp =
+    inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
+    isCustomerClarificationMessage(latestCustomerText);
+
   if (
     !(await ensureCustomerMessageEligible(
       deps,
@@ -931,7 +968,7 @@ async function processCmConversation(
       lastIncoming,
       sorted,
       {
-        bypass: awaitingRegAfterTierChoice || cmNewLeadBypass,
+        bypass: awaitingRegAfterTierChoice || cmNewLeadBypass || cmInProgressFollowUp,
         operatorUserId,
         countryLabel: "CM",
         country: "CM",
@@ -944,7 +981,6 @@ async function processCmConversation(
   const threadStep = cmInferStepFromThread(messages);
   const gapStep = cmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
-  const imageUrl = extractProofImageUrl(lastIncoming);
   const messageReaction = resolveMessageReaction(lastIncoming);
   const playbook = getPlaybook(deps.config, channel.country);
 
@@ -985,6 +1021,33 @@ async function processCmConversation(
     }
   }
 
+  if (
+    cmRegLinkSentInHistory(outgoingTexts) &&
+    extractCmClientLoginId17(latestCustomerText) &&
+    !cmDepositSentInHistory(outgoingTexts)
+  ) {
+    const sent = await trySendCmProofFromCombinedText(
+      deps,
+      {
+        state,
+        client,
+        conv,
+        runtime,
+        channel,
+        convState,
+        convId,
+        lastIncoming,
+        text: latestCustomerText,
+        playbook,
+        outgoingTexts,
+      },
+      latestCustomerText,
+    );
+    if (sent) {
+      return true;
+    }
+  }
+
   const intent = classifyCmMessage(latestCustomerText, {
     hasImage: Boolean(imageUrl),
     funnelStep: effectiveStep,
@@ -1000,31 +1063,50 @@ async function processCmConversation(
   );
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
+  scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support);
+  const skipEarlySupportAi = supportAgentSkipsEarlyAi("CM", scriptKeys, support);
 
-  const aiHandledEarly = await tryRunAiAgentTurn(
-    deps,
-    state,
-    client,
-    conv,
-    runtime,
-    convId,
-    convState,
-    lastIncoming,
-    {
-      country: "CM",
-      customerText: latestCustomerText,
-      recentCustomerTexts,
-      outgoingTexts,
-      funnelStep: effectiveStep,
-      intent,
-      scriptKeys,
-    },
-  );
-  if (aiHandledEarly) {
-    return true;
+  if (!skipEarlySupportAi) {
+    const aiHandledEarly = await tryRunAiAgentTurn(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "CM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+      },
+    );
+    if (aiHandledEarly) {
+      return true;
+    }
   }
 
   if (!scriptKeys.length) {
+    if (
+      await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+        country: "CM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+      })
+    ) {
+      return true;
+    }
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} CM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
@@ -1152,6 +1234,22 @@ async function processCmConversation(
     sendFailures: 0,
   });
 
+  if (
+    await trySupportAgentAfterScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "CM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      sentScriptKeys,
+      support,
+      skipEarlySupportAi,
+    })
+  ) {
+    return true;
+  }
+
   return true;
 }
 
@@ -1193,6 +1291,11 @@ async function processZmConversation(
     Boolean(latestCustomerText);
 
   const operatorUserId = await client.probeOperatorUserId();
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const support = buildSupportSnapshot("ZM", isInProgressStatusConversation(conv), outgoingTexts);
+  const zmInProgressBypass =
+    inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
+    isCustomerClarificationMessage(latestCustomerText);
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -1205,7 +1308,7 @@ async function processZmConversation(
       lastIncoming,
       sorted,
       {
-        bypass: zmNewLeadBypass,
+        bypass: zmNewLeadBypass || zmInProgressBypass,
         operatorUserId,
         countryLabel: "ZM",
         country: "ZM",
@@ -1218,7 +1321,6 @@ async function processZmConversation(
   const threadStep = zmInferStepFromThread(messages);
   const gapStep = zmFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
-  const imageUrl = extractProofImageUrl(lastIncoming);
   const messageReaction = resolveMessageReaction(lastIncoming);
   const playbook = getPlaybook(deps.config, channel.country);
 
@@ -1297,31 +1399,50 @@ async function processZmConversation(
   );
   scriptKeys = limitZmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
+  scriptKeys = filterScriptKeysForSupportAgent("ZM", scriptKeys, latestCustomerText, support);
+  const skipEarlySupportAi = supportAgentSkipsEarlyAi("ZM", scriptKeys, support);
 
-  const aiHandledEarly = await tryRunAiAgentTurn(
-    deps,
-    state,
-    client,
-    conv,
-    runtime,
-    convId,
-    convState,
-    lastIncoming,
-    {
-      country: "ZM",
-      customerText: latestCustomerText,
-      recentCustomerTexts,
-      outgoingTexts,
-      funnelStep: effectiveStep,
-      intent,
-      scriptKeys,
-    },
-  );
-  if (aiHandledEarly) {
-    return true;
+  if (!skipEarlySupportAi) {
+    const aiHandledEarly = await tryRunAiAgentTurn(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "ZM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+      },
+    );
+    if (aiHandledEarly) {
+      return true;
+    }
   }
 
   if (!scriptKeys.length) {
+    if (
+      await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+        country: "ZM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+      })
+    ) {
+      return true;
+    }
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} ZM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
@@ -1468,6 +1589,22 @@ async function processZmConversation(
     sendFailures: 0,
   });
 
+  if (
+    await trySupportAgentAfterScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "ZM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      sentScriptKeys,
+      support,
+      skipEarlySupportAi,
+    })
+  ) {
+    return true;
+  }
+
   return true;
 }
 
@@ -1513,6 +1650,9 @@ async function tryRunAiAgentTurn(
     funnelStep: number;
     intent: string;
     scriptKeys: string[];
+    support?: import("./ai-support-phase.js").SupportSnapshot;
+    forceSupportAgent?: boolean;
+    agentTrigger?: import("./ai-assist.js").AiAgentTrigger;
   },
 ): Promise<boolean> {
   const aiText = await runAiAgentTextTurn(deps.env, {
@@ -1523,6 +1663,9 @@ async function tryRunAiAgentTurn(
     funnelStep: options.funnelStep,
     intent: options.intent,
     scriptKeys: options.scriptKeys,
+    support: options.support,
+    forceSupportAgent: options.forceSupportAgent,
+    agentTrigger: options.agentTrigger,
   });
   if (!aiText) {
     return false;
@@ -1548,6 +1691,78 @@ async function tryRunAiAgentTurn(
     sendFailures: 0,
   });
   return true;
+}
+
+async function trySupportAgentWhenNoScripts(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  convId: string,
+  convState: ConversationRuntimeState,
+  lastIncoming: PagerMessage,
+  options: {
+    country: CountryCode;
+    customerText: string;
+    recentCustomerTexts: string[];
+    outgoingTexts: string[];
+    funnelStep: number;
+    intent: string;
+    scriptKeys: string[];
+    support: import("./ai-support-phase.js").SupportSnapshot;
+  },
+): Promise<boolean> {
+  if (options.scriptKeys.length || !options.support.active || !options.customerText.trim()) {
+    return false;
+  }
+  return tryRunAiAgentTurn(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+    ...options,
+    forceSupportAgent: true,
+  });
+}
+
+async function trySupportAgentAfterScripts(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  convId: string,
+  convState: ConversationRuntimeState,
+  lastIncoming: PagerMessage,
+  options: {
+    country: CountryCode;
+    customerText: string;
+    recentCustomerTexts: string[];
+    outgoingTexts: string[];
+    funnelStep: number;
+    intent: string;
+    sentScriptKeys: string[];
+    support: import("./ai-support-phase.js").SupportSnapshot;
+    skipEarlySupportAi: boolean;
+  },
+): Promise<boolean> {
+  if (!options.support.active) {
+    return false;
+  }
+  const depositSentNow = scriptKeysIncludeDeposit(options.country, options.sentScriptKeys);
+  if (!depositSentNow && !options.skipEarlySupportAi) {
+    return false;
+  }
+  await sleep(400);
+  return tryRunAiAgentTurn(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+    country: options.country,
+    customerText: options.customerText,
+    recentCustomerTexts: options.recentCustomerTexts,
+    outgoingTexts: options.outgoingTexts,
+    funnelStep: options.funnelStep,
+    intent: options.intent,
+    scriptKeys: options.sentScriptKeys,
+    support: options.support,
+    forceSupportAgent: depositSentNow,
+    agentTrigger: depositSentNow ? "deposit_script_just_sent" : undefined,
+  });
 }
 
 async function processEgConversation(
@@ -1619,6 +1834,11 @@ async function processEgConversation(
     isFreshCustomerMessage(lastIncoming.createdAt);
 
   const operatorUserId = await client.probeOperatorUserId();
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const support = buildSupportSnapshot("EG", isInProgressStatusConversation(conv), outgoingTexts);
+  const egInProgressBypass =
+    inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
+    isCustomerClarificationMessage(latestCustomerText);
 
   if (
     !(await ensureCustomerMessageEligible(
@@ -1631,7 +1851,7 @@ async function processEgConversation(
       lastIncoming,
       sorted,
       {
-        bypass: awaitingRegAfterTierChoice || egNewLeadBypass,
+        bypass: awaitingRegAfterTierChoice || egNewLeadBypass || egInProgressBypass,
         operatorUserId,
         countryLabel: "EG",
         country: "EG",
@@ -1644,7 +1864,6 @@ async function processEgConversation(
   const threadStep = egInferStepFromThread(messages);
   const gapStep = egFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
   const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
-  const imageUrl = extractProofImageUrl(lastIncoming);
   const messageReaction = resolveMessageReaction(lastIncoming);
   const playbook = getPlaybook(deps.config, channel.country);
 
@@ -1715,31 +1934,50 @@ async function processEgConversation(
     );
   }
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
+  scriptKeys = filterScriptKeysForSupportAgent("EG", scriptKeys, latestCustomerText, support);
+  const skipEarlySupportAi = supportAgentSkipsEarlyAi("EG", scriptKeys, support);
 
-  const aiHandledEarly = await tryRunAiAgentTurn(
-    deps,
-    state,
-    client,
-    conv,
-    runtime,
-    convId,
-    convState,
-    lastIncoming,
-    {
-      country: "EG",
-      customerText: latestCustomerText,
-      recentCustomerTexts,
-      outgoingTexts,
-      funnelStep: effectiveStep,
-      intent,
-      scriptKeys,
-    },
-  );
-  if (aiHandledEarly) {
-    return true;
+  if (!skipEarlySupportAi) {
+    const aiHandledEarly = await tryRunAiAgentTurn(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "EG",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+      },
+    );
+    if (aiHandledEarly) {
+      return true;
+    }
   }
 
   if (!scriptKeys.length) {
+    if (
+      await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+        country: "EG",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+      })
+    ) {
+      return true;
+    }
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} EG — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
@@ -1935,6 +2173,22 @@ async function processEgConversation(
     lastReplyRole: scriptKeys[scriptKeys.length - 1],
     sendFailures: 0,
   });
+
+  if (
+    await trySupportAgentAfterScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "EG",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      sentScriptKeys,
+      support,
+      skipEarlySupportAi,
+    })
+  ) {
+    return true;
+  }
 
   return true;
 }
@@ -2476,7 +2730,9 @@ async function ensureCustomerMessageEligible(
     (country === "EG" &&
       egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))) ||
     (country === "CM" &&
-      cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted)));
+      cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted), {
+        hasImage: Boolean(extractProofImageUrl(lastIncoming)),
+      }));
 
   if (options?.bypass || unreadNeedsScriptPass || funnelContinuation) {
     return true;
@@ -2751,6 +3007,95 @@ async function trySendSpecialCustomerResponse(
   return true;
 }
 
+async function sendCmScriptKey(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext & { outgoingTexts: string[] },
+  scriptKey: "09_deposit" | "08_game_id",
+): Promise<boolean> {
+  const currentState = (await deps.stateStore.get(ctx.state.chatId)) ?? ctx.state;
+  const folderId = await resolveCmTemplateFolderId(
+    ctx.client,
+    ctx.runtime.runtime.templateBankId,
+    currentState.pagerAccount?.liveTemplateBanks,
+  );
+  const replyText = await resolveScriptTextByKey(ctx.client, {
+    folderId,
+    liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+    scriptKey,
+    country: "CM",
+  });
+  const body =
+    replyText?.trim() ||
+    (scriptKey === "09_deposit"
+      ? loadLocalCmScript("09_deposit")
+      : loadLocalCmScript("08_game_id"));
+  if (!body?.trim()) {
+    return false;
+  }
+  await tryTakeConversationForProcessing(ctx.client, ctx.convId, "CM");
+  const sent = await ctx.client.sendMessageReliable(ctx.convId, body.trim(), {
+    channelId: ctx.runtime.channelId,
+    conv: ctx.conv,
+  });
+  if (!sent) {
+    return false;
+  }
+  console.log(
+    `Pager worker: CM ${ctx.convId.slice(0, 8)} proof -> ${scriptKey} build=${getDeployLabel()}`,
+  );
+  await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+    conversationId: ctx.convId,
+    channelId: ctx.runtime.channelId,
+    lastCustomerMessageId: ctx.lastIncoming.id,
+    lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: scriptKey,
+    currentStage: scriptKey === "09_deposit" ? "deposit_pending" : "waiting_id",
+    sendFailures: 0,
+  });
+  if (scriptKey === "09_deposit" && deps.env.AI_ENABLED) {
+    const support = buildSupportSnapshot(
+      "CM",
+      isInProgressStatusConversation(ctx.conv),
+      ctx.outgoingTexts,
+    );
+    await sleep(400);
+    await tryRunAiAgentTurn(deps, ctx.state, ctx.client, ctx.conv, ctx.runtime, ctx.convId, ctx.convState, ctx.lastIncoming, {
+      country: "CM",
+      customerText: ctx.text,
+      recentCustomerTexts: ctx.text.trim() ? [ctx.text] : [],
+      outgoingTexts: ctx.outgoingTexts,
+      funnelStep: ctx.convState.funnelStep ?? 6,
+      intent: "positive",
+      scriptKeys: [scriptKey],
+      support,
+      forceSupportAgent: true,
+      agentTrigger: "deposit_script_just_sent",
+    });
+  }
+  return true;
+}
+
+async function trySendCmProofFromCombinedText(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext & { outgoingTexts: string[] },
+  combinedText: string,
+): Promise<boolean> {
+  if (ctx.channel.country !== "CM" || !cmRegLinkSentInHistory(ctx.outgoingTexts)) {
+    return false;
+  }
+  const scriptKey = resolveCmProofScriptFromCombinedText(
+    ctx.playbook,
+    combinedText,
+    ctx.outgoingTexts,
+  );
+  if (!scriptKey) {
+    return false;
+  }
+  const sent = await sendCmScriptKey(deps, ctx, scriptKey);
+  return sent;
+}
+
 async function tryHandleCustomerImage(
   deps: WorkerDeps,
   ctx: SpecialResponseContext & {
@@ -2763,36 +3108,83 @@ async function tryHandleCustomerImage(
     return false;
   }
 
-  let proofKind;
+  let proofKind: string | undefined;
   let image: Buffer;
+  let ocrCombinedText = ctx.text;
   try {
     image = await ctx.client.downloadAttachment(ctx.imageUrl);
     const classification = await classifyProofFromImage(ctx.playbook, image, {
       caption: ctx.text,
       ocrEnabled: deps.env.OCR_ENABLED,
       ocrLang: ocrLangForCountry(ctx.channel.country),
+      country: ctx.channel.country,
     });
     proofKind = classification.proofKind;
+    ocrCombinedText = classification.combinedText;
+
+    if (ctx.channel.country === "CM") {
+      const sent = await trySendCmProofFromCombinedText(
+        deps,
+        ctx,
+        classification.combinedText,
+      );
+      if (sent) {
+        return true;
+      }
+    }
   } catch (error) {
-    console.warn(`CM OCR failed ${ctx.convId.slice(0, 8)}:`, formatError(error));
-    proofKind = classifyProofFromText(ctx.playbook, ctx.text).proofKind;
+    console.warn(`OCR failed ${ctx.convId.slice(0, 8)}:`, formatError(error));
+    proofKind = classifyProofFromText(ctx.playbook, ctx.text, ctx.channel.country).proofKind;
     try {
       image = await ctx.client.downloadAttachment(ctx.imageUrl);
     } catch {
       return false;
     }
+    if (ctx.channel.country === "CM") {
+      const sent = await trySendCmProofFromCombinedText(deps, ctx, ctx.text);
+      if (sent) {
+        return true;
+      }
+    }
   }
 
   const funnelStep = ctx.funnelStep ?? ctx.convState.funnelStep ?? 0;
+  const support = buildSupportSnapshot(
+    ctx.channel.country,
+    isInProgressStatusConversation(ctx.conv),
+    ctx.outgoingTexts,
+  );
+
+  if (ctx.channel.country === "CM" && deps.env.AI_ENABLED && image.length > 0 && cmRegLinkSentInHistory(ctx.outgoingTexts)) {
+    const extract = await maybeAiVisionExtractCmProof(deps.env, {
+      imageBase64: image.toString("base64"),
+      mimeType: detectImageMimeType(image),
+      caption: ctx.text,
+      depositScriptAlreadySent: cmDepositSentInHistory(ctx.outgoingTexts),
+    });
+    if (extract) {
+      const aiCombined = cmVisionExtractToCombinedText(extract, ctx.text);
+      const sent = await trySendCmProofFromCombinedText(deps, ctx, aiCombined);
+      if (sent) {
+        return true;
+      }
+      if (aiCombined.trim()) {
+        proofKind = classifyProofFromText(ctx.playbook, aiCombined, "CM").proofKind;
+        ocrCombinedText = aiCombined;
+      }
+    }
+  }
+
   if (deps.env.AI_ENABLED && image.length > 0) {
     const visionReply = await runAiAgentVisionTurn(deps.env, {
       country: ctx.channel.country,
       caption: ctx.text,
       funnelStep,
       outgoingTexts: ctx.outgoingTexts,
-      proofKind,
+      proofKind: proofKind ?? "unclear_screenshot",
       imageBase64: image.toString("base64"),
       mimeType: detectImageMimeType(image),
+      support,
     });
     if (visionReply) {
       const sent = await ctx.client.sendMessageReliable(ctx.convId, visionReply, {
@@ -2814,6 +3206,13 @@ async function tryHandleCustomerImage(
         });
         return true;
       }
+    }
+  }
+
+  if (ctx.channel.country === "CM" && extractCmClientLoginId17(ocrCombinedText)) {
+    const sent = await trySendCmProofFromCombinedText(deps, ctx, ocrCombinedText);
+    if (sent) {
+      return true;
     }
   }
 

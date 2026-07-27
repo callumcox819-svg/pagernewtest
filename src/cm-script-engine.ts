@@ -484,9 +484,6 @@ export function resolveCmFunnelScripts(
     if (isRegistrationBlocked(t)) {
       return ["07_chrome", "06_link"];
     }
-    if (options?.hasImage && !depositSentInHistory(out)) {
-      return ["07_chrome", "06_link"];
-    }
     if (
       (options?.hasImage || isRegistrationConfirmed(t) || intent === "image_only") &&
       !depositSentInHistory(out)

@@ -7,7 +7,8 @@ import {
 import type { ConversationRuntimeState } from "./state-store.js";
 import type { CountryCode } from "./config.js";
 import { isAutomatedFunnelOutgoing } from "./funnel-outbound.js";
-import { isCustomerClarificationMessage } from "./customer-clarity.js";
+import { isCustomerClarificationMessage, isLinkAccessProblemMessage } from "./customer-clarity.js";
+import { extractProofImageUrl } from "./message-attachments.js";
 import { egFunnelNeedsContinuation } from "./eg-script-engine.js";
 import {
   cmAgeQuestionSentInHistory,
@@ -410,13 +411,23 @@ export function isCustomerWaitingInThread(
 export function cmFunnelNeedsContinuation(
   customerText: string,
   outgoingTexts: string[],
+  options?: { hasImage?: boolean },
 ): boolean {
   const text = (customerText || "").trim();
-  if (!text) {
+  if (options?.hasImage && cmRegLinkSentInHistory(outgoingTexts)) {
+    return true;
+  }
+  if (!text && !options?.hasImage) {
     return false;
   }
   if (isCustomerClarificationMessage(text)) {
     return true;
+  }
+  if (isLinkAccessProblemMessage(text)) {
+    return true;
+  }
+  if (!text) {
+    return false;
   }
   const introSent = cmScriptSentInHistory(outgoingTexts, "01_intro");
   const ageSent = cmAgeQuestionSentInHistory(outgoingTexts);
@@ -454,7 +465,9 @@ export function cmFunnelNeedsContinuation(
     return (
       isRegistrationConfirmed(text) ||
       ready ||
-      /inscrit|cr[eé][eé]|compte|d[eé]p[oô]t|application/i.test(text)
+      /inscrit|cr[eé][eé]|compte|d[eé]p[oô]t|application|voici|inscription|r[eé]ussie|d[eé]j[aà]\s*ft|j'?ai\s*d[eé]j[aà]/i.test(
+        text,
+      )
     );
   }
   // After deposit ask: only continue for proof / confirmed registration — not bare Oui.
@@ -489,6 +502,10 @@ function collectOutgoingTextsFromThread(messages: PagerMessage[]): string[] {
   return texts;
 }
 
+function cmFunnelImageOpts(lastIncoming: PagerMessage): { hasImage?: boolean } {
+  return { hasImage: Boolean(extractProofImageUrl(lastIncoming)) };
+}
+
 export function assessReplyEligibility(
   conv: PagerConversation,
   convState: ConversationRuntimeState,
@@ -518,6 +535,7 @@ export function assessReplyEligibility(
       cmFunnelNeedsContinuation(
         (lastIncoming.text || "").trim(),
         collectOutgoingTextsFromThread(sortedMessages),
+        cmFunnelImageOpts(lastIncoming),
       )
     ) {
       return { eligible: true };
@@ -562,6 +580,7 @@ export function assessReplyEligibility(
       cmFunnelNeedsContinuation(
         (lastIncoming.text || "").trim(),
         collectOutgoingTextsFromThread(sortedMessages),
+        cmFunnelImageOpts(lastIncoming),
       )
     ) {
       return { eligible: true };
@@ -585,6 +604,7 @@ export function assessReplyEligibility(
       cmFunnelNeedsContinuation(
         (lastIncoming.text || "").trim(),
         collectOutgoingTextsFromThread(sortedMessages),
+        cmFunnelImageOpts(lastIncoming),
       )
     ) {
       return { eligible: true };

@@ -34,7 +34,16 @@ export function isCustomerClarificationMessage(text: string): boolean {
   return true;
 }
 
-/** «Это скам?» / arnaque / احتيال — always agent, never a bare script skip. */
+/** Link / operator / Wi‑Fi issues — agent advises; scripts stay for funnel steps. */
+export function isLinkAccessProblemMessage(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  return /(j['']arrive pas|pas acc[eè]s|acc[eè]der|acc[eè]s|wifi|wi-fi|sans wifi|no wifi|donn[eé]es mobile|op[eé]rateur|operateur|\bmtn\b|\borange\b|lien.*(marche|ouvre|fonctionne)|link.*(work|open|load)|tinyurl|page.*(blanche|vide)|ne s['']ouvre pas)/i.test(
+    t,
+  );
+}
 export function isScamOrTrustQuestion(text: string): boolean {
   const t = (text || "").trim();
   if (!t) {

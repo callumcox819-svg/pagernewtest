@@ -1,0 +1,205 @@
+import type { CountryCode } from "./config.js";
+import { describeAiMarketLanguage } from "./ai-country-language.js";
+import {
+  depositSentInHistory as cmDepositSent,
+  gameIdSentInHistory as cmGameIdSent,
+  regLinkSentInHistory as cmRegLinkSent,
+} from "./cm-script-engine.js";
+import {
+  depositSentInHistory as egDepositSent,
+  gameIdSentInHistory as egGameIdSent,
+  regLinkSentInHistory as egRegLinkSent,
+} from "./eg-script-engine.js";
+import { isLinkAccessProblemMessage } from "./customer-clarity.js";
+import {
+  depositSentInHistory as zmDepositSent,
+  gameIdSentInHistory as zmGameIdSent,
+  regLinkSentInHistory as zmRegLinkSent,
+} from "./zm-script-engine.js";
+
+export type SupportPhase =
+  | "off"
+  | "pre_deposit"
+  | "awaiting_deposit_proof"
+  | "awaiting_game_id";
+
+export type SupportSnapshot = {
+  country: CountryCode;
+  /** Post-funnel support agent (folder «в процессе» + reg link sent). */
+  active: boolean;
+  phase: SupportPhase;
+  inProgressFolder: boolean;
+  regLinkSent: boolean;
+  depositScriptSent: boolean;
+  gameIdScriptSent: boolean;
+};
+
+type FunnelHistorySignals = {
+  regLinkSent: (outgoing: string[]) => boolean;
+  depositSent: (outgoing: string[]) => boolean;
+  gameIdSent: (outgoing: string[]) => boolean;
+  introScriptKeys: string[];
+  linkResendScriptKeys: string[];
+  depositScriptKeys: string[];
+  gameIdScriptKeys: string[];
+};
+
+const SUPPORT_FUNNEL: Record<CountryCode, FunnelHistorySignals> = {
+  CM: {
+    regLinkSent: cmRegLinkSent,
+    depositSent: cmDepositSent,
+    gameIdSent: cmGameIdSent,
+    introScriptKeys: [
+      "01_intro",
+      "01_intro_2",
+      "02_age",
+      "03_steps",
+      "04_tier",
+      "05_registration",
+    ],
+    linkResendScriptKeys: ["06_link", "07_chrome"],
+    depositScriptKeys: ["09_deposit"],
+    gameIdScriptKeys: ["08_game_id"],
+  },
+  EG: {
+    regLinkSent: egRegLinkSent,
+    depositSent: egDepositSent,
+    gameIdSent: egGameIdSent,
+    introScriptKeys: ["01_intro", "02_how_it_works", "04_registration"],
+    linkResendScriptKeys: ["05_link", "08_app_or_browser"],
+    depositScriptKeys: ["06_deposit"],
+    gameIdScriptKeys: ["07_game_id"],
+  },
+  ZM: {
+    regLinkSent: zmRegLinkSent,
+    depositSent: zmDepositSent,
+    gameIdSent: zmGameIdSent,
+    introScriptKeys: ["01_intro", "02_how_it_works", "03_zmw_table", "04_registration"],
+    linkResendScriptKeys: ["05_link"],
+    depositScriptKeys: ["06_deposit"],
+    gameIdScriptKeys: ["07_game_id"],
+  },
+};
+
+export function getSupportFunnelConfig(country: CountryCode): FunnelHistorySignals {
+  return SUPPORT_FUNNEL[country];
+}
+
+export function buildSupportSnapshot(
+  country: CountryCode,
+  inProgressFolder: boolean,
+  outgoingTexts: string[],
+): SupportSnapshot {
+  const cfg = getSupportFunnelConfig(country);
+  const regLinkSent = cfg.regLinkSent(outgoingTexts);
+  const depositScriptSent = cfg.depositSent(outgoingTexts);
+  const gameIdScriptSent = cfg.gameIdSent(outgoingTexts);
+
+  if (!inProgressFolder || !regLinkSent) {
+    return {
+      country,
+      active: false,
+      phase: "off",
+      inProgressFolder,
+      regLinkSent,
+      depositScriptSent,
+      gameIdScriptSent,
+    };
+  }
+
+  let phase: SupportPhase = "pre_deposit";
+  if (depositScriptSent && !gameIdScriptSent) {
+    phase = "awaiting_deposit_proof";
+  } else if (depositScriptSent && gameIdScriptSent) {
+    phase = "awaiting_game_id";
+  }
+
+  return {
+    country,
+    active: true,
+    phase,
+    inProgressFolder,
+    regLinkSent,
+    depositScriptSent,
+    gameIdScriptSent,
+  };
+}
+
+export function describeSupportPhase(support: SupportSnapshot): string {
+  if (!support.active) {
+    return "";
+  }
+  const base = `Country ${support.country}; reply ONLY in ${describeAiMarketLanguage(support.country)}. Folder «в процессе регистрации» — scripts already sent link and steps.`;
+  switch (support.phase) {
+    case "pre_deposit":
+      return `${base} Coach first deposit on the official app/site, payment method for this market, ask for balance screenshot when done.`;
+    case "awaiting_deposit_proof":
+      return `${base} Deposit instructions sent — reassure, answer questions, acknowledge «will send later», remind to send deposit screenshot.`;
+    case "awaiting_game_id":
+      return `${base} Deposit done — help with confusion, remind player/account ID is next.`;
+    default:
+      return base;
+  }
+}
+
+export function filterScriptKeysForSupportAgent(
+  country: CountryCode,
+  scriptKeys: string[],
+  customerText: string,
+  support: SupportSnapshot,
+): string[] {
+  if (!support.active) {
+    return scriptKeys;
+  }
+  const cfg = getSupportFunnelConfig(country);
+  const introSet = new Set(cfg.introScriptKeys);
+  let keys = scriptKeys.filter((key) => !introSet.has(key));
+  if (isLinkAccessProblemMessage(customerText)) {
+    const drop = new Set(cfg.linkResendScriptKeys);
+    keys = keys.filter((key) => !drop.has(key));
+  }
+  if (support.depositScriptSent) {
+    const drop = new Set(cfg.depositScriptKeys);
+    keys = keys.filter((key) => !drop.has(key));
+  }
+  return keys;
+}
+
+export function supportAgentSkipsEarlyAi(
+  country: CountryCode,
+  scriptKeys: string[],
+  support: SupportSnapshot,
+): boolean {
+  if (!support.active || !scriptKeys.length) {
+    return false;
+  }
+  const cfg = getSupportFunnelConfig(country);
+  const mechanical = new Set([...cfg.depositScriptKeys, ...cfg.gameIdScriptKeys]);
+  return scriptKeys.some((key) => mechanical.has(key));
+}
+
+export function scriptKeysIncludeDeposit(
+  country: CountryCode,
+  scriptKeys: string[],
+): boolean {
+  const cfg = getSupportFunnelConfig(country);
+  const set = new Set(cfg.depositScriptKeys);
+  return scriptKeys.some((key) => set.has(key));
+}
+
+export function inProgressFollowUpEligible(
+  support: SupportSnapshot,
+  customerText: string,
+  hasImage: boolean,
+): boolean {
+  if (!support.inProgressFolder || !support.regLinkSent) {
+    return false;
+  }
+  if (hasImage) {
+    return true;
+  }
+  if (isLinkAccessProblemMessage(customerText)) {
+    return true;
+  }
+  return Boolean(customerText.trim());
+}

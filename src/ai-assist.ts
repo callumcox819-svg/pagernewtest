@@ -1,5 +1,16 @@
 import type { CountryCode } from "./config.js";
 import type { AppEnv } from "./env.js";
+import type { SupportSnapshot } from "./ai-support-phase.js";
+import { describeSupportPhase } from "./ai-support-phase.js";
+import {
+  aiReplyLooksWrongLanguage,
+  buildAiLanguageLockRule,
+  describeAiMarketLanguage,
+} from "./ai-country-language.js";
+
+export type AiAgentTrigger =
+  | "deposit_script_just_sent"
+  | "registration_proof_ack";
 
 export type AiAssistContext = {
   country: CountryCode;
@@ -9,6 +20,10 @@ export type AiAssistContext = {
   funnelStep: number;
   intent: string;
   scriptKeys?: string[];
+  support?: SupportSnapshot;
+  agentTrigger?: AiAgentTrigger;
+  /** Bypass routing — support agent must reply (post «в процессе»). */
+  forceSupportAgent?: boolean;
 };
 
 export type AiVisionContext = {
@@ -19,6 +34,7 @@ export type AiVisionContext = {
   proofKind: string;
   imageBase64: string;
   mimeType: string;
+  support?: SupportSnapshot;
 };
 
 const SERVICE_FRAMING = [
@@ -30,48 +46,106 @@ const SERVICE_FRAMING = [
 
 const COUNTRY_RULES: Record<CountryCode, string> = {
   EG: [
-    "Reply ONLY in Arabic (Egyptian dialect is fine).",
+    buildAiLanguageLockRule("EG"),
     SERVICE_FRAMING,
-    "On doubt or «هل ده نصب»: explain it is a real support service, you guide them on the platform step by step, many clients work this way with help — invite them to continue calmly.",
-    "Never send registration URLs — automated scripts send the official link and steps right after.",
-    "Do not invent new profit numbers; stay aligned with what was already explained in the thread.",
-    "End by inviting them to reply when ready for the next official step.",
+    "SUPPORT AGENT mode after scripts: warm, patient, like a real operator.",
+    "Guide first deposit (green + / deposit), mobile wallet if discussed in thread — do not invent new amounts.",
+    "Registration proof: congratulate, ask for deposit then balance screenshot.",
+    "Link will not open: Wi‑Fi, different network, open in browser — calm steps, NEVER paste a new URL.",
+    "On «هل ده نصب»: calm reassurance, official platform, step-by-step help.",
+    "Do not repeat deposit script bullets verbatim — human follow-up only.",
+    "Max 4 short sentences. No markdown. No URLs.",
+    buildAiLanguageLockRule("EG"),
   ].join(" "),
   CM: [
-    "Reply ONLY in French.",
+    buildAiLanguageLockRule("CM"),
     SERVICE_FRAMING,
-    "On «arnaque» / trust: same calm, realistic reassurance — real service, official platform steps, you help them follow the process.",
-    "Never send registration URLs — scripts send the official steps next.",
-    "Stay concise and professional.",
+    "SUPPORT AGENT mode after scripts: warm, patient, like a real operator in Telegram.",
+    "Guide first deposit on 1xBET (green $ / Déposer, MTN or Orange). Minimum in thread is often 1 000 CFA — do not invent promos unless the customer said them.",
+    "Registration proof: congratulate, ask for balance screenshot after top-up.",
+    "Acknowledge «Ok boss», «j'ai déjà fait», waiting for screenshot — brief and friendly.",
+    "Link/MTN/Orange issues: Wi‑Fi, other operator, Google Chrome — no new URL.",
+    "On «arnaque»: calm reassurance.",
+    "Do not repeat deposit script verbatim.",
+    "Max 4 short sentences. No markdown. No URLs.",
+    buildAiLanguageLockRule("CM"),
   ].join(" "),
   ZM: [
-    "Reply ONLY in English.",
+    buildAiLanguageLockRule("ZM"),
     SERVICE_FRAMING,
-    "On «scam» / trust: calm, realistic reassurance — legitimate guidance service, official platform, you help step by step.",
-    "Never send registration URLs — scripts send the official steps next.",
-    "Stay concise and friendly.",
+    "SUPPORT AGENT mode after scripts: warm, patient, like a real operator.",
+    "Guide first deposit (Deposit button / green +), mobile money as in thread — do not invent amounts.",
+    "Registration proof: congratulate, ask for deposit screenshot when ready.",
+    "Link or network issues: Wi‑Fi, try again in Chrome, different network — no new URL.",
+    "On «scam»: calm reassurance.",
+    "Do not repeat deposit script verbatim.",
+    "Max 4 short sentences. No markdown. No URLs.",
+    buildAiLanguageLockRule("ZM"),
   ].join(" "),
 };
 
-function buildSystemPrompt(country: CountryCode): string {
+function buildSystemPrompt(country: CountryCode, ctx?: AiAssistContext): string {
+  const supportMode =
+    ctx?.support?.active ||
+    ctx?.agentTrigger === "deposit_script_just_sent" ||
+    ctx?.agentTrigger === "registration_proof_ack";
+
+  const supportBlock =
+    supportMode && ctx?.support
+      ? [
+          `MODE: SUPPORT AGENT (${country}, post-scripts, «в процессе регистрации»).`,
+          describeSupportPhase(ctx.support),
+          "Automated scripts sent mechanical steps; YOU coach deposit, handle doubts, operator/network issues, waiting for screenshots.",
+        ].join(" ")
+      : supportMode
+        ? `MODE: SUPPORT AGENT (${country}) — short human follow-up after an automated script.`
+        : "";
+
+  const baseRole = supportMode
+    ? "You are the SUPPORT AGENT on a Pager inbox bot. Scripts already sent intro, link, and deposit instructions where applicable."
+    : "You are the AI AGENT layer on a Pager inbox bot. Preset SCRIPTS send funnel messages.";
+
+  const baseJob = supportMode
+    ? "Your job: human follow-up until deposit screenshot and game/account ID — all complex or emotional messages."
+    : "Your job when routed: vague, complex, skeptical, or trust questions. Scripts handle mechanical funnel steps.";
+
   return [
-    "You are the AI AGENT layer on a Pager inbox bot.",
-    "Preset SCRIPTS (not you) send: intro, how-it-works, registration text, links, deposit steps, game ID requests.",
-    "Your job ONLY when routed to you: vague, complex, skeptical, or trust/scam questions.",
-    "Scripts handle mechanical funnel messages; you handle everything that needs a human, reassuring explanation.",
+    baseRole,
+    baseJob,
+    supportBlock,
     COUNTRY_RULES[country],
-    "Max 5 short sentences. No markdown. No JSON. No URLs.",
-  ].join(" ");
+    supportMode ? "" : "Max 5 short sentences. No markdown. No JSON. No URLs.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function buildUserPrompt(ctx: AiAssistContext): string {
   const parts = [
     `Country: ${ctx.country}`,
+    `Required reply language: ${describeAiMarketLanguage(ctx.country)}`,
     `Funnel step: ${ctx.funnelStep}`,
     `Classifier intent: ${ctx.intent}`,
-    `Planned script keys (do not duplicate verbatim): ${ctx.scriptKeys?.join(", ") || "none"}`,
-    `Latest customer message: ${ctx.customerText}`,
   ];
+  if (ctx.support?.active) {
+    parts.push(`Support phase: ${ctx.support.phase}`);
+  }
+  if (ctx.agentTrigger === "deposit_script_just_sent") {
+    parts.push(
+      "Trigger: deposit instruction script was just sent automatically. Short operator follow-up: motivate deposit, ask for screenshot when done. Do not repeat the full step list.",
+    );
+  }
+  if (ctx.agentTrigger === "registration_proof_ack") {
+    parts.push(
+      "Trigger: registration screenshot recognized. Acknowledge and guide to deposit + screenshot.",
+    );
+  }
+  parts.push(
+    `Planned script keys (do not duplicate verbatim): ${ctx.scriptKeys?.join(", ") || "none"}`,
+  );
+  if (ctx.customerText.trim()) {
+    parts.push(`Latest customer message: ${ctx.customerText}`);
+  }
   if (ctx.recentCustomerTexts.length > 1) {
     parts.push(`Recent customer lines:\n${ctx.recentCustomerTexts.slice(0, 5).join("\n")}`);
   }
@@ -83,22 +157,66 @@ function buildUserPrompt(ctx: AiAssistContext): string {
   return parts.join("\n\n");
 }
 
-function buildVisionSystemPrompt(country: CountryCode): string {
+function buildLanguageRetryUserPrompt(country: CountryCode): string {
+  return `Your previous reply used the wrong language. Rewrite from scratch. ${buildAiLanguageLockRule(country)}`;
+}
+
+async function completeWithLanguageGuard(
+  env: AppEnv,
+  country: CountryCode,
+  system: string,
+  user: string | Array<{ type: string; text?: string; image_url?: { url: string } }>,
+  model?: string,
+): Promise<string | undefined> {
+  const apiKey = env.AI_API_KEY!.trim();
+  const resolvedModel = model?.trim() || env.AI_MODEL;
+  let reply = sanitizeAiReply(
+    await openAiChatCompletion(env, resolvedModel, system, user),
+    country,
+  );
+  if (reply && aiReplyLooksWrongLanguage(country, reply)) {
+    console.warn(`AI assist wrong language for ${country}, retrying once`);
+    reply = sanitizeAiReply(
+      await openAiChatCompletion(
+        env,
+        resolvedModel,
+        system,
+        typeof user === "string"
+          ? `${user}\n\n${buildLanguageRetryUserPrompt(country)}`
+          : [
+              ...(user as Array<{ type: string; text?: string; image_url?: { url: string } }>),
+              { type: "text", text: buildLanguageRetryUserPrompt(country) },
+            ],
+      ),
+      country,
+    );
+  }
+  if (reply && aiReplyLooksWrongLanguage(country, reply)) {
+    console.warn(`AI assist still wrong language for ${country} — dropping reply`);
+    return undefined;
+  }
+  return reply;
+}
+
+function buildVisionSystemPrompt(country: CountryCode, support?: SupportSnapshot): string {
+  const supportHint = support?.active
+    ? "SUPPORT AGENT: praise registration proof, guide deposit + screenshot; thank for balance shot; ask for clearer image if needed."
+    : "Describe briefly what you see if relevant, then reply to the customer.";
   return [
-    "You see a customer screenshot from a messenger funnel (registration / casino app / deposit proof).",
-    buildSystemPrompt(country),
-    "Describe briefly what you see if relevant, then reply to the customer.",
-    "If the image is unrelated or too blurry, ask politely for the screenshot they were asked for (registration done, balance, or account id).",
+    "You see a customer screenshot (registration / app / deposit proof).",
+    buildSystemPrompt(country, support ? { country, support } as AiAssistContext : undefined),
+    supportHint,
     "Plain text reply only. No URLs.",
   ].join(" ");
 }
 
 async function openAiChatCompletion(
-  apiKey: string,
+  env: AppEnv,
   model: string,
   system: string,
   user: string | Array<{ type: string; text?: string; image_url?: { url: string } }>,
 ): Promise<string | undefined> {
+  const apiKey = env.AI_API_KEY!.trim();
   const userContent =
     typeof user === "string"
       ? user
@@ -112,12 +230,20 @@ async function openAiChatCompletion(
           };
         });
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+  if (env.AI_HTTP_REFERER?.trim()) {
+    headers["HTTP-Referer"] = env.AI_HTTP_REFERER.trim();
+  }
+  if (env.AI_APP_TITLE?.trim()) {
+    headers["X-Title"] = env.AI_APP_TITLE.trim();
+  }
+
+  const response = await fetch(env.AI_BASE_URL, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       model,
       temperature: 0.35,
@@ -133,7 +259,11 @@ async function openAiChatCompletion(
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    console.warn(`AI assist HTTP ${response.status}: ${body.slice(0, 200)}`);
+    const hint =
+      env.AI_API_KEY?.startsWith("sk-or-") && env.AI_BASE_URL.includes("api.openai.com")
+        ? " (OpenRouter key requires AI_BASE_URL=https://openrouter.ai/api/v1/chat/completions)"
+        : "";
+    console.warn(`AI assist HTTP ${response.status}${hint}: ${body.slice(0, 280)}`);
     return undefined;
   }
   const payload = (await response.json()) as {
@@ -143,7 +273,10 @@ async function openAiChatCompletion(
   return text || undefined;
 }
 
-function sanitizeAiReply(reply: string | undefined): string | undefined {
+function sanitizeAiReply(
+  reply: string | undefined,
+  country?: CountryCode,
+): string | undefined {
   if (!reply?.trim()) {
     return undefined;
   }
@@ -151,7 +284,11 @@ function sanitizeAiReply(reply: string | undefined): string | undefined {
     console.warn("AI assist rejected reply containing URL");
     return undefined;
   }
-  return reply.trim();
+  const trimmed = reply.trim();
+  if (country && aiReplyLooksWrongLanguage(country, trimmed)) {
+    return undefined;
+  }
+  return trimmed;
 }
 
 /** OpenAI call — invoked only via ai-agent routing. */
@@ -162,18 +299,17 @@ export async function maybeAiAssistReply(
   if (!env.AI_ENABLED || !env.AI_API_KEY?.trim()) {
     return undefined;
   }
-  if (!ctx.customerText.trim()) {
+  if (!ctx.customerText.trim() && !ctx.agentTrigger && !ctx.forceSupportAgent) {
     return undefined;
   }
 
   try {
-    const reply = await openAiChatCompletion(
-      env.AI_API_KEY.trim(),
-      env.AI_MODEL,
-      buildSystemPrompt(ctx.country),
+    return await completeWithLanguageGuard(
+      env,
+      ctx.country,
+      buildSystemPrompt(ctx.country, ctx),
       buildUserPrompt(ctx),
     );
-    return sanitizeAiReply(reply);
   } catch (error) {
     console.warn("AI assist failed:", error instanceof Error ? error.message : error);
     return undefined;
@@ -194,22 +330,26 @@ export async function maybeAiAssistVision(
       type: "text",
       text: [
         `Country: ${ctx.country}`,
+        `Required reply language: ${describeAiMarketLanguage(ctx.country)}`,
         `Funnel step: ${ctx.funnelStep}`,
         `OCR/proof classifier: ${ctx.proofKind}`,
         `Caption: ${ctx.caption || "(none)"}`,
-      ].join("\n"),
+        ctx.support?.active ? `Support phase: ${ctx.support.phase}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
     },
     { type: "image_url", image_url: { url: dataUrl } },
   ];
 
   try {
-    const reply = await openAiChatCompletion(
-      env.AI_API_KEY.trim(),
-      model,
-      buildVisionSystemPrompt(ctx.country),
+    return await completeWithLanguageGuard(
+      env,
+      ctx.country,
+      buildVisionSystemPrompt(ctx.country, ctx.support),
       userParts,
+      model,
     );
-    return sanitizeAiReply(reply);
   } catch (error) {
     console.warn("AI vision failed:", error instanceof Error ? error.message : error);
     return undefined;
@@ -230,4 +370,94 @@ export function detectImageMimeType(image: Buffer): string {
     return "image/webp";
   }
   return "image/jpeg";
+}
+
+export type CmVisionExtract = {
+  ocrText: string;
+  login17?: string;
+  screen: "registration_success" | "app_balance" | "other";
+};
+
+/** Read CM proof fields from a screenshot when Tesseract misses Login 17 or balance. */
+export async function maybeAiVisionExtractCmProof(
+  env: AppEnv,
+  options: {
+    imageBase64: string;
+    mimeType: string;
+    caption: string;
+    depositScriptAlreadySent: boolean;
+  },
+): Promise<CmVisionExtract | undefined> {
+  if (!env.AI_ENABLED || !env.AI_API_KEY?.trim()) {
+    return undefined;
+  }
+  const model = env.AI_VISION_MODEL?.trim() || env.AI_MODEL;
+  const dataUrl = `data:${options.mimeType};base64,${options.imageBase64}`;
+  const system = [
+    "You read customer screenshots for a Cameroon (CM) 1xBET onboarding funnel.",
+    "Our client Login IDs ALWAYS start with 17 (ten digits typical). Ignore IDs starting with 16.",
+    "Reply with ONE JSON object only, no markdown:",
+    '{"ocrText":"all visible text you can read","login17":"17xxxxxxxx or empty","screen":"registration_success|app_balance|other"}',
+    "registration_success = Inscription réussie / login password screen.",
+    "app_balance = 1xBET home with balance like 1020 F in the header.",
+  ].join(" ");
+  const userParts = [
+    {
+      type: "text",
+      text: [
+        `Caption: ${options.caption || "(none)"}`,
+        `Deposit script already sent in chat: ${options.depositScriptAlreadySent ? "yes" : "no"}`,
+      ].join("\n"),
+    },
+    { type: "image_url", image_url: { url: dataUrl } },
+  ];
+
+  try {
+    const raw = await openAiChatCompletion(env, model, system, userParts);
+    if (!raw?.trim()) {
+      return undefined;
+    }
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return undefined;
+    }
+    const parsed = JSON.parse(jsonMatch[0]) as {
+      ocrText?: string;
+      login17?: string;
+      screen?: string;
+    };
+    const ocrText = (parsed.ocrText || "").trim();
+    let login17 = (parsed.login17 || "").replace(/\D/g, "");
+    if (login17 && !/^17\d{5,}$/.test(login17)) {
+      login17 = "";
+    }
+    const screen =
+      parsed.screen === "registration_success" || parsed.screen === "app_balance"
+        ? parsed.screen
+        : "other";
+    if (!ocrText && !login17) {
+      return undefined;
+    }
+    return { ocrText, login17: login17 || undefined, screen };
+  } catch (error) {
+    console.warn("CM AI vision extract failed:", error instanceof Error ? error.message : error);
+    return undefined;
+  }
+}
+
+export function cmVisionExtractToCombinedText(
+  extract: CmVisionExtract,
+  caption: string,
+): string {
+  const parts = [caption, extract.ocrText];
+  if (extract.login17) {
+    parts.push(`Login: ${extract.login17}`);
+  }
+  if (extract.screen === "registration_success") {
+    parts.push("Inscription réussie");
+  }
+  if (extract.screen === "app_balance") {
+    parts.push("1xbet balance F");
+  }
+  return parts.filter(Boolean).join("\n");
 }
