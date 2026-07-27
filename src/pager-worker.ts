@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import {
   type BotConfig,
   type ChannelConfig,
+  type CountryCode,
   type Stage,
   getChannelConfig,
   getConfigEnabledChannelIds,
@@ -11,6 +12,7 @@ import {
   statusMapForCountry,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
+import { maybeAiAssistReply } from "./ai-assist.js";
 import {
   assessReplyEligibility,
   conversationPriorityScore,
@@ -999,6 +1001,27 @@ async function processCmConversation(
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
   if (!scriptKeys.length) {
+    const aiHandled = await trySendAiAssistReply(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "CM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+      },
+    );
+    if (aiHandled) {
+      return true;
+    }
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} CM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
@@ -1272,6 +1295,27 @@ async function processZmConversation(
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
   if (!scriptKeys.length) {
+    const aiHandled = await trySendAiAssistReply(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "ZM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+      },
+    );
+    if (aiHandled) {
+      return true;
+    }
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} ZM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
@@ -1446,6 +1490,58 @@ async function sendEgRegistrationThenLink(
   });
 }
 
+async function trySendAiAssistReply(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  convId: string,
+  convState: ConversationRuntimeState,
+  lastIncoming: PagerMessage,
+  options: {
+    country: CountryCode;
+    customerText: string;
+    recentCustomerTexts: string[];
+    outgoingTexts: string[];
+    funnelStep: number;
+    intent: string;
+  },
+): Promise<boolean> {
+  const aiText = await maybeAiAssistReply(deps.env, {
+    country: options.country,
+    customerText: options.customerText,
+    recentCustomerTexts: options.recentCustomerTexts,
+    recentOutgoingTexts: options.outgoingTexts,
+    funnelStep: options.funnelStep,
+    intent: options.intent,
+  });
+  if (!aiText) {
+    return false;
+  }
+  await tryTakeConversationForProcessing(client, convId, options.country);
+  const sent = await client.sendMessageReliable(convId, aiText, {
+    channelId: runtime.channelId,
+    conv,
+  });
+  if (!sent) {
+    return false;
+  }
+  console.log(
+    `Pager worker: ${options.country} ${convId.slice(0, 8)} AI assist (${aiText.length} chars) build=${getDeployLabel()}`,
+  );
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: "ai_assist",
+    sendFailures: 0,
+  });
+  return true;
+}
+
 async function processEgConversation(
   deps: WorkerDeps,
   state: ChatState,
@@ -1612,6 +1708,27 @@ async function processEgConversation(
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
   if (!scriptKeys.length) {
+    const aiHandled = await trySendAiAssistReply(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "EG",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+      },
+    );
+    if (aiHandled) {
+      return true;
+    }
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} EG — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );

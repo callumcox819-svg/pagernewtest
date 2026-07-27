@@ -22,7 +22,7 @@ type ReplyMarkup = {
 };
 
 /** RestrictedEmoji pack IDs — animated icons (bot owner Telegram Premium, Bot API 9.4+). */
-const PREMIUM_EMOJI = {
+export const PREMIUM_EMOJI = {
   lock: "5472308992514464048",
   channels: "5373330964372004748",
   folder: "5433653135799228968",
@@ -59,7 +59,7 @@ function inlineBtn(
   return {
     text,
     callback_data: callbackData,
-    ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
+    icon_custom_emoji_id: options?.emojiId ?? PREMIUM_EMOJI.robot,
     ...(options?.style ? { style: options.style } : {}),
   };
 }
@@ -70,7 +70,7 @@ function replyBtn(
 ): ReplyKeyboardButton {
   return {
     text,
-    ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
+    icon_custom_emoji_id: options?.emojiId ?? PREMIUM_EMOJI.robot,
     ...(options?.style ? { style: options.style } : {}),
   };
 }
@@ -434,7 +434,7 @@ export function buildFoldersKeyboard(
     if (safePage > 0) {
       nav.push(inlineBtn("◀", `folders:page:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }));
     }
-    nav.push(inlineBtn(`${safePage + 1}/${totalPages}`, "folders:noop"));
+    nav.push(inlineBtn(`${safePage + 1}/${totalPages}`, "folders:noop", { emojiId: PREMIUM_EMOJI.chart }));
     if (safePage < totalPages - 1) {
       nav.push(inlineBtn("▶", `folders:page:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }));
     }

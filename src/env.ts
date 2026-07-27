@@ -16,6 +16,14 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value.toLowerCase() !== "false"),
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(2000),
+  AI_ENABLED: z
+    .string()
+    .default("false")
+    .transform((value) => value.toLowerCase() === "true"),
+  AI_API_KEY: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : value), z.string().min(1))
+    .optional(),
+  AI_MODEL: z.string().default("gpt-4o-mini"),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
