@@ -12,7 +12,7 @@ import {
   statusMapForCountry,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
-import { maybeAiAssistReply, maybeAiAssistVision, detectImageMimeType } from "./ai-assist.js";
+import { runAiAgentTextTurn, runAiAgentVisionTurn, detectImageMimeType } from "./ai-agent.js";
 import {
   assessReplyEligibility,
   conversationPriorityScore,
@@ -1001,7 +1001,7 @@ async function processCmConversation(
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
-  const aiHandledEarly = await trySendAiAssistReply(
+  const aiHandledEarly = await tryRunAiAgentTurn(
     deps,
     state,
     client,
@@ -1298,7 +1298,7 @@ async function processZmConversation(
   scriptKeys = limitZmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
-  const aiHandledEarly = await trySendAiAssistReply(
+  const aiHandledEarly = await tryRunAiAgentTurn(
     deps,
     state,
     client,
@@ -1496,7 +1496,7 @@ async function sendEgRegistrationThenLink(
   });
 }
 
-async function trySendAiAssistReply(
+async function tryRunAiAgentTurn(
   deps: WorkerDeps,
   state: ChatState,
   client: PagerClient,
@@ -1515,7 +1515,7 @@ async function trySendAiAssistReply(
     scriptKeys: string[];
   },
 ): Promise<boolean> {
-  const aiText = await maybeAiAssistReply(deps.env, {
+  const aiText = await runAiAgentTextTurn(deps.env, {
     country: options.country,
     customerText: options.customerText,
     recentCustomerTexts: options.recentCustomerTexts,
@@ -1536,7 +1536,7 @@ async function trySendAiAssistReply(
     return false;
   }
   console.log(
-    `Pager worker: ${options.country} ${convId.slice(0, 8)} AI assist (${aiText.length} chars) build=${getDeployLabel()}`,
+    `Pager worker: ${options.country} ${convId.slice(0, 8)} AI agent (${aiText.length} chars) build=${getDeployLabel()}`,
   );
   await patchConversationState(deps.stateStore, state.chatId, convId, {
     conversationId: convId,
@@ -1544,7 +1544,7 @@ async function trySendAiAssistReply(
     lastCustomerMessageId: lastIncoming.id,
     lastCustomerMessageAt: lastIncoming.createdAt,
     lastReplyAt: new Date().toISOString(),
-    lastReplyRole: "ai_assist",
+    lastReplyRole: "ai_agent",
     sendFailures: 0,
   });
   return true;
@@ -1716,7 +1716,7 @@ async function processEgConversation(
   }
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
-  const aiHandledEarly = await trySendAiAssistReply(
+  const aiHandledEarly = await tryRunAiAgentTurn(
     deps,
     state,
     client,
@@ -2784,13 +2784,8 @@ async function tryHandleCustomerImage(
   }
 
   const funnelStep = ctx.funnelStep ?? ctx.convState.funnelStep ?? 0;
-  const tryVision =
-    deps.env.AI_ENABLED &&
-    (proofKind === "unclear_screenshot" ||
-      proofKind === "registration_screenshot" ||
-      !ctx.text.trim());
-  if (tryVision && image.length > 0) {
-    const visionReply = await maybeAiAssistVision(deps.env, {
+  if (deps.env.AI_ENABLED && image.length > 0) {
+    const visionReply = await runAiAgentVisionTurn(deps.env, {
       country: ctx.channel.country,
       caption: ctx.text,
       funnelStep,
@@ -2806,7 +2801,7 @@ async function tryHandleCustomerImage(
       });
       if (sent) {
         console.log(
-          `Pager worker: ${ctx.channel.country} ${ctx.convId.slice(0, 8)} AI vision (${visionReply.length} chars) build=${getDeployLabel()}`,
+          `Pager worker: ${ctx.channel.country} ${ctx.convId.slice(0, 8)} AI agent vision (${visionReply.length} chars) build=${getDeployLabel()}`,
         );
         await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
           conversationId: ctx.convId,
@@ -2814,7 +2809,7 @@ async function tryHandleCustomerImage(
           lastCustomerMessageId: ctx.lastIncoming.id,
           lastCustomerMessageAt: ctx.lastIncoming.createdAt,
           lastReplyAt: new Date().toISOString(),
-          lastReplyRole: "ai_vision",
+          lastReplyRole: "ai_agent_vision",
           sendFailures: 0,
         });
         return true;

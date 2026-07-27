@@ -1,6 +1,5 @@
 import type { CountryCode } from "./config.js";
 import type { AppEnv } from "./env.js";
-import { isCustomerClarificationMessage } from "./customer-clarity.js";
 
 export type AiAssistContext = {
   country: CountryCode;
@@ -46,9 +45,10 @@ const COUNTRY_RULES: Record<CountryCode, string> = {
 
 function buildSystemPrompt(country: CountryCode): string {
   return [
-    "You assist a Pager inbox operator. Rule-based scripts handle registration links, deposits, and IDs.",
-    "Your role THIS turn: answer doubt, confusion, or skeptical questions so the customer feels heard.",
-    "After your message, the bot will continue with the normal script funnel — do not replace that funnel.",
+    "You are the AI AGENT layer on a Pager inbox bot.",
+    "Preset SCRIPTS (not you) send: intro, how-it-works, registration text, links, deposit steps, game ID requests.",
+    "Your job ONLY when routed to you: handle complex, unclear, or skeptical customer messages.",
+    "Reassure, explain simply, answer their actual question — then stop; scripts will send the next official step on the following customer message.",
     COUNTRY_RULES[country],
     "Max 5 short sentences. No markdown. No JSON. No URLs.",
   ].join(" ");
@@ -144,23 +144,7 @@ function sanitizeAiReply(reply: string | undefined): string | undefined {
   return reply.trim();
 }
 
-export function shouldPrioritizeAiOverScripts(ctx: AiAssistContext): boolean {
-  if (!ctx.customerText.trim()) {
-    return false;
-  }
-  if (ctx.intent === "declined") {
-    return false;
-  }
-  if (isCustomerClarificationMessage(ctx.customerText)) {
-    return true;
-  }
-  if (!ctx.scriptKeys?.length && (ctx.intent === "question" || ctx.intent === "unknown")) {
-    return true;
-  }
-  return false;
-}
-
-/** LLM reply when scripts miss or customer needs clarification — requires AI_ENABLED + AI_API_KEY. */
+/** OpenAI call — invoked only via ai-agent routing. */
 export async function maybeAiAssistReply(
   env: AppEnv,
   ctx: AiAssistContext,
@@ -169,14 +153,6 @@ export async function maybeAiAssistReply(
     return undefined;
   }
   if (!ctx.customerText.trim()) {
-    return undefined;
-  }
-  const shouldRun =
-    shouldPrioritizeAiOverScripts(ctx) ||
-    ((!ctx.scriptKeys || ctx.scriptKeys.length === 0) &&
-      ctx.customerText.trim().length >= 4 &&
-      ctx.intent !== "declined");
-  if (!shouldRun) {
     return undefined;
   }
 
