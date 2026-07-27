@@ -1,6 +1,6 @@
 import type { CountryCode } from "./config.js";
 import type { AppEnv } from "./env.js";
-import { isCustomerClarificationMessage } from "./customer-clarity.js";
+import { isCustomerClarificationMessage, isScamOrTrustQuestion } from "./customer-clarity.js";
 import {
   type AiAssistContext,
   type AiVisionContext,
@@ -58,6 +58,9 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
   }
   if (isSimpleFunnelAcknowledgment(text) && ctx.scriptKeys?.length) {
     return false;
+  }
+  if (isScamOrTrustQuestion(text)) {
+    return true;
   }
   if (isCustomerClarificationMessage(text)) {
     return true;

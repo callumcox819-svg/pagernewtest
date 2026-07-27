@@ -6,9 +6,9 @@ const CLARITY_PATTERNS = [
   // French
   /pas\s*compris|je\s*ne\s*comprends|vraiment\s*vrai|est-ce\s*(que\s*)?(vrai|s[eé]rieux|sûr|sur)|arnaque|escroc|comment\s*faire|explique|pas\s*clair/i,
   // English
-  /don'?t\s*understand|do\s*not\s*understand|not\s*clear|is\s*this\s*(real|true|legit)|are\s*you\s*sure|how\s*exactly|what\s*do\s*i\s*need|confus|scam|trust/i,
+  /don'?t\s*understand|do\s*not\s*understand|not\s*clear|is\s*this\s*(real|true|legit|a\s*scam|scam)|are\s*you\s*sure|how\s*exactly|what\s*do\s*i\s*need|confus|scam|trust|fraud|fake|legit/i,
   // Russian / Ukrainian (common in operator chats)
-  /не\s*понима|не\s*понят|точно\s*ли|правда\s*ли|это\s*правда|как\s*именно|как\s*надо|обман|развод|не\s*верю/i,
+  /не\s*понима|не\s*понят|точно\s*ли|правда\s*ли|это\s*правда|как\s*именно|как\s*надо|обман|развод|не\s*верю|это\s*скам|скам\??|мошен/i,
   /\?/,
 ];
 
@@ -32,4 +32,13 @@ export function isCustomerClarificationMessage(text: string): boolean {
     return false;
   }
   return true;
+}
+
+/** «Это скам?» / arnaque / احتيال — always agent, never a bare script skip. */
+export function isScamOrTrustQuestion(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  return /(scam|скам|мошен|развод|обман|arnaque|escroc|fraude|fake|n'?est\s*pas\s*vrai|احتيال|نصب|نصبة|هل\s*.*نصب|حقيق)/i.test(t);
 }
