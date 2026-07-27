@@ -164,6 +164,87 @@ export function shouldQueueEgConversation(conv: PagerConversation): boolean {
   return false;
 }
 
+/** CM/ZM: same ghost-unread rule as Egypt — do not wake weeks-old threads. */
+export function shouldQueueCmConversation(conv: PagerConversation): boolean {
+  if (isOutgoingDirection(conv.lastMessageDirection) && !hasUnreadMarkers(conv)) {
+    return false;
+  }
+  const lastAt = resolveLastMessageAt(conv);
+  const fresh = isFreshCustomerMessage(lastAt);
+
+  if (hasUnreadMarkers(conv)) {
+    if (lastAt && !fresh && !isNewLeadConversation(conv)) {
+      return false;
+    }
+    return true;
+  }
+
+  if (
+    isNewLeadConversation(conv) &&
+    fresh &&
+    isIncomingDirection(conv.lastMessageDirection)
+  ) {
+    return true;
+  }
+
+  if (isInProgressStatusConversation(conv) && fresh) {
+    return true;
+  }
+
+  return false;
+}
+
+export function shouldQueueZmConversation(conv: PagerConversation): boolean {
+  return shouldQueueCmConversation(conv);
+}
+
+/**
+ * May the bot send a new reply (script or AI) to this customer line?
+ * History stays in thread for context; stale/ghost unread must not trigger answers.
+ */
+export function isActionableCustomerMessage(
+  lastIncoming: PagerMessage,
+  conv: PagerConversation,
+  convState: ConversationRuntimeState,
+  sortedMessages: PagerMessage[],
+  options?: { country?: CountryCode; operatorUserId?: string },
+): boolean {
+  const incomingAt = Date.parse(parseMessageTimestamp(lastIncoming.createdAt));
+  if (!Number.isFinite(incomingAt)) {
+    return false;
+  }
+
+  if (
+    hasBotReplyAfterCustomerMessage(
+      sortedMessages,
+      lastIncoming,
+      conv,
+      options?.operatorUserId,
+      options?.country,
+    )
+  ) {
+    return false;
+  }
+
+  if (isFreshCustomerMessage(lastIncoming.createdAt)) {
+    return true;
+  }
+
+  const lastReplyAt = convState.lastReplyAt ? Date.parse(convState.lastReplyAt) : NaN;
+  if (Number.isFinite(lastReplyAt) && incomingAt > lastReplyAt + 500) {
+    return true;
+  }
+
+  if (
+    isNewLeadConversation(conv) &&
+    isFreshCustomerMessage(lastIncoming.createdAt)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function shouldProcessIncomingMessage(lastIncomingAt?: string, conv?: PagerConversation): boolean {
   if (isFreshCustomerMessage(lastIncomingAt)) {
     return true;

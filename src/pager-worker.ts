@@ -39,6 +39,9 @@ import {
   shouldProcessConversation,
   shouldQueueEgConversation,
   cmFunnelNeedsContinuation,
+  isActionableCustomerMessage,
+  shouldQueueCmConversation,
+  shouldQueueZmConversation,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -718,6 +721,12 @@ async function buildWorkQueue(
         if (isEg && !shouldQueueEgConversation(conv)) {
           continue;
         }
+        if (isCm && !shouldQueueCmConversation(conv)) {
+          continue;
+        }
+        if (isZm && !shouldQueueZmConversation(conv)) {
+          continue;
+        }
         if (
           (isCm || isZm || isEg) &&
           isOutgoingDirection(conv.lastMessageDirection) &&
@@ -732,9 +741,13 @@ async function buildWorkQueue(
 
         const needsReply = isEg
           ? shouldQueueEgConversation(conv)
-          : hasUnreadMarkers(conv) ||
-            isIncomingDirection(conv.lastMessageDirection) ||
-            isNewLeadConversation(conv);
+          : isCm
+            ? shouldQueueCmConversation(conv)
+            : isZm
+              ? shouldQueueZmConversation(conv)
+              : hasUnreadMarkers(conv) ||
+                isIncomingDirection(conv.lastMessageDirection) ||
+                isNewLeadConversation(conv);
 
         if (needsReply) {
           if (unreadAdded >= unreadCap) {
@@ -747,6 +760,13 @@ async function buildWorkQueue(
         }
 
         if ((isCm || isZm) && followUpAdded < followUpCap) {
+          const lastAt = resolveLastMessageAt(conv);
+          if (
+            !isInProgressStatusConversation(conv) ||
+            !isFreshCustomerMessage(lastAt)
+          ) {
+            continue;
+          }
           selected.set(conv.id, conv);
           followUpAdded += 1;
           addedThisPage += 1;
@@ -773,6 +793,14 @@ async function buildWorkQueue(
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
     if (runtime?.runtime.country === "EG") {
       if (!shouldQueueEgConversation(conv)) {
+        continue;
+      }
+    } else if (runtime?.runtime.country === "CM") {
+      if (!shouldQueueCmConversation(conv)) {
+        continue;
+      }
+    } else if (runtime?.runtime.country === "ZM") {
+      if (!shouldQueueZmConversation(conv)) {
         continue;
       }
     } else if (!shouldProcessConversation(conv)) {
@@ -2720,21 +2748,27 @@ async function ensureCustomerMessageEligible(
   const unreadOrIncoming =
     hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection);
   const customerMessageFresh = isFreshCustomerMessage(lastIncoming.createdAt);
+  const actionable = isActionableCustomerMessage(
+    lastIncoming,
+    conv,
+    convState,
+    sorted,
+    { country, operatorUserId: options?.operatorUserId },
+  );
   // Unread / customer-last must reach the script engine — never bury a backlog behind state locks.
   const unreadNeedsScriptPass =
-    unreadOrIncoming &&
-    !botAlreadyReplied &&
-    (country !== "EG" || customerMessageFresh);
+    unreadOrIncoming && !botAlreadyReplied && actionable;
 
   const funnelContinuation =
-    (country === "EG" &&
+    actionable &&
+    ((country === "EG" &&
       egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))) ||
-    (country === "CM" &&
-      cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted), {
-        hasImage: Boolean(extractProofImageUrl(lastIncoming)),
-      }));
+      (country === "CM" &&
+        cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted), {
+          hasImage: Boolean(extractProofImageUrl(lastIncoming)),
+        })));
 
-  if (options?.bypass || unreadNeedsScriptPass || funnelContinuation) {
+  if ((options?.bypass && actionable) || unreadNeedsScriptPass || funnelContinuation) {
     return true;
   }
 
@@ -2773,7 +2807,7 @@ async function ensureCustomerMessageEligible(
   }
 
   if (isNewCustomerTurn) {
-    if (botAlreadyReplied) {
+    if (botAlreadyReplied || !actionable) {
       // Bookkeeping only — do NOT invent lastReplyAt (that permanently locks the chat).
       await patchConversationState(deps.stateStore, state.chatId, convId, {
         conversationId: convId,
@@ -2797,7 +2831,7 @@ async function ensureCustomerMessageEligible(
     return true;
   }
 
-  if (staleStateLock) {
+  if (staleStateLock && actionable) {
     return true;
   }
 
@@ -2806,6 +2840,13 @@ async function ensureCustomerMessageEligible(
     operatorUserId: options?.operatorUserId,
   });
   if (eligibility.eligible) {
+    if (!actionable) {
+      const label = options?.countryLabel ? ` ${options.countryLabel}` : "";
+      console.log(
+        `Pager worker: skip ${convId.slice(0, 8)}${label} — stale_customer_message (text=${truncate(customerText)})`,
+      );
+      return false;
+    }
     return true;
   }
 
