@@ -24,6 +24,7 @@ const envSchema = z.object({
     .preprocess((value) => (value === "" || value === undefined ? undefined : value), z.string().min(1))
     .optional(),
   AI_MODEL: z.string().default("gpt-4o-mini"),
+  AI_VISION_MODEL: z.string().default("gpt-4o-mini"),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

@@ -12,7 +12,7 @@ import {
   statusMapForCountry,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
-import { maybeAiAssistReply } from "./ai-assist.js";
+import { maybeAiAssistReply, maybeAiAssistVision, detectImageMimeType } from "./ai-assist.js";
 import {
   assessReplyEligibility,
   conversationPriorityScore,
@@ -978,6 +978,7 @@ async function processCmConversation(
       imageUrl,
       playbook,
       outgoingTexts,
+      funnelStep: effectiveStep,
     });
     if (imageHandled) {
       return true;
@@ -1000,28 +1001,30 @@ async function processCmConversation(
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
+  const aiHandledEarly = await trySendAiAssistReply(
+    deps,
+    state,
+    client,
+    conv,
+    runtime,
+    convId,
+    convState,
+    lastIncoming,
+    {
+      country: "CM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      scriptKeys,
+    },
+  );
+  if (aiHandledEarly) {
+    return true;
+  }
+
   if (!scriptKeys.length) {
-    const aiHandled = await trySendAiAssistReply(
-      deps,
-      state,
-      client,
-      conv,
-      runtime,
-      convId,
-      convState,
-      lastIncoming,
-      {
-        country: "CM",
-        customerText: latestCustomerText,
-        recentCustomerTexts,
-        outgoingTexts,
-        funnelStep: effectiveStep,
-        intent,
-      },
-    );
-    if (aiHandled) {
-      return true;
-    }
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} CM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
@@ -1249,6 +1252,7 @@ async function processZmConversation(
       imageUrl,
       playbook,
       outgoingTexts,
+      funnelStep: effectiveStep,
     });
     if (imageHandled) {
       return true;
@@ -1294,28 +1298,30 @@ async function processZmConversation(
   scriptKeys = limitZmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
+  const aiHandledEarly = await trySendAiAssistReply(
+    deps,
+    state,
+    client,
+    conv,
+    runtime,
+    convId,
+    convState,
+    lastIncoming,
+    {
+      country: "ZM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      scriptKeys,
+    },
+  );
+  if (aiHandledEarly) {
+    return true;
+  }
+
   if (!scriptKeys.length) {
-    const aiHandled = await trySendAiAssistReply(
-      deps,
-      state,
-      client,
-      conv,
-      runtime,
-      convId,
-      convState,
-      lastIncoming,
-      {
-        country: "ZM",
-        customerText: latestCustomerText,
-        recentCustomerTexts,
-        outgoingTexts,
-        funnelStep: effectiveStep,
-        intent,
-      },
-    );
-    if (aiHandled) {
-      return true;
-    }
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} ZM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
@@ -1506,6 +1512,7 @@ async function trySendAiAssistReply(
     outgoingTexts: string[];
     funnelStep: number;
     intent: string;
+    scriptKeys: string[];
   },
 ): Promise<boolean> {
   const aiText = await maybeAiAssistReply(deps.env, {
@@ -1515,6 +1522,7 @@ async function trySendAiAssistReply(
     recentOutgoingTexts: options.outgoingTexts,
     funnelStep: options.funnelStep,
     intent: options.intent,
+    scriptKeys: options.scriptKeys,
   });
   if (!aiText) {
     return false;
@@ -1670,6 +1678,7 @@ async function processEgConversation(
       imageUrl,
       playbook,
       outgoingTexts,
+      funnelStep: effectiveStep,
     });
     if (imageHandled) {
       return true;
@@ -1707,28 +1716,30 @@ async function processEgConversation(
   }
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
 
+  const aiHandledEarly = await trySendAiAssistReply(
+    deps,
+    state,
+    client,
+    conv,
+    runtime,
+    convId,
+    convState,
+    lastIncoming,
+    {
+      country: "EG",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      scriptKeys,
+    },
+  );
+  if (aiHandledEarly) {
+    return true;
+  }
+
   if (!scriptKeys.length) {
-    const aiHandled = await trySendAiAssistReply(
-      deps,
-      state,
-      client,
-      conv,
-      runtime,
-      convId,
-      convState,
-      lastIncoming,
-      {
-        country: "EG",
-        customerText: latestCustomerText,
-        recentCustomerTexts,
-        outgoingTexts,
-        funnelStep: effectiveStep,
-        intent,
-      },
-    );
-    if (aiHandled) {
-      return true;
-    }
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} EG — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
@@ -2745,6 +2756,7 @@ async function tryHandleCustomerImage(
   ctx: SpecialResponseContext & {
     imageUrl: string;
     outgoingTexts: string[];
+    funnelStep?: number;
   },
 ): Promise<boolean> {
   if (!ctx.imageUrl) {
@@ -2752,8 +2764,9 @@ async function tryHandleCustomerImage(
   }
 
   let proofKind;
+  let image: Buffer;
   try {
-    const image = await ctx.client.downloadAttachment(ctx.imageUrl);
+    image = await ctx.client.downloadAttachment(ctx.imageUrl);
     const classification = await classifyProofFromImage(ctx.playbook, image, {
       caption: ctx.text,
       ocrEnabled: deps.env.OCR_ENABLED,
@@ -2763,6 +2776,50 @@ async function tryHandleCustomerImage(
   } catch (error) {
     console.warn(`CM OCR failed ${ctx.convId.slice(0, 8)}:`, formatError(error));
     proofKind = classifyProofFromText(ctx.playbook, ctx.text).proofKind;
+    try {
+      image = await ctx.client.downloadAttachment(ctx.imageUrl);
+    } catch {
+      return false;
+    }
+  }
+
+  const funnelStep = ctx.funnelStep ?? ctx.convState.funnelStep ?? 0;
+  const tryVision =
+    deps.env.AI_ENABLED &&
+    (proofKind === "unclear_screenshot" ||
+      proofKind === "registration_screenshot" ||
+      !ctx.text.trim());
+  if (tryVision && image.length > 0) {
+    const visionReply = await maybeAiAssistVision(deps.env, {
+      country: ctx.channel.country,
+      caption: ctx.text,
+      funnelStep,
+      outgoingTexts: ctx.outgoingTexts,
+      proofKind,
+      imageBase64: image.toString("base64"),
+      mimeType: detectImageMimeType(image),
+    });
+    if (visionReply) {
+      const sent = await ctx.client.sendMessageReliable(ctx.convId, visionReply, {
+        channelId: ctx.runtime.channelId,
+        conv: ctx.conv,
+      });
+      if (sent) {
+        console.log(
+          `Pager worker: ${ctx.channel.country} ${ctx.convId.slice(0, 8)} AI vision (${visionReply.length} chars) build=${getDeployLabel()}`,
+        );
+        await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+          conversationId: ctx.convId,
+          channelId: ctx.runtime.channelId,
+          lastCustomerMessageId: ctx.lastIncoming.id,
+          lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+          lastReplyAt: new Date().toISOString(),
+          lastReplyRole: "ai_vision",
+          sendFailures: 0,
+        });
+        return true;
+      }
+    }
   }
 
   if (proofKind === "registration_screenshot" || proofKind === "id_screenshot") {

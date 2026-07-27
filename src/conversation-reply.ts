@@ -7,6 +7,7 @@ import {
 import type { ConversationRuntimeState } from "./state-store.js";
 import type { CountryCode } from "./config.js";
 import { isAutomatedFunnelOutgoing } from "./funnel-outbound.js";
+import { isCustomerClarificationMessage } from "./customer-clarity.js";
 import { egFunnelNeedsContinuation } from "./eg-script-engine.js";
 import {
   cmAgeQuestionSentInHistory,
@@ -413,6 +414,9 @@ export function cmFunnelNeedsContinuation(
   const text = (customerText || "").trim();
   if (!text) {
     return false;
+  }
+  if (isCustomerClarificationMessage(text)) {
+    return true;
   }
   const introSent = cmScriptSentInHistory(outgoingTexts, "01_intro");
   const ageSent = cmAgeQuestionSentInHistory(outgoingTexts);

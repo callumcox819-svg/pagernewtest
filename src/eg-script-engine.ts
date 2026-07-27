@@ -1,5 +1,6 @@
 import type { PagerMessage } from "./pager-client.js";
 import { isPositiveMessageReaction } from "./message-attachments.js";
+import { isCustomerClarificationMessage } from "./customer-clarity.js";
 import {
   type EgIntent,
   classifyEgIntent,
@@ -294,6 +295,9 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
   const t = (customerText || "").trim();
   if (!t) {
     return false;
+  }
+  if (isCustomerClarificationMessage(t)) {
+    return true;
   }
 
   if (!introSent) {
