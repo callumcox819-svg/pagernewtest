@@ -47,25 +47,57 @@ export function isSimpleFunnelAcknowledgment(text: string): boolean {
   return FUNNEL_ACK.test(t) || /^[\s👍👌✅🔥🙏😊🙂]+$/u.test(t);
 }
 
+/** Post-«в процессе» — reply only when the customer asked something, not «Ok» / «yes» spam. */
+export function customerWantsSupportAgentReply(text: string, intent: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  if (intent === "declined") {
+    return false;
+  }
+  if (isLinkAccessProblemMessage(t) || isScamOrTrustQuestion(t) || isCustomerClarificationMessage(t)) {
+    return true;
+  }
+  if (isSimpleFunnelAcknowledgment(t)) {
+    return false;
+  }
+  if (isComplexCustomerMessage(t)) {
+    return true;
+  }
+  if (/\?/.test(t)) {
+    return true;
+  }
+  if (intent === "question") {
+    return true;
+  }
+  if (
+    t.length <= 24 &&
+    /^(ok|okay|yes|oui|d'accord|right now|hum|humm|we|n+|nn|merci|thanks|thank you|bye|salut|bonsoir|bonjour)\b/i.test(
+      t,
+    )
+  ) {
+    return false;
+  }
+  return t.length >= 20;
+}
+
 /**
  * AI Agent vs Scripts routing.
  * - Scripts: preset funnel (reg, link, deposit, ID, intro, steps).
  * - Support agent (post «в процессе»): handles coaching and complex messages for all countries.
  */
 export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
-  if (ctx.forceSupportAgent || ctx.agentTrigger) {
-    return true;
+  if (ctx.agentTrigger) {
+    return false;
+  }
+  if (ctx.forceSupportAgent) {
+    return customerWantsSupportAgentReply(ctx.customerText.trim(), ctx.intent);
   }
 
   const text = ctx.customerText.trim();
   if (ctx.support?.active) {
-    if (ctx.intent === "declined") {
-      return false;
-    }
-    if (!text) {
-      return false;
-    }
-    return true;
+    return customerWantsSupportAgentReply(text, ctx.intent);
   }
 
   if (!text) {

@@ -12,7 +12,7 @@ import {
   statusMapForCountry,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
-import { runAiAgentTextTurn, runAiAgentVisionTurn, detectImageMimeType } from "./ai-agent.js";
+import { runAiAgentTextTurn, runAiAgentVisionTurn, detectImageMimeType, customerWantsSupportAgentReply } from "./ai-agent.js";
 import {
   cmVisionExtractToCombinedText,
   maybeAiVisionExtractCmProof,
@@ -24,7 +24,6 @@ import {
   buildSupportSnapshot,
   filterScriptKeysForSupportAgent,
   inProgressFollowUpEligible,
-  scriptKeysIncludeDeposit,
   supportAgentSkipsEarlyAi,
 } from "./ai-support-phase.js";
 import {
@@ -1744,6 +1743,9 @@ async function trySupportAgentWhenNoScripts(
   if (options.scriptKeys.length || !options.support.active || !options.customerText.trim()) {
     return false;
   }
+  if (!customerWantsSupportAgentReply(options.customerText, options.intent)) {
+    return false;
+  }
   return tryRunAiAgentTurn(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
     ...options,
     forceSupportAgent: true,
@@ -1751,15 +1753,15 @@ async function trySupportAgentWhenNoScripts(
 }
 
 async function trySupportAgentAfterScripts(
-  deps: WorkerDeps,
-  state: ChatState,
-  client: PagerClient,
-  conv: PagerConversation,
-  runtime: EnabledChannel,
-  convId: string,
-  convState: ConversationRuntimeState,
-  lastIncoming: PagerMessage,
-  options: {
+  _deps: WorkerDeps,
+  _state: ChatState,
+  _client: PagerClient,
+  _conv: PagerConversation,
+  _runtime: EnabledChannel,
+  _convId: string,
+  _convState: ConversationRuntimeState,
+  _lastIncoming: PagerMessage,
+  _options: {
     country: CountryCode;
     customerText: string;
     recentCustomerTexts: string[];
@@ -1771,26 +1773,8 @@ async function trySupportAgentAfterScripts(
     skipEarlySupportAi: boolean;
   },
 ): Promise<boolean> {
-  if (!options.support.active) {
-    return false;
-  }
-  const depositSentNow = scriptKeysIncludeDeposit(options.country, options.sentScriptKeys);
-  if (!depositSentNow && !options.skipEarlySupportAi) {
-    return false;
-  }
-  await sleep(400);
-  return tryRunAiAgentTurn(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
-    country: options.country,
-    customerText: options.customerText,
-    recentCustomerTexts: options.recentCustomerTexts,
-    outgoingTexts: options.outgoingTexts,
-    funnelStep: options.funnelStep,
-    intent: options.intent,
-    scriptKeys: options.sentScriptKeys,
-    support: options.support,
-    forceSupportAgent: depositSentNow,
-    agentTrigger: depositSentNow ? "deposit_script_just_sent" : undefined,
-  });
+  // One customer turn → script OR agent, never auto follow-up after deposit script.
+  return false;
 }
 
 async function processEgConversation(
@@ -3094,26 +3078,6 @@ async function sendCmScriptKey(
     currentStage: scriptKey === "09_deposit" ? "deposit_pending" : "waiting_id",
     sendFailures: 0,
   });
-  if (scriptKey === "09_deposit" && deps.env.AI_ENABLED) {
-    const support = buildSupportSnapshot(
-      "CM",
-      isInProgressStatusConversation(ctx.conv),
-      ctx.outgoingTexts,
-    );
-    await sleep(400);
-    await tryRunAiAgentTurn(deps, ctx.state, ctx.client, ctx.conv, ctx.runtime, ctx.convId, ctx.convState, ctx.lastIncoming, {
-      country: "CM",
-      customerText: ctx.text,
-      recentCustomerTexts: ctx.text.trim() ? [ctx.text] : [],
-      outgoingTexts: ctx.outgoingTexts,
-      funnelStep: ctx.convState.funnelStep ?? 6,
-      intent: "positive",
-      scriptKeys: [scriptKey],
-      support,
-      forceSupportAgent: true,
-      agentTrigger: "deposit_script_just_sent",
-    });
-  }
   return true;
 }
 
