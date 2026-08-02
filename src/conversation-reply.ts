@@ -467,6 +467,10 @@ export function hasBotReplyAfterCustomerMessage(
       if (message.isDelivered || message.facebookMessageId) {
         return true;
       }
+      const text = (message.text || "").trim();
+      if (text && isOutgoingDirection(message.messageDirection)) {
+        return true;
+      }
     }
     return false;
   }

@@ -58,9 +58,7 @@ export function isCustomerSaysNotRegisteredYet(text: string): boolean {
   if (!t) {
     return false;
   }
-  if (/^no\.?!*$/i.test(t) || /^non[.!]?$/i.test(t) || /^لا[.!]?$/.test(t)) {
-    return true;
-  }
+  // Bare "no" is ambiguous (declining offer vs not registered) — handled in funnel intent, not here.
   if (/\b(no i am not|not yet|no not yet|no i haven'?t|no i have not)\b/i.test(t)) {
     return true;
   }

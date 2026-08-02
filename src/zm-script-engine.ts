@@ -195,12 +195,13 @@ function stepForOutgoingText(text: string): number {
 }
 
 function isOutgoingDelivered(message: PagerMessage): boolean {
-  if (!message.text?.trim()) {
-    return false;
-  }
   const direction = (message.messageDirection ?? "").toLowerCase();
   if (direction !== "outgoing" && direction !== "out") {
     return false;
+  }
+  const text = (message.text || "").trim();
+  if (text) {
+    return true;
   }
   return Boolean(message.isDelivered || message.facebookMessageId);
 }
@@ -287,9 +288,6 @@ export function limitZmScriptsForCustomerTurn(
       return [...ZM_REG_BUNDLE];
     }
     if (!linkSent) {
-      return ["05_link"];
-    }
-    if (scriptKeys.length === 1 && scriptKeys[0] === "05_link") {
       return ["05_link"];
     }
     return [];
@@ -428,6 +426,17 @@ export function resolveZmFunnelScripts(
     }
     if (!explainSent) {
       return ["02_how_it_works", "03_zmw_table"];
+    }
+    if (
+      linkSent &&
+      !wantsRegistrationLink(t) &&
+      !isRegistrationHelpRequest(t) &&
+      !isZmRegistrationAccountQuestion(t)
+    ) {
+      if (!gameIdAskSent && !depositSent && (signal || isRegistrationConfirmed(t))) {
+        return ["07_game_id"];
+      }
+      return [];
     }
     return registrationResendScriptKeys("ZM", linkSent);
   }

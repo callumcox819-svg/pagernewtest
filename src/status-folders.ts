@@ -104,6 +104,20 @@ export function isZmRegistrationCompleteStatusName(name: string): boolean {
   return normalized.includes("реєстраці") && !normalized.includes("процес");
 }
 
+export function isConversationInOperatorEnabledFolders(
+  conv: PagerConversation,
+  state: {
+    statusFolders?: StatusFolderState[];
+    operatorSettings?: { statusFolders?: StatusFolderState[] };
+  },
+): boolean {
+  const enabled = getEnabledFolderIds(state);
+  if (!enabled || enabled.size === 0) {
+    return true;
+  }
+  return conversationAllowedInFolders(conv, enabled);
+}
+
 export function expandEnabledFolderIds(
   state: { statusFolders?: StatusFolderState[] },
   enabledFolderIds: Set<string> | null,

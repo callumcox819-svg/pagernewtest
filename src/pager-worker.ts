@@ -20,7 +20,7 @@ import {
 import { extractCmClientLoginId17 } from "./cm-proof.js";
 import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import { isLinkAccessProblemMessage, isCustomerClarificationMessage } from "./customer-clarity.js";
-import { isInProgressStatusConversation } from "./status-folders.js";
+import { isInProgressStatusConversation, isConversationInOperatorEnabledFolders } from "./status-folders.js";
 import {
   buildSupportSnapshot,
   filterScriptKeysForSupportAgent,
@@ -147,7 +147,6 @@ import {
   ALL_INBOX_FOLDER_ID,
   NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
-  expandEnabledFolderIds,
   getEnabledFolderIds,
   hasEnabledStatusFolders,
   isNoStatusConversation,
@@ -249,15 +248,9 @@ function accountHasEgOrCm(state: ChatState, config: BotConfig): boolean {
 
 function resolveEnabledFolderIds(
   state: ChatState,
-  enabledChannels: Array<{ runtime: { country: string } }>,
+  _enabledChannels: Array<{ runtime: { country: string } }>,
 ): Set<string> | null {
-  const operatorFolderIds = getEnabledFolderIds(state);
-  const hasZmChannel = enabledChannels.some((item) => item.runtime.country === "ZM");
-  const hasCmChannel = enabledChannels.some((item) => item.runtime.country === "CM");
-  if (hasZmChannel && !hasCmChannel && operatorFolderIds) {
-    return expandEnabledFolderIds(state, operatorFolderIds);
-  }
-  return operatorFolderIds;
+  return getEnabledFolderIds(state);
 }
 
 async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promise<void> {
@@ -330,11 +323,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     );
   }
 
-  const operatorFolderIds = getEnabledFolderIds(freshState);
   const enabledFolderIds = resolveEnabledFolderIds(freshState, enabledChannels);
   const hasCmChannel = enabledChannels.some((item) => item.runtime.country === "CM");
   const hasEgChannel = enabledChannels.some((item) => item.runtime.country === "EG");
-  const hasZmChannel = enabledChannels.some((item) => item.runtime.country === "ZM");
   if (enabledFolderIds && enabledFolderIds.size === 0) {
     console.warn(
       `Pager worker: chat ${freshState.chatId} — no status folders enabled; falling back to all inbox`,
@@ -346,12 +337,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       .filter((folder) => folder.enabled)
       .map((folder) => folder.name)
       .join(", ");
-    const folderMode =
-      hasZmChannel && !hasCmChannel && enabledFolderIds !== operatorFolderIds
-        ? "zm+funnel"
-        : hasEgChannel && hasCmChannel
-          ? "cm+eg"
-          : "strict";
+    const folderMode = hasEgChannel && hasCmChannel ? "cm+eg" : "strict";
     console.log(
       `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}] (${folderMode})`,
     );
@@ -993,8 +979,11 @@ async function processCmConversation(
 
   const operatorUserId = operatorUserIdEarly;
 
+  const folderEnabled = isConversationInOperatorEnabledFolders(conv, currentState);
   const imageUrl = extractProofImageUrl(lastIncoming);
-  const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts);
+  const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: folderEnabled,
+  });
   const cmInProgressFollowUp =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
     isCustomerClarificationMessage(latestCustomerText);
@@ -1129,6 +1118,7 @@ async function processCmConversation(
         intent,
         scriptKeys,
         support,
+        folderEnabled,
       },
     );
     if (aiHandledEarly) {
@@ -1348,8 +1338,11 @@ async function processZmConversation(
     Boolean(latestCustomerText);
 
   const operatorUserId = operatorUserIdEarly;
+  const folderEnabled = isConversationInOperatorEnabledFolders(conv, currentState);
   const imageUrl = extractProofImageUrl(lastIncoming);
-  const support = buildSupportSnapshot("ZM", isInProgressStatusConversation(conv), outgoingTexts);
+  const support = buildSupportSnapshot("ZM", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: folderEnabled,
+  });
   const zmInProgressBypass =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
     isCustomerClarificationMessage(latestCustomerText);
@@ -1480,6 +1473,7 @@ async function processZmConversation(
         intent,
         scriptKeys,
         support,
+        folderEnabled,
       },
     );
     if (aiHandledEarly) {
@@ -1624,7 +1618,8 @@ async function processZmConversation(
   if (statusTarget) {
     const statusId = findZmStatusId(currentState, statusTarget);
     const operatorId = await client.probeOperatorUserId();
-    if (statusId && operatorId) {
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+    if (statusId && operatorId && currentStatusId !== statusId) {
       try {
         await client.patchConversationStatus(convId, statusId, operatorId);
         console.log(
@@ -1712,8 +1707,12 @@ async function tryRunAiAgentTurn(
     support?: import("./ai-support-phase.js").SupportSnapshot;
     forceSupportAgent?: boolean;
     agentTrigger?: import("./ai-assist.js").AiAgentTrigger;
+    folderEnabled?: boolean;
   },
 ): Promise<boolean> {
+  if (options.folderEnabled === false) {
+    return false;
+  }
   if (
     looksLikeOwnScriptEcho(options.customerText, options.country, options.outgoingTexts)
   ) {
@@ -1888,8 +1887,11 @@ async function processEgConversation(
     isFreshCustomerMessage(lastIncoming.createdAt);
 
   const operatorUserId = operatorUserIdEarly;
+  const folderEnabled = isConversationInOperatorEnabledFolders(conv, currentState);
   const imageUrl = extractProofImageUrl(lastIncoming);
-  const support = buildSupportSnapshot("EG", isInProgressStatusConversation(conv), outgoingTexts);
+  const support = buildSupportSnapshot("EG", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: folderEnabled,
+  });
   const egInProgressBypass =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
     isCustomerClarificationMessage(latestCustomerText);
@@ -2012,6 +2014,7 @@ async function processEgConversation(
         intent,
         scriptKeys,
         support,
+        folderEnabled,
       },
     );
     if (aiHandledEarly) {
@@ -3204,6 +3207,9 @@ async function tryHandleCustomerImage(
     ctx.channel.country,
     isInProgressStatusConversation(ctx.conv),
     ctx.outgoingTexts,
+    {
+      operatorFolderEnabled: isConversationInOperatorEnabledFolders(ctx.conv, ctx.state),
+    },
   );
 
   if (ctx.channel.country === "CM" && deps.env.AI_ENABLED && image.length > 0 && cmRegLinkSentInHistory(ctx.outgoingTexts)) {

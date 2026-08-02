@@ -12,6 +12,7 @@ import {
 } from "./eg-script-engine.js";
 import { registrationHelpScriptKeys } from "./funnel-common.js";
 import { isLinkAccessProblemMessage } from "./customer-clarity.js";
+import { isRegistrationHelpRequest, wantsRegistrationLink } from "./zm-intent.js";
 import {
   depositSentInHistory as zmDepositSent,
   gameIdSentInHistory as zmGameIdSent,
@@ -90,18 +91,21 @@ export function buildSupportSnapshot(
   country: CountryCode,
   inProgressFolder: boolean,
   outgoingTexts: string[],
+  options?: { operatorFolderEnabled?: boolean },
 ): SupportSnapshot {
   const cfg = getSupportFunnelConfig(country);
   const regLinkSent = cfg.regLinkSent(outgoingTexts);
   const depositScriptSent = cfg.depositSent(outgoingTexts);
   const gameIdScriptSent = cfg.gameIdSent(outgoingTexts);
+  const folderOk = options?.operatorFolderEnabled !== false;
+  const inProgress = inProgressFolder && folderOk;
 
-  if (!inProgressFolder || !regLinkSent) {
+  if (!inProgress || !regLinkSent) {
     return {
       country,
       active: false,
       phase: "off",
-      inProgressFolder,
+      inProgressFolder: inProgress,
       regLinkSent,
       depositScriptSent,
       gameIdScriptSent,
@@ -119,7 +123,7 @@ export function buildSupportSnapshot(
     country,
     active: true,
     phase,
-    inProgressFolder,
+    inProgressFolder: inProgress,
     regLinkSent,
     depositScriptSent,
     gameIdScriptSent,
@@ -207,5 +211,8 @@ export function inProgressFollowUpEligible(
   if (isLinkAccessProblemMessage(customerText)) {
     return true;
   }
-  return Boolean(customerText.trim());
+  if (wantsRegistrationLink(customerText) || isRegistrationHelpRequest(customerText)) {
+    return true;
+  }
+  return false;
 }

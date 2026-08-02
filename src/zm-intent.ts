@@ -43,11 +43,11 @@ export function classifyZmIntent(
   const t = (text || "").trim();
   const step = options?.funnelStep ?? 0;
 
-  if (isCustomerSaysNotRegisteredYet(t)) {
-    return "question";
-  }
   if (DECLINED.test(t) || BARE_DECLINED.test(t)) {
     return "declined";
+  }
+  if (isCustomerSaysNotRegisteredYet(t)) {
+    return "question";
   }
   if (DEPOSIT_DONE.test(t)) {
     return "deposit_done";
