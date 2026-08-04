@@ -15,6 +15,7 @@ import { runPagerWorker } from "./pager-worker.js";
 import { classifyProofFromImage } from "./proof-classifier.js";
 import { clearTemplateReplyCache } from "./template-resolver.js";
 import { createStateStore, type ChannelRuntimeState, type ChatState, type StateStore } from "./state-store.js";
+import { createAppMetaStore } from "./app-meta-store.js";
 import {
   countApiStatusFolders,
   mergeStatusFolderList,
@@ -47,6 +48,7 @@ import {
   type TelegramUpdate,
 } from "./telegram-api.js";
 import {
+  configureXPartnersSessionStore,
   getXPartnersClient,
   startXPartnersKeepAlive,
   type XPartnersCountry,
@@ -73,6 +75,7 @@ const telegram = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
 
 async function main() {
   stateStore = await createStateStore(env);
+  configureXPartnersSessionStore(await createAppMetaStore(env));
   console.log(`Starting ${env.TELEGRAM_BOT_NAME} build=${getDeployLabel()}...`);
   await telegram.setMyCommands([
     { command: "start", description: "Открыть меню" },
@@ -1654,7 +1657,7 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
     "Краткий суммарный отчёт за сегодня (USD).",
     "",
     `Кэш: ${stale ? "устарел или пуст — нажмите «Обновить все»" : "актуален"} · ваш интервал <b>${hours} ч</b>`,
-    `Аккаунт на сервере: keep-alive каждые ${env.XPARTNERS_KEEPALIVE_MINUTES} мин.`,
+    `Аккаунт на сервере: keep-alive каждые ${env.XPARTNERS_KEEPALIVE_MINUTES} мин (сессия в БД, без постоянного копирования cookie).`,
     "",
     "Cameroon · Egypt · Zambia — выберите страну.",
   ];

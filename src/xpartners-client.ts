@@ -1,6 +1,9 @@
 import makeFetchCookie from "fetch-cookie";
 import { CookieJar } from "tough-cookie";
 import type { AppEnv } from "./env.js";
+import type { AppMetaStore } from "./app-meta-store.js";
+
+export const XPARTNERS_SESSION_META_KEY = "xpartners_session_cookie";
 
 export type XPartnersCountry = "CM" | "EG" | "ZM";
 
@@ -119,12 +122,9 @@ function mapSignInError(raw: string): string {
     return [
       "1xPartners не принимает вход по паролю с сервера (капча).",
       "",
-      "В Railway Variables добавьте XPARTNERS_COOKIE:",
-      "1) Войдите на 1xpartners.com в Chrome",
-      "2) F12 → Сеть → запрос graphql",
-      "3) Скопируйте заголовок Cookie целиком в переменную",
-      "",
-      "Keep-alive на сервере продлит сессию; пароль с сервера из‑за капчи не подходит.",
+      "В Railway один раз задайте XPARTNERS_COOKIE (стартовая сессия).",
+      "Дальше бот сам держит сессию keep-alive и сохраняет обновлённые cookies в БД.",
+      "Сидеть на сайте и копировать cookie каждый раз не нужно.",
     ].join("\n");
   }
   return raw;
@@ -140,21 +140,46 @@ export class XPartnersClient {
   private readonly fetchWithCookies: typeof fetch;
   private loggedIn = false;
   private siteIdCache = new Map<XPartnersCountry, number>();
+  private bootstrapped = false;
 
-  constructor(private readonly env: AppEnv) {
+  constructor(
+    private readonly env: AppEnv,
+    private readonly meta?: AppMetaStore,
+  ) {
     this.fetchWithCookies = makeFetchCookie(fetch, this.jar) as typeof fetch;
   }
 
   private requestHeaders(extra: Record<string, string> = {}): Record<string, string> {
-    const headers: Record<string, string> = {
+    return {
       ...BROWSER_HEADERS,
       ...extra,
     };
-    const cookieHeader = cookiesFromEnv(this.env);
-    if (cookieHeader) {
-      headers.Cookie = cookieHeader;
+  }
+
+  private async bootstrapCookiesIfNeeded(): Promise<void> {
+    if (this.bootstrapped) {
+      return;
     }
-    return headers;
+    this.bootstrapped = true;
+    const existing = await this.jar.getCookieString(BASE);
+    if (existing) {
+      return;
+    }
+    let raw = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim() || null;
+    if (!raw) {
+      raw = cookiesFromEnv(this.env);
+    }
+    if (raw) {
+      await this.seedCookies(raw);
+    }
+  }
+
+  private async persistSessionCookies(): Promise<void> {
+    const serialized = await this.jar.getCookieString(BASE);
+    if (!serialized?.trim() || !this.meta) {
+      return;
+    }
+    await this.meta.set(XPARTNERS_SESSION_META_KEY, serialized);
   }
 
   private async seedCookies(cookieHeader: string): Promise<void> {
@@ -191,17 +216,22 @@ export class XPartnersClient {
     } catch {
       throw new Error(`1xPartners invalid JSON: ${text.slice(0, 200)}`);
     }
+    await this.persistSessionCookies();
     return parsed as T;
   }
 
   async ensureSession(): Promise<void> {
+    await this.bootstrapCookiesIfNeeded();
     if (this.loggedIn) {
       const ok = await this.pingAuthorized();
       if (ok) {
         return;
       }
+      this.loggedIn = false;
     }
-    const cookieHeader = cookiesFromEnv(this.env);
+    const cookieHeader =
+      (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim() ||
+      cookiesFromEnv(this.env);
     if (cookieHeader) {
       await this.seedCookies(cookieHeader);
       if (await this.pingAuthorized()) {
@@ -209,7 +239,7 @@ export class XPartnersClient {
         return;
       }
       throw new Error(
-        "XPARTNERS_COOKIE не подошёл (сессия истекла). Обновите Cookie из браузера после входа на 1xpartners.com.",
+        "Сессия 1xPartners истекла. Один раз обновите XPARTNERS_COOKIE в Railway (вход в браузере → Cookie из graphql).",
       );
     }
     const creds = parseCredentials(this.env);
@@ -386,13 +416,18 @@ export class XPartnersClient {
 }
 
 let sharedClient: XPartnersClient | null = null;
+let sharedMeta: AppMetaStore | undefined;
+
+export function configureXPartnersSessionStore(meta: AppMetaStore): void {
+  sharedMeta = meta;
+}
 
 export function getXPartnersClient(env: AppEnv): XPartnersClient | null {
   if (!env.XPARTNERS_ENABLED) {
     return null;
   }
   if (!sharedClient) {
-    sharedClient = new XPartnersClient(env);
+    sharedClient = new XPartnersClient(env, sharedMeta);
   }
   return sharedClient;
 }
