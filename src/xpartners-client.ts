@@ -20,6 +20,13 @@ type GraphQlBatchItem = {
 const BASE = "https://1xpartners.com";
 const GRAPHQL = `${BASE}/graphql`;
 
+const BROWSER_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  Accept: "application/json",
+  "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+};
+
 const SIGN_IN_MUTATION = `
 mutation SignIn($login: String!, $password: String!, $recaptcha: String!, $likePartner: Boolean, $isOwnCaptcha: Boolean) {
   authorization {
@@ -107,6 +114,22 @@ function parseCredentials(env: AppEnv): { login: string; password: string } | nu
   return null;
 }
 
+function mapSignInError(raw: string): string {
+  if (raw.includes("INVALID_CAPTCHA")) {
+    return [
+      "1xPartners не принимает вход по паролю с сервера (капча).",
+      "",
+      "В Railway Variables добавьте XPARTNERS_COOKIE:",
+      "1) Войдите на 1xpartners.com в Chrome",
+      "2) F12 → Сеть → запрос graphql",
+      "3) Скопируйте заголовок Cookie целиком в переменную",
+      "",
+      "Keep-alive на сервере продлит сессию; пароль с сервера из‑за капчи не подходит.",
+    ].join("\n");
+  }
+  return raw;
+}
+
 function cookiesFromEnv(env: AppEnv): string | null {
   const raw = (env.XPARTNERS_COOKIE || "").trim();
   return raw || null;
@@ -120,11 +143,18 @@ export class XPartnersClient {
 
   constructor(private readonly env: AppEnv) {
     this.fetchWithCookies = makeFetchCookie(fetch, this.jar) as typeof fetch;
-    const cookieHeader = cookiesFromEnv(env);
+  }
+
+  private requestHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const headers: Record<string, string> = {
+      ...BROWSER_HEADERS,
+      ...extra,
+    };
+    const cookieHeader = cookiesFromEnv(this.env);
     if (cookieHeader) {
-      void this.seedCookies(cookieHeader);
-      this.loggedIn = true;
+      headers.Cookie = cookieHeader;
     }
+    return headers;
   }
 
   private async seedCookies(cookieHeader: string): Promise<void> {
@@ -144,12 +174,11 @@ export class XPartnersClient {
   private async graphql<T>(items: GraphQlBatchItem[]): Promise<T> {
     const response = await this.fetchWithCookies(GRAPHQL, {
       method: "POST",
-      headers: {
+      headers: this.requestHeaders({
         "Content-Type": "application/json",
-        Accept: "application/json",
         Origin: BASE,
         Referer: `${BASE}/ru/partner`,
-      },
+      }),
       body: JSON.stringify(items),
     });
     const text = await response.text();
@@ -179,11 +208,14 @@ export class XPartnersClient {
         this.loggedIn = true;
         return;
       }
+      throw new Error(
+        "XPARTNERS_COOKIE не подошёл (сессия истекла). Обновите Cookie из браузера после входа на 1xpartners.com.",
+      );
     }
     const creds = parseCredentials(this.env);
     if (!creds) {
       throw new Error(
-        "1xPartners: задайте учётные данные в Railway Variables.",
+        "1xPartners: задайте XPARTNERS_COOKIE в Railway Variables (рекомендуется).",
       );
     }
     await this.loginWithPassword(creds.login, creds.password);
@@ -212,7 +244,7 @@ export class XPartnersClient {
   private async loginWithPassword(login: string, password: string): Promise<void> {
     await this.fetchWithCookies(`${BASE}/ru/sign-in`, {
       method: "GET",
-      headers: { Accept: "text/html" },
+      headers: this.requestHeaders({ Accept: "text/html" }),
     });
     const batch = await this.graphql<
       Array<{
@@ -239,7 +271,8 @@ export class XPartnersClient {
     const first = batch?.[0];
     const errors = first?.errors;
     if (errors?.length) {
-      throw new Error(errors.map((e) => e.message).filter(Boolean).join("; ") || "SignIn failed");
+      const msg = errors.map((e) => e.message).filter(Boolean).join("; ") || "SignIn failed";
+      throw new Error(mapSignInError(msg));
     }
     if (first?.data?.authorization?.signIn?.twoFactorAuthNeeded) {
       throw new Error("1xPartners: включена 2FA — отключите или задайте cookie через Railway Variables.");
