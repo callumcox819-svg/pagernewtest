@@ -136,12 +136,25 @@ function cookiesFromEnv(env: AppEnv): string | null {
   return raw || null;
 }
 
+const GET_PARTNERS_CAPTCHA_MODE = `
+query PartnersCaptchaMode {
+  partnersProgram {
+    generalInformation {
+      hasOwnCaptcha
+    }
+  }
+}`;
+
 export class XPartnersClient {
   private readonly jar = new CookieJar();
   private readonly fetchWithCookies: typeof fetch;
   private loggedIn = false;
   private siteIdCache = new Map<XPartnersCountry, number>();
   private bootstrapped = false;
+  private signInInFlight: Promise<void> | null = null;
+  /** After captcha/login failure, do not hammer SignIn (e.g. «Обновить все» × 3 countries). */
+  private signInBlockedUntilMs = 0;
+  private lastSignInError = "";
 
   constructor(
     private readonly env: AppEnv,
@@ -246,19 +259,56 @@ export class XPartnersClient {
     const creds = parseCredentials(this.env);
     if (!creds) {
       throw new Error(
-        "1xPartners: задайте XPARTNERS_COOKIE в Railway Variables (рекомендуется).",
+        "1xPartners: задайте XPARTNERS_COOKIE (один раз после входа тем же логином в браузере) или проверьте XPARTNERS_CREDENTIALS.",
       );
     }
-    await this.loginWithPassword(creds.login, creds.password);
+    await this.loginWithPasswordOnce(creds.login, creds.password);
     this.loggedIn = true;
   }
 
   async keepAlive(): Promise<void> {
     try {
-      await this.ensureSession();
+      await this.bootstrapCookiesIfNeeded();
+      if (await this.pingAuthorized()) {
+        this.loggedIn = true;
+        return;
+      }
+      this.loggedIn = false;
     } catch (error) {
       console.warn("1xPartners keep-alive:", error instanceof Error ? error.message : error);
     }
+  }
+
+  private async fetchUsesOwnCaptcha(): Promise<boolean> {
+    try {
+      const batch = await this.graphql<
+        Array<{
+          data?: { partnersProgram?: { generalInformation?: { hasOwnCaptcha?: boolean } } };
+        }>
+      >([{ operationName: "PartnersCaptchaMode", query: GET_PARTNERS_CAPTCHA_MODE }]);
+      return Boolean(batch?.[0]?.data?.partnersProgram?.generalInformation?.hasOwnCaptcha);
+    } catch {
+      return false;
+    }
+  }
+
+  private async loginWithPasswordOnce(login: string, password: string): Promise<void> {
+    if (Date.now() < this.signInBlockedUntilMs) {
+      throw new Error(this.lastSignInError || mapSignInError("INVALID_CAPTCHA"));
+    }
+    if (this.signInInFlight) {
+      await this.signInInFlight;
+      if (this.loggedIn) {
+        return;
+      }
+      if (Date.now() < this.signInBlockedUntilMs) {
+        throw new Error(this.lastSignInError || mapSignInError("INVALID_CAPTCHA"));
+      }
+    }
+    this.signInInFlight = this.loginWithPassword(login, password).finally(() => {
+      this.signInInFlight = null;
+    });
+    await this.signInInFlight;
   }
 
   private async pingAuthorized(): Promise<boolean> {
@@ -277,6 +327,7 @@ export class XPartnersClient {
       method: "GET",
       headers: this.requestHeaders({ Accept: "text/html" }),
     });
+    const isOwnCaptcha = await this.fetchUsesOwnCaptcha();
     const batch = await this.graphql<
       Array<{
         data?: {
@@ -294,7 +345,7 @@ export class XPartnersClient {
           password,
           recaptcha: "",
           likePartner: false,
-          isOwnCaptcha: false,
+          isOwnCaptcha,
         },
         query: SIGN_IN_MUTATION,
       },
@@ -303,7 +354,12 @@ export class XPartnersClient {
     const errors = first?.errors;
     if (errors?.length) {
       const msg = errors.map((e) => e.message).filter(Boolean).join("; ") || "SignIn failed";
-      throw new Error(mapSignInError(msg));
+      const mapped = mapSignInError(msg);
+      if (msg.includes("INVALID_CAPTCHA") || msg.includes("CAPTCHA")) {
+        this.signInBlockedUntilMs = Date.now() + 30 * 60_000;
+        this.lastSignInError = mapped;
+      }
+      throw new Error(mapped);
     }
     if (first?.data?.authorization?.signIn?.twoFactorAuthNeeded) {
       throw new Error("1xPartners: включена 2FA — отключите или задайте cookie через Railway Variables.");
@@ -444,5 +500,5 @@ export function startXPartnersKeepAlive(env: AppEnv): void {
   setInterval(() => {
     void client.keepAlive();
   }, ms);
-  console.log(`1xPartners: keep-alive every ${minutes} min`);
+  console.log(`1xPartners: session ping every ${minutes} min (no password retries on ping)`);
 }
