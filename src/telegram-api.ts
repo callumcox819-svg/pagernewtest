@@ -490,11 +490,46 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
         }),
       ],
       [
+        inlineBtn("Статистика", "menu:stats", {
+          emojiId: PREMIUM_EMOJI.chart,
+          style: "primary",
+        }),
         inlineBtn("Сброс", "menu:reset", {
           emojiId: PREMIUM_EMOJI.reset,
           style: "danger",
         }),
       ],
+    ],
+  };
+}
+
+export function buildStatsCountryKeyboard(): ReplyMarkup {
+  return {
+    inline_keyboard: [
+      [
+        inlineBtn("Cameroon", "stats:country:CM", { emojiId: PREMIUM_EMOJI.flagCm }),
+        inlineBtn("Egypt", "stats:country:EG", { emojiId: PREMIUM_EMOJI.flagEg }),
+      ],
+      [inlineBtn("Zambia", "stats:country:ZM", { emojiId: PREMIUM_EMOJI.flagZm })],
+      [
+        inlineBtn("Обновить все", "stats:refresh:all", { emojiId: PREMIUM_EMOJI.refresh }),
+        inlineBtn("Интервал кэша", "stats:interval:menu", { emojiId: PREMIUM_EMOJI.status }),
+      ],
+      [inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })],
+    ],
+  };
+}
+
+export function buildStatsIntervalKeyboard(currentHours: number): ReplyMarkup {
+  const mark = (h: number) => (currentHours === h ? " ✓" : "");
+  return {
+    inline_keyboard: [
+      [
+        inlineBtn(`1 час${mark(1)}`, "stats:interval:1"),
+        inlineBtn(`3 часа${mark(3)}`, "stats:interval:3"),
+        inlineBtn(`5 часов${mark(5)}`, "stats:interval:5"),
+      ],
+      [inlineBtn("Назад", "menu:stats", { emojiId: PREMIUM_EMOJI.back })],
     ],
   };
 }
@@ -510,6 +545,7 @@ export function buildOperatorReplyKeyboard(): ReplyMarkup {
       [
         replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
         replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
+        replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart, style: "primary" }),
       ],
     ],
     resize_keyboard: true,

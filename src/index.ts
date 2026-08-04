@@ -39,11 +39,26 @@ import {
   buildMainMenuKeyboard,
   buildOperatorReplyKeyboard,
   buildPagerAccountKeyboard,
+  buildStatsCountryKeyboard,
+  buildStatsIntervalKeyboard,
   buildTemplateKeyboard,
   getDeployLabel,
   type TelegramMessage,
   type TelegramUpdate,
 } from "./telegram-api.js";
+import {
+  getXPartnersClient,
+  startXPartnersKeepAlive,
+  type XPartnersCountry,
+  type XPartnersQuickStats,
+} from "./xpartners-client.js";
+import {
+  cacheStale,
+  defaultRefreshHours,
+  formatStatsMessage,
+  parseRefreshHours,
+  type StatsRefreshHours,
+} from "./xpartners-stats-ui.js";
 
 const COUNTRY_FOLDER_HINTS: Record<"ZM" | "CM" | "EG", string[]> = {
   ZM: ["замб", "zamb", "zambia"],
@@ -67,6 +82,7 @@ async function main() {
     console.warn("Telegram setMyCommands failed:", formatError(error));
   });
   await warmupConnectedAccounts();
+  startXPartnersKeepAlive(env);
 
   await Promise.all([
     runTelegramBot(),
@@ -392,6 +408,11 @@ async function handleCallback(
       return;
     }
 
+    if (value === "stats") {
+      await showStatsMenu(chatId, state, messageId);
+      return;
+    }
+
     if (value === "reset") {
       await stateStore.delete(chatId);
       const nextState = await getOrCreateState(chatId);
@@ -400,6 +421,44 @@ async function handleCallback(
         `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
         buildMainMenuKeyboard(),
       );
+      return;
+    }
+  }
+
+  if (kind === "stats") {
+    const latest = (await stateStore.get(chatId)) ?? state;
+    if (value === "interval" && extra === "menu") {
+      await telegram.answerCallbackQuery(callbackId);
+      const hours = latest.partnerStats?.refreshIntervalHours ?? defaultRefreshHours();
+      await safeEditMenu(
+        chatId,
+        messageId,
+        `Как часто обновлять кэш 1xPartners при открытии статистики?\n\nСейчас: <b>${hours} ч</b>\n\nKeep-alive сессии на сервере: каждые ${env.XPARTNERS_KEEPALIVE_MINUTES} мин.`,
+        buildStatsIntervalKeyboard(hours),
+        callbackId,
+      );
+      return;
+    }
+    if (value === "interval" && (extra === "1" || extra === "3" || extra === "5")) {
+      const hours = parseRefreshHours(extra);
+      await stateStore.patch(chatId, {
+        partnerStats: {
+          ...(latest.partnerStats ?? {}),
+          refreshIntervalHours: hours,
+          byCountry: latest.partnerStats?.byCountry,
+          cachedAt: latest.partnerStats?.cachedAt,
+        },
+      });
+      await telegram.answerCallbackQuery(callbackId, `Интервал: ${hours} ч`);
+      await showStatsMenu(chatId, (await stateStore.get(chatId)) ?? latest, messageId);
+      return;
+    }
+    if (value === "refresh" && extra === "all") {
+      await refreshAllPartnerStats(chatId, latest, messageId, callbackId);
+      return;
+    }
+    if (value === "country" && (extra === "CM" || extra === "EG" || extra === "ZM")) {
+      await sendCountryStats(chatId, latest, extra, callbackId);
       return;
     }
   }
@@ -1497,7 +1556,9 @@ async function sendPagerAccountMenu(chatId: number, state: ChatState) {
   );
 }
 
-type MenuAction = "main" | "pager_account" | "channels" | "folders" | "status" | "reset";
+type MenuAction = "main" | "pager_account" | "channels" | "folders" | "status" | "stats" | "reset";
+
+const XP_STATS_COUNTRIES: XPartnersCountry[] = ["CM", "EG", "ZM"];
 
 function normalizeMenuButtonText(text: string): string {
   return text
@@ -1523,6 +1584,9 @@ function resolveMenuTextAction(text?: string): MenuAction | undefined {
   }
   if (/^(статус|status|настройки|settings)$/.test(normalized)) {
     return "status";
+  }
+  if (/^(статистика|statistics|stats|1xpartners)$/.test(normalized)) {
+    return "stats";
   }
   if (/^(сброс|reset)$/.test(normalized)) {
     return "reset";
@@ -1559,6 +1623,10 @@ async function dispatchMenuAction(
     await sendStatus(chatId, state);
     return;
   }
+  if (action === "stats") {
+    await showStatsMenu(chatId, state, messageId);
+    return;
+  }
   await stateStore.delete(chatId);
   const nextState = await getOrCreateState(chatId);
   await telegram.sendMessage(
@@ -1566,6 +1634,131 @@ async function dispatchMenuAction(
     `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
     buildMainMenuKeyboard(),
   );
+}
+
+async function showStatsMenu(chatId: number, state: ChatState, messageId?: number) {
+  const client = getXPartnersClient(env);
+  if (!client) {
+    await safeEditMenu(
+      chatId,
+      messageId,
+      "1xPartners статистика выключена.\n\nВключите модуль в <b>Variables</b> сервиса Railway (не в репозитории).",
+      buildMainMenuKeyboard(),
+    );
+    return;
+  }
+  const hours = partnerRefreshHours(state);
+  const stale = cacheStale(state.partnerStats?.cachedAt, hours);
+  const lines = [
+    "<b>1xPartners · Статистика</b>",
+    "Краткий суммарный отчёт за сегодня (USD).",
+    "",
+    `Кэш: ${stale ? "устарел или пуст — нажмите «Обновить все»" : "актуален"} · ваш интервал <b>${hours} ч</b>`,
+    `Аккаунт на сервере: keep-alive каждые ${env.XPARTNERS_KEEPALIVE_MINUTES} мин.`,
+    "",
+    "Cameroon · Egypt · Zambia — выберите страну.",
+  ];
+  await safeEditMenu(chatId, messageId, lines.join("\n"), buildStatsCountryKeyboard());
+}
+
+function partnerRefreshHours(state: ChatState): StatsRefreshHours {
+  return state.partnerStats?.refreshIntervalHours ?? defaultRefreshHours();
+}
+
+async function fetchAndCacheCountryStats(
+  chatId: number,
+  state: ChatState,
+  country: XPartnersCountry,
+  force: boolean,
+): Promise<{ state: ChatState; stats: XPartnersQuickStats }> {
+  const client = getXPartnersClient(env);
+  if (!client) {
+    throw new Error("1xPartners отключён (XPARTNERS_ENABLED=false).");
+  }
+  const hours = partnerRefreshHours(state);
+  const cached = state.partnerStats?.byCountry?.[country];
+  const cachedAt = state.partnerStats?.cachedAt;
+  if (!force && cached && !cacheStale(cachedAt, hours)) {
+    return { state, stats: cached };
+  }
+  const stats = await client.fetchQuickStatsToday(country);
+  const byCountry = { ...(state.partnerStats?.byCountry ?? {}), [country]: stats };
+  const next =
+    (await stateStore.patch(chatId, {
+      partnerStats: {
+        refreshIntervalHours: hours,
+        cachedAt: new Date().toISOString(),
+        byCountry,
+      },
+    })) ?? state;
+  return { state: next, stats };
+}
+
+async function sendCountryStats(
+  chatId: number,
+  state: ChatState,
+  country: XPartnersCountry,
+  callbackId: string,
+): Promise<void> {
+  const client = getXPartnersClient(env);
+  if (!client) {
+    await telegram.answerCallbackQuery(callbackId, "1xPartners выключен");
+    await telegram.sendMessage(
+      chatId,
+      "1xPartners не настроен — добавьте переменные в Railway Variables.",
+      buildMainMenuKeyboard(),
+    );
+    return;
+  }
+  await telegram.answerCallbackQuery(callbackId, "Загрузка…");
+  try {
+    const { stats } = await fetchAndCacheCountryStats(chatId, state, country, false);
+    const text = formatStatsMessage(country, stats, partnerRefreshHours(state));
+    await telegram.sendMessage(chatId, text, buildStatsCountryKeyboard());
+  } catch (error) {
+    await telegram.sendMessage(
+      chatId,
+      `⚠️ ${formatError(error)}`,
+      buildStatsCountryKeyboard(),
+    );
+  }
+}
+
+async function refreshAllPartnerStats(
+  chatId: number,
+  state: ChatState,
+  messageId: number | undefined,
+  callbackId: string,
+): Promise<void> {
+  const client = getXPartnersClient(env);
+  if (!client) {
+    await telegram.answerCallbackQuery(callbackId, "1xPartners выключен");
+    return;
+  }
+  await telegram.answerCallbackQuery(callbackId, "Обновляю CM, EG, ZM…");
+  let current = state;
+  const hours = partnerRefreshHours(state);
+  const blocks: string[] = ["<b>1xPartners · все страны · сегодня</b>", ""];
+  const errors: string[] = [];
+  for (const country of XP_STATS_COUNTRIES) {
+    try {
+      const result = await fetchAndCacheCountryStats(chatId, current, country, true);
+      current = result.state;
+      blocks.push(formatStatsMessage(country, result.stats, hours));
+      blocks.push("");
+    } catch (error) {
+      errors.push(`${country}: ${formatError(error)}`);
+    }
+  }
+  if (errors.length) {
+    blocks.push(`<b>Ошибки:</b>\n${errors.map((e) => escapeHtmlLite(e)).join("\n")}`);
+  }
+  blocks.push(`<i>Кэш обновлён · интервал ${hours} ч</i>`);
+  await safeEditMenu(chatId, messageId, blocks.join("\n").trim(), buildStatsCountryKeyboard(), callbackId);
+}
+
+function escapeHtmlLite(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 async function sendStatus(chatId: number, state: ChatState) {

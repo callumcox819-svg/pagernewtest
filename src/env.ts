@@ -43,6 +43,28 @@ const envSchema = z.object({
     .preprocess((value) => (value === "" || value === undefined ? undefined : value), z.string().url())
     .optional(),
   AI_APP_TITLE: z.string().default("Pager Inbox Bot"),
+
+  XPARTNERS_ENABLED: z
+    .string()
+    .default("false")
+    .transform((value) => value.toLowerCase() === "true"),
+  XPARTNERS_CREDENTIALS: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : String(value)), z.string())
+    .optional(),
+  XPARTNERS_LOGIN: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : String(value)), z.string())
+    .optional(),
+  XPARTNERS_PASSWORD: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : String(value)), z.string())
+    .optional(),
+  XPARTNERS_COOKIE: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : String(value)), z.string())
+    .optional(),
+  XPARTNERS_KEEPALIVE_MINUTES: z.coerce.number().int().positive().default(3),
+  XPARTNERS_CURRENCY_ID: z.coerce.number().int().positive().default(1),
+  XPARTNERS_SITE_CM: z.string().default("http://Camerun.com"),
+  XPARTNERS_SITE_EG: z.string().default("http://Egypt.com"),
+  XPARTNERS_SITE_ZM: z.string().default("http://Zambia.com"),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

@@ -71,6 +71,22 @@ export type ChatState = {
   };
   /** When true, worker skips auto-replies for this Telegram operator. */
   paused?: boolean;
+  /** 1xPartners quick report cache + refresh interval for «Статистика». */
+  partnerStats?: {
+    refreshIntervalHours: 1 | 3 | 5;
+    cachedAt?: string;
+    byCountry?: Partial<
+      Record<
+        "CM" | "EG" | "ZM",
+        {
+          registrations: number;
+          newAccountsWithDeposits: number;
+          fetchedAt: string;
+          siteLabel: string;
+        }
+      >
+    >;
+  };
   updatedAt: string;
 };
 
