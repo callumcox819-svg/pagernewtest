@@ -146,8 +146,8 @@ query PartnersCaptchaMode {
 }`;
 
 export class XPartnersClient {
-  private readonly jar = new CookieJar();
-  private readonly fetchWithCookies: typeof fetch;
+  private jar: CookieJar;
+  private fetchWithCookies: typeof fetch;
   private loggedIn = false;
   private siteIdCache = new Map<XPartnersCountry, number>();
   private bootstrapped = false;
@@ -160,6 +160,7 @@ export class XPartnersClient {
     private readonly env: AppEnv,
     private readonly meta?: AppMetaStore,
   ) {
+    this.jar = new CookieJar();
     this.fetchWithCookies = makeFetchCookie(fetch, this.jar) as typeof fetch;
   }
 
