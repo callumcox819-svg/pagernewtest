@@ -18,7 +18,7 @@ type GraphQlBatchItem = {
 };
 
 const BASE = "https://1xpartners.com";
-const LAPI = `${BASE}/lapi`;
+const GRAPHQL = `${BASE}/graphql`;
 
 const SIGN_IN_MUTATION = `
 mutation SignIn($login: String!, $password: String!, $recaptcha: String!, $likePartner: Boolean, $isOwnCaptcha: Boolean) {
@@ -142,11 +142,13 @@ export class XPartnersClient {
   }
 
   private async graphql<T>(items: GraphQlBatchItem[]): Promise<T> {
-    const response = await this.fetchWithCookies(LAPI, {
+    const response = await this.fetchWithCookies(GRAPHQL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
+        Origin: BASE,
+        Referer: `${BASE}/ru/partner`,
       },
       body: JSON.stringify(items),
     });
