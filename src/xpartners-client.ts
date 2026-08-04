@@ -234,36 +234,44 @@ export class XPartnersClient {
     return parsed as T;
   }
 
+  private async clearStaleSessionForLogin(): Promise<void> {
+    if (this.meta) {
+      await this.meta.set(XPARTNERS_SESSION_META_KEY, "");
+    }
+    this.bootstrapped = false;
+    this.jar = new CookieJar();
+    this.fetchWithCookies = makeFetchCookie(fetch, this.jar) as typeof fetch;
+  }
+
   async ensureSession(): Promise<void> {
     await this.bootstrapCookiesIfNeeded();
-    if (this.loggedIn) {
-      const ok = await this.pingAuthorized();
-      if (ok) {
-        return;
-      }
-      this.loggedIn = false;
+    if (await this.pingAuthorized()) {
+      this.loggedIn = true;
+      return;
     }
+    this.loggedIn = false;
+
+    const creds = parseCredentials(this.env);
+    if (creds) {
+      await this.clearStaleSessionForLogin();
+      await this.loginWithPasswordOnce(creds.login, creds.password);
+      this.loggedIn = true;
+      return;
+    }
+
     const cookieHeader =
-      (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim() ||
-      cookiesFromEnv(this.env);
+      (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim() || cookiesFromEnv(this.env);
     if (cookieHeader) {
       await this.seedCookies(cookieHeader);
       if (await this.pingAuthorized()) {
         this.loggedIn = true;
         return;
       }
-      throw new Error(
-        "Сессия 1xPartners истекла. Один раз обновите XPARTNERS_COOKIE в Railway (вход в браузере → Cookie из graphql).",
-      );
     }
-    const creds = parseCredentials(this.env);
-    if (!creds) {
-      throw new Error(
-        "1xPartners: задайте XPARTNERS_COOKIE (один раз после входа тем же логином в браузере) или проверьте XPARTNERS_CREDENTIALS.",
-      );
-    }
-    await this.loginWithPasswordOnce(creds.login, creds.password);
-    this.loggedIn = true;
+
+    throw new Error(
+      "1xPartners: задайте XPARTNERS_CREDENTIALS (login:password) или актуальный XPARTNERS_COOKIE в Railway.",
+    );
   }
 
   async keepAlive(): Promise<void> {
