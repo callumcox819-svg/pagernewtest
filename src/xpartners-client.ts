@@ -120,11 +120,12 @@ function parseCredentials(env: AppEnv): { login: string; password: string } | nu
 function mapSignInError(raw: string): string {
   if (raw.includes("INVALID_CAPTCHA")) {
     return [
-      "1xPartners не принимает вход по паролю с сервера (капча).",
+      "Логин и пароль в Railway заданы, но 1xPartners при входе через API всегда требует капчу — только пароль с сервера не проходит.",
       "",
-      "В Railway один раз задайте XPARTNERS_COOKIE (стартовая сессия).",
-      "Дальше бот сам держит сессию keep-alive и сохраняет обновлённые cookies в БД.",
-      "Сидеть на сайте и копировать cookie каждый раз не нужно.",
+      "Один раз добавьте XPARTNERS_COOKIE (тот же аккаунт, вход в Chrome → F12 → graphql → Cookie).",
+      "Дальше бот сам держит сессию (keep-alive + сохранение в БД); логин/пароль в Variables можно оставить.",
+      "",
+      "Это ограничение партнёрки, не Telegram-бота.",
     ].join("\n");
   }
   return raw;
