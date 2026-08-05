@@ -127,7 +127,7 @@ query GetPlayersReport($filter: PlayersReportFilter!) {
 
 const SITE_HINTS: Record<XPartnersCountry, string[]> = {
   CM: ["camerun", "cameroon"],
-  EG: ["egypt", "egypt0011", "egypt"],
+  EG: ["egypt", "egypt0011", "eg011", "hapka"],
   ZM: ["zambia", "zam"],
 };
 
@@ -699,26 +699,23 @@ export class XPartnersClient {
     const wantUrl = siteUrlForCountry(this.env, country).toLowerCase();
     const hints = SITE_HINTS[country];
     const exact = allSites.filter((s) => s.name.toLowerCase() === wantUrl);
-    const matched =
-      exact.length > 0
-        ? exact
-        : allSites.filter((s) => {
-            const n = s.name.toLowerCase();
-            return hints.some((h) => n.includes(h));
-          });
-    const unique = [...new Map(matched.map((s) => [s.id, s])).values()];
-    if (!unique.length) {
+    const byHints = allSites.filter((s) => {
+      const n = s.name.toLowerCase();
+      return hints.some((h) => n.includes(h));
+    });
+    const matched = [...new Map([...exact, ...byHints].map((s) => [Number(s.id), s])).values()];
+    if (!matched.length) {
       throw new Error(
         `1xPartners: не найден сайт для ${country} (ожидали ${wantUrl} или подсказки ${hints.join(", ")}).`,
       );
     }
 
     const label =
-      unique.length === 1
-        ? unique[0]!.name
-        : `${unique.length} сайта · ${country} (${unique.map((s) => s.name).slice(0, 2).join(", ")}${unique.length > 2 ? "…" : ""})`;
+      matched.length === 1
+        ? matched[0]!.name
+        : `${matched.length} сайта · ${country} (${matched.map((s) => s.name).slice(0, 2).join(", ")}${matched.length > 2 ? "…" : ""})`;
     const bundle = {
-      sites: unique.map((s) => ({ id: s.id, label: s.name })),
+      sites: matched.map((s) => ({ id: Number(s.id), label: s.name })),
       label,
     };
     this.siteBundleCache.set(country, bundle);
@@ -1080,11 +1077,11 @@ export class XPartnersClient {
             ...variant,
             ...period,
           });
-          const mode = variant.onlyNewPlayers ? "all" : "registeredToday";
+          // Период «сегодня» уже в filter; колонка regDate часто не совпадает с dayKey (EG/ZM).
           console.log(
             `1xPartners ${label}: playersReport onlyNew=${variant.onlyNewPlayers} noDep=${variant.withoutDepositsOnly} end=${period.endPeriod} rows=${rows.length}`,
           );
-          this.ingestPlayerReportRows(idSet, rows, dayKey, mode);
+          this.ingestPlayerReportRows(idSet, rows, dayKey, "all");
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           console.warn(
@@ -1113,12 +1110,12 @@ export class XPartnersClient {
           try {
             const rows = await this.fetchPlayersReportAllRows(
               { siteId: site.id },
-              { onlyNewPlayers: true, withoutDepositsOnly: true, ...period },
+              { onlyNewPlayers: false, withoutDepositsOnly: false, ...period },
             );
             this.ingestPlayerReportRows(idSet, rows, dayKey, "all");
           } catch (error) {
             console.warn(
-              `1xPartners ${country}: retry noDep site=${site.id}`,
+              `1xPartners ${country}: retry open report site=${site.id}`,
               error instanceof Error ? error.message : error,
             );
           }
