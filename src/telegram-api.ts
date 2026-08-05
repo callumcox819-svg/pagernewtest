@@ -59,7 +59,7 @@ function inlineBtn(
   return {
     text,
     callback_data: callbackData,
-    icon_custom_emoji_id: options?.emojiId ?? PREMIUM_EMOJI.robot,
+    ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
     ...(options?.style ? { style: options.style } : {}),
   };
 }
@@ -70,7 +70,7 @@ function replyBtn(
 ): ReplyKeyboardButton {
   return {
     text,
-    icon_custom_emoji_id: options?.emojiId ?? PREMIUM_EMOJI.robot,
+    ...(options?.emojiId ? { icon_custom_emoji_id: options.emojiId } : {}),
     ...(options?.style ? { style: options.style } : {}),
   };
 }
@@ -509,13 +509,30 @@ export function buildStatsCountryKeyboard(): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn("Cameroon", "stats:country:CM", { emojiId: PREMIUM_EMOJI.flagCm }),
-        inlineBtn("Egypt", "stats:country:EG", { emojiId: PREMIUM_EMOJI.flagEg }),
+        inlineBtn("Камерун", "stats:country:CM", {
+          emojiId: PREMIUM_EMOJI.flagCm,
+          style: "primary",
+        }),
+        inlineBtn("Египет", "stats:country:EG", {
+          emojiId: PREMIUM_EMOJI.flagEg,
+          style: "primary",
+        }),
       ],
-      [inlineBtn("Zambia", "stats:country:ZM", { emojiId: PREMIUM_EMOJI.flagZm })],
       [
-        inlineBtn("Обновить все", "stats:refresh:all", { emojiId: PREMIUM_EMOJI.refresh }),
-        inlineBtn("Интервал кэша", "stats:interval:menu", { emojiId: PREMIUM_EMOJI.status }),
+        inlineBtn("Замбия", "stats:country:ZM", {
+          emojiId: PREMIUM_EMOJI.flagZm,
+          style: "primary",
+        }),
+      ],
+      [
+        inlineBtn("Обновить все", "stats:refresh:all", {
+          emojiId: PREMIUM_EMOJI.refresh,
+          style: "success",
+        }),
+        inlineBtn("Интервал кэша", "stats:interval:menu", {
+          emojiId: PREMIUM_EMOJI.chart,
+          style: "primary",
+        }),
       ],
       [inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })],
     ],
@@ -527,28 +544,28 @@ export function buildStatsIntervalKeyboard(currentHours: number): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn(`1 час${mark(1)}`, "stats:interval:1"),
-        inlineBtn(`3 часа${mark(3)}`, "stats:interval:3"),
-        inlineBtn(`5 часов${mark(5)}`, "stats:interval:5"),
+        inlineBtn(`1 ч${mark(1)}`, "stats:interval:1", { emojiId: PREMIUM_EMOJI.chart, style: "primary" }),
+        inlineBtn(`3 ч${mark(3)}`, "stats:interval:3", { emojiId: PREMIUM_EMOJI.chart, style: "primary" }),
+        inlineBtn(`5 ч${mark(5)}`, "stats:interval:5", { emojiId: PREMIUM_EMOJI.chart, style: "primary" }),
       ],
       [inlineBtn("Назад", "menu:stats", { emojiId: PREMIUM_EMOJI.back })],
     ],
   };
 }
 
-/** Bottom quick menu with the same labels as inline buttons (Premium animated icons). */
+/** Bottom quick menu — premium icons, no colored style (style hides labels on many clients). */
 export function buildOperatorReplyKeyboard(): ReplyMarkup {
   return {
     keyboard: [
       [
-        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
-        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
+        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock }),
+        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels }),
       ],
       [
         replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
-        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
-        replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart, style: "primary" }),
+        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status }),
       ],
+      [replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart })],
     ],
     resize_keyboard: true,
     is_persistent: true,
