@@ -92,15 +92,36 @@ const DEFAULT_SITE_URL: Record<XPartnersCountry, string> = {
   ZM: "http://Zambia.com",
 };
 
-/** Same as 1xPartners UI: start/end of calendar day (UTC on server). */
+/** Same calendar day as 1xPartners UI (moment startOf/endOf day in partner TZ). */
+const XP_REPORT_TIMEZONE = "Europe/Kyiv";
+
+function getTimezoneOffsetMs(timeZone: string, date: Date): number {
+  const utc = new Date(date.toLocaleString("en-US", { timeZone: "UTC" }));
+  const zoned = new Date(date.toLocaleString("en-US", { timeZone }));
+  return zoned.getTime() - utc.getTime();
+}
+
+function zonedWallTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  ms: number,
+  timeZone: string,
+): Date {
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  const offset = getTimezoneOffsetMs(timeZone, new Date(utcGuess));
+  return new Date(utcGuess - offset);
+}
+
 function quickReportTodayPeriod(): { startPeriod: string; endPeriod: string } {
-  const now = new Date();
-  const start = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
-  );
-  const end = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999),
-  );
+  const tz = XP_REPORT_TIMEZONE;
+  const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
+  const [y, m, d] = dayKey.split("-").map(Number);
+  const start = zonedWallTimeToUtc(y, m, d, 0, 0, 0, 0, tz);
+  const end = zonedWallTimeToUtc(y, m, d, 23, 59, 59, 999, tz);
   return { startPeriod: start.toISOString(), endPeriod: end.toISOString() };
 }
 
@@ -509,45 +530,73 @@ export class XPartnersClient {
     const site = await this.resolveSite(country);
     const { startPeriod, endPeriod } = quickReportTodayPeriod();
     const filter = {
-      currencyId: Number(this.env.XPARTNERS_CURRENCY_ID || 1),
+      currencyId: Number(this.env.XPARTNERS_CURRENCY_ID || 6),
       siteId: site.id,
       startPeriod,
       endPeriod,
     };
-    const batch = await this.graphql<
-      Array<{
-        data?: {
-          authorized?: {
-            partner?: {
-              reports?: {
-                quickReport?: {
-                  status?: string;
-                  total?: {
-                    countOfRegistrations?: number;
-                    newDepositors?: number;
-                    countOfRegistrationsWithDeposits?: number;
-                    countOfAccountsWithDeposits?: number;
+
+    const deadline = Date.now() + 60_000;
+    let lastStatus: string | undefined;
+    let total:
+      | {
+          countOfRegistrations?: number;
+          newDepositors?: number;
+          countOfRegistrationsWithDeposits?: number;
+          countOfAccountsWithDeposits?: number;
+        }
+      | undefined;
+
+    for (;;) {
+      const batch = await this.graphql<
+        Array<{
+          data?: {
+            authorized?: {
+              partner?: {
+                reports?: {
+                  quickReport?: {
+                    status?: string;
+                    total?: {
+                      countOfRegistrations?: number;
+                      newDepositors?: number;
+                      countOfRegistrationsWithDeposits?: number;
+                      countOfAccountsWithDeposits?: number;
+                    };
                   };
                 };
               };
             };
           };
-        };
-        errors?: Array<{ message?: string }>;
-      }>
-    >([
-      {
-        operationName: "GetQuickReport",
-        variables: { filter },
-        query: GET_QUICK_REPORT,
-      },
-    ]);
-    const first = batch?.[0];
-    if (first?.errors?.length) {
-      console.warn("1xPartners GetQuickReport errors:", JSON.stringify(first.errors).slice(0, 2000));
-      throw new Error(formatGraphqlErrors(first.errors));
+          errors?: Array<{ message?: string; extensions?: unknown }>;
+        }>
+      >([
+        {
+          operationName: "GetQuickReport",
+          variables: { filter },
+          query: GET_QUICK_REPORT,
+        },
+      ]);
+      const first = batch?.[0];
+      if (first?.errors?.length) {
+        console.warn("1xPartners GetQuickReport errors:", JSON.stringify(first.errors).slice(0, 2000));
+        throw new Error(formatGraphqlErrors(first.errors));
+      }
+      const quickReport = first?.data?.authorized?.partner?.reports?.quickReport;
+      lastStatus = quickReport?.status;
+      total = quickReport?.total;
+      if (lastStatus !== "PENDING") {
+        break;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("1xPartners: отчёт ещё формируется (PENDING), попробуйте через минуту.");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
-    const total = first?.data?.authorized?.partner?.reports?.quickReport?.total;
+
+    if (lastStatus === "ERROR") {
+      throw new Error("1xPartners: ошибка формирования быстрого отчёта (status ERROR).");
+    }
+
     const siteLabel = site.label;
     const ftd =
       total?.newDepositors ??

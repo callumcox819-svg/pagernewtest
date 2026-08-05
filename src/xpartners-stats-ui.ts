@@ -32,6 +32,37 @@ const COUNTRY_LABEL: Record<XPartnersCountry, string> = {
   ZM: "Zambia",
 };
 
+export function formatAllCountriesStats(
+  byCountry: Partial<Record<XPartnersCountry, XPartnersQuickStats>>,
+  refreshHours: StatsRefreshHours,
+): string {
+  const lines = [
+    "<b>1xPartners · все страны · сегодня (USD)</b>",
+    "",
+  ];
+  for (const country of ["CM", "EG", "ZM"] as const) {
+    const stats = byCountry[country];
+    if (!stats) {
+      lines.push(`${COUNTRY_LABEL[country]}: <i>нет данных</i>`);
+      continue;
+    }
+    lines.push(
+      `<b>${COUNTRY_LABEL[country]}</b> · рег: ${stats.registrations} · FTD: ${stats.newAccountsWithDeposits}`,
+    );
+  }
+  const latest = Object.values(byCountry)
+    .map((s) => s?.fetchedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  const when = latest ? new Date(latest) : new Date();
+  const timeStr = Number.isFinite(when.getTime())
+    ? when.toLocaleString("ru-RU", { timeZone: "Europe/Kyiv" })
+    : "";
+  lines.push("", `<i>Обновлено: ${escapeHtml(timeStr)} · авто-кэш: ${refreshHours} ч</i>`);
+  return lines.join("\n");
+}
+
 export function formatStatsMessage(
   country: XPartnersCountry,
   stats: XPartnersQuickStats,

@@ -58,6 +58,7 @@ import {
   cacheStale,
   defaultRefreshHours,
   formatStatsMessage,
+  formatAllCountriesStats,
   parseRefreshHours,
   type StatsRefreshHours,
 } from "./xpartners-stats-ui.js";
@@ -1750,22 +1751,23 @@ async function refreshAllPartnerStats(
   }
   let current = state;
   const hours = partnerRefreshHours(state);
-  const blocks: string[] = ["<b>1xPartners · все страны · сегодня</b>", ""];
   const errors: string[] = [];
+  const byCountry: Partial<Record<XPartnersCountry, XPartnersQuickStats>> = {
+    ...(current.partnerStats?.byCountry ?? {}),
+  };
   for (const country of XP_STATS_COUNTRIES) {
     try {
       const result = await fetchAndCacheCountryStats(chatId, current, country, true);
       current = result.state;
-      blocks.push(formatStatsMessage(country, result.stats, hours));
-      blocks.push("");
+      byCountry[country] = result.stats;
     } catch (error) {
       errors.push(`${country}: ${formatError(error)}`);
     }
   }
+  const blocks: string[] = [formatAllCountriesStats(byCountry, hours)];
   if (errors.length) {
-    blocks.push(`<b>Ошибки:</b>\n${errors.map((e) => escapeHtmlLite(e)).join("\n")}`);
+    blocks.push("", `<b>Ошибки:</b>\n${errors.map((e) => escapeHtmlLite(e)).join("\n")}`);
   }
-  blocks.push(`<i>Кэш обновлён · интервал ${hours} ч</i>`);
   await safeEditMenu(chatId, messageId, blocks.join("\n").trim(), buildStatsCountryKeyboard(), callbackId);
 }
 

@@ -142,6 +142,7 @@ export class TelegramApi {
     const result = await this.requestWithMarkupFallback<{ message_id: number }>("sendMessage", {
       chat_id: chatId,
       text,
+      parse_mode: "HTML",
       reply_markup: replyMarkup,
     });
     return result.message_id;
@@ -178,6 +179,7 @@ export class TelegramApi {
       chat_id: chatId,
       message_id: messageId,
       text,
+      parse_mode: "HTML",
       reply_markup: replyMarkup,
     });
   }
