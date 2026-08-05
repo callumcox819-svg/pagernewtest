@@ -32,50 +32,63 @@ const COUNTRY_LABEL: Record<XPartnersCountry, string> = {
   ZM: "Zambia",
 };
 
-export function formatPlayersIdsTxt(
+const TELEGRAM_HTML_MAX = 4096;
+
+export function formatPlayersIdsMessageParts(
   country: XPartnersCountry,
-  dayKey: string,
-  siteLabel: string,
-  playerIds: string[],
-): string {
+  exportData: { dayKey: string; siteLabel: string; playerIds: string[] },
+): string[] {
+  const { dayKey, siteLabel, playerIds } = exportData;
   const label = COUNTRY_LABEL[country];
-  const header = [
-    `# 1xPartners · отчёт по игрокам · ${label}`,
-    `# Дата регистрации: ${dayKey}`,
-    `# Сайт: ${siteLabel}`,
-    `# Всего ID: ${playerIds.length}`,
+  const headerLines = [
+    `<b>1xPartners · ID игроков · ${label}</b>`,
+    `<b>Сайт:</b> <code>${escapeHtml(siteLabel)}</code>`,
+    `<b>Период:</b> сегодня (USD) · ${dayKey}`,
+    `<b>Кол-во:</b> ${playerIds.length}`,
     "",
-  ].join("\n");
-  return `${header}${playerIds.join("\n")}\n`;
+  ];
+  if (!playerIds.length) {
+    return [
+      [
+        ...headerLines.slice(0, -1),
+        "",
+        "За сегодня ID не найдены (как в отчёте «По игрокам»).",
+      ].join("\n"),
+    ];
+  }
+
+  const parts: string[] = [];
+  let chunk: string[] = [];
+  const flush = (isFirst: boolean) => {
+    const prefix = isFirst ? headerLines.join("\n") : `<b>${label} · ID (продолжение)</b>\n\n`;
+    parts.push(`${prefix}<code>${escapeHtml(chunk.join("\n"))}</code>`);
+    chunk = [];
+  };
+
+  let isFirst = true;
+  for (const id of playerIds) {
+    const trial = [...chunk, id];
+    const prefix = isFirst ? headerLines.join("\n") : `<b>${label} · ID (продолжение)</b>\n\n`;
+    const trialMsg = `${prefix}<code>${escapeHtml(trial.join("\n"))}</code>`;
+    if (trialMsg.length > TELEGRAM_HTML_MAX && chunk.length > 0) {
+      flush(isFirst);
+      isFirst = false;
+      chunk.push(id);
+    } else {
+      chunk = trial;
+    }
+  }
+  if (chunk.length) {
+    flush(isFirst);
+  }
+  return parts;
 }
 
 export function formatPlayersIdsMessage(
   country: XPartnersCountry,
   exportData: { dayKey: string; siteLabel: string; playerIds: string[] },
 ): string {
-  const { dayKey, siteLabel, playerIds } = exportData;
-  if (!playerIds.length) {
-    return [
-      `<b>1xPartners · ID игроков · ${COUNTRY_LABEL[country]}</b>`,
-      `<b>Сайт:</b> <code>${escapeHtml(siteLabel)}</code>`,
-      `<b>Дата:</b> ${dayKey}`,
-      "",
-      "За сегодня регистраций не найдено.",
-    ].join("\n");
-  }
-  const preview = playerIds.slice(0, 35);
-  const lines = [
-    `<b>1xPartners · ID игроков · ${COUNTRY_LABEL[country]}</b>`,
-    `<b>Сайт:</b> <code>${escapeHtml(siteLabel)}</code>`,
-    `<b>Дата:</b> ${dayKey}`,
-    `<b>Кол-во:</b> ${playerIds.length}`,
-    "",
-    `<code>${escapeHtml(preview.join("\n"))}</code>`,
-  ];
-  if (playerIds.length > preview.length) {
-    lines.push(`<i>… и ещё ${playerIds.length - preview.length} (см. файл .txt)</i>`);
-  }
-  return lines.join("\n");
+  return formatPlayersIdsMessageParts(country, exportData)[0] ?? "";
 }
 
 export function formatAllCountriesStats(

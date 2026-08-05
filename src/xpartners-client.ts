@@ -146,12 +146,13 @@ function todayDayKey(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: XP_REPORT_TIMEZONE }).format(new Date());
 }
 
-function isRegisteredOnDay(registrationDate: string | undefined, dayKey: string): boolean {
-  if (!registrationDate?.trim()) {
-    return false;
-  }
-  const d = registrationDate.trim().slice(0, 10);
-  return d === dayKey;
+function todayReportPeriodVariants(): Array<{ startPeriod: string; endPeriod: string }> {
+  const dayKey = todayDayKey();
+  const start = `${dayKey}T00:00:00.000Z`;
+  return [
+    { startPeriod: start, endPeriod: start },
+    { startPeriod: start, endPeriod: `${dayKey}T23:59:59.999Z` },
+  ];
 }
 
 type PlayersReportRow = {
@@ -819,18 +820,36 @@ export class XPartnersClient {
     };
   }
 
-  private playersReportBaseFilter(siteId: number): Record<string, unknown> {
-    const { startPeriod, endPeriod } = quickReportTodayPeriod();
+  private playersReportBaseFilter(
+    siteId: number,
+    options?: {
+      onlyNewPlayers?: boolean;
+      startPeriod?: string;
+      endPeriod?: string;
+    },
+  ): Record<string, unknown> {
+    const period = quickReportTodayPeriod();
     return {
       currencyId: resolveCurrencyId(this.env),
       siteId,
-      startPeriod,
-      endPeriod,
+      startPeriod: options?.startPeriod ?? period.startPeriod,
+      endPeriod: options?.endPeriod ?? period.endPeriod,
       methood: "get",
-      onlyNewPlayers: false,
+      onlyNewPlayers: options?.onlyNewPlayers ?? true,
       withoutDepositsOnly: false,
       subId: "",
     };
+  }
+
+  private collectPlayerIdsFromRows(rows: PlayersReportRow[]): string[] {
+    const idSet = new Set<string>();
+    for (const row of rows) {
+      const id = String(row.playerId ?? "").trim();
+      if (id) {
+        idSet.add(id);
+      }
+    }
+    return [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }
 
   private async fetchPlayersReportOnce(filter: Record<string, unknown>): Promise<{
@@ -910,8 +929,15 @@ export class XPartnersClient {
     };
   }
 
-  private async fetchPlayersReportAllRows(siteId: number): Promise<PlayersReportRow[]> {
-    const base = this.playersReportBaseFilter(siteId);
+  private async fetchPlayersReportAllRows(
+    siteId: number,
+    options?: {
+      onlyNewPlayers?: boolean;
+      startPeriod?: string;
+      endPeriod?: string;
+    },
+  ): Promise<PlayersReportRow[]> {
+    const base = this.playersReportBaseFilter(siteId, options);
     const first = await this.fetchPlayersReportOnce({
       ...base,
       pageNumber: 1,
@@ -938,26 +964,61 @@ export class XPartnersClient {
     await this.ensureSession();
     const dayKey = todayDayKey();
     const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
-    const idSet = new Set<string>();
+    const quick = await this.fetchQuickStatsToday(country);
+    const targetCount = quick.registrations;
 
-    for (const site of sites) {
-      const rows = await this.fetchPlayersReportAllRows(site.id);
-      for (const row of rows) {
-        if (!isRegisteredOnDay(row.registrationDate, dayKey)) {
-          continue;
+    let bestIds: string[] = [];
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (const period of todayReportPeriodVariants()) {
+      for (const onlyNewPlayers of [true, false] as const) {
+        const idSet = new Set<string>();
+        for (const site of sites) {
+          const rows = await this.fetchPlayersReportAllRows(site.id, {
+            onlyNewPlayers,
+            ...period,
+          });
+          for (const id of this.collectPlayerIdsFromRows(rows)) {
+            idSet.add(id);
+          }
         }
-        const id = String(row.playerId ?? "").trim();
-        if (id) {
-          idSet.add(id);
+        const ids = [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        const diff = targetCount > 0 ? ids.length - targetCount : 0;
+        const distance =
+          targetCount > 0
+            ? Math.abs(diff) + (diff > 0 ? diff : 0)
+            : ids.length === 0
+              ? 0
+              : ids.length;
+        const better =
+          distance < bestDistance ||
+          (distance === bestDistance && onlyNewPlayers && ids.length >= bestIds.length);
+        if (better) {
+          bestIds = ids;
+          bestDistance = distance;
+        }
+        if (targetCount > 0 && ids.length === targetCount) {
+          bestIds = ids;
+          bestDistance = 0;
+          break;
         }
       }
+      if (bestDistance === 0) {
+        break;
+      }
+    }
+
+    if (targetCount > 0 && bestIds.length !== targetCount) {
+      console.warn(
+        `1xPartners ${country}: player IDs count ${bestIds.length} vs quick report registrations ${targetCount}`,
+      );
     }
 
     return {
       country,
       dayKey,
       siteLabel,
-      playerIds: [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+      playerIds: bestIds,
       fetchedAt: new Date().toISOString(),
     };
   }

@@ -60,8 +60,7 @@ import {
   defaultRefreshHours,
   formatStatsMessage,
   formatAllCountriesStats,
-  formatPlayersIdsTxt,
-  formatPlayersIdsMessage,
+  formatPlayersIdsMessageParts,
   parseRefreshHours,
   type StatsRefreshHours,
 } from "./xpartners-stats-ui.js";
@@ -473,7 +472,7 @@ async function handleCallback(
       await safeEditMenu(
         chatId,
         messageId,
-        "<b>1xPartners · ID игроков за сегодня</b>\n\nКак в отчёте «По игрокам»: регистрации за сегодня (USD). Выберите страну или «Все 3» — пришлю список и файл .txt.",
+        "<b>1xPartners · ID игроков за сегодня</b>\n\nКак в отчёте «По игрокам»: период «сегодня» (USD). Выберите страну или «Все 3» — пришлю список ID в чат.",
         buildStatsPlayersKeyboard(),
         callbackId,
       );
@@ -1737,49 +1736,24 @@ async function sendPlayersIdsExport(
 
     const exports = await Promise.all(countries.map((c) => client.fetchPlayerIdsToday(c)));
 
+    const keyboard = buildStatsCountryKeyboard();
     if (target === "ALL") {
-      const dayKey = exports[0]?.dayKey ?? "";
-      const txtParts = exports.map((e) =>
-        formatPlayersIdsTxt(e.country, e.dayKey, e.siteLabel, e.playerIds),
-      );
-      const txt = txtParts.join("\n");
-      const total = exports.reduce((n, e) => n + e.playerIds.length, 0);
-      const summary = exports
-        .map((e) => `${e.country}: ${e.playerIds.length}`)
-        .join(" · ");
-      await telegram.sendMessage(
-        chatId,
-        `<b>ID игроков · все страны · ${dayKey}</b>\n${summary}\n<b>Всего:</b> ${total}`,
-        buildStatsCountryKeyboard(),
-      );
-      if (total > 0) {
-        await telegram.sendDocument(
-          chatId,
-          `players-ALL-${dayKey}.txt`,
-          Buffer.from(txt, "utf8"),
-          {
-            caption: `<b>1xPartners</b> · регистрации за ${dayKey} · ${total} ID`,
-            replyMarkup: buildStatsCountryKeyboard(),
-          },
-        );
+      for (let i = 0; i < exports.length; i++) {
+        const e = exports[i]!;
+        const parts = formatPlayersIdsMessageParts(e.country, e);
+        const isLastCountry = i === exports.length - 1;
+        for (let p = 0; p < parts.length; p++) {
+          const isLastPart = isLastCountry && p === parts.length - 1;
+          await telegram.sendMessage(chatId, parts[p]!, isLastPart ? keyboard : undefined);
+        }
       }
       return;
     }
 
     const data = exports[0]!;
-    const text = formatPlayersIdsMessage(data.country, data);
-    await telegram.sendMessage(chatId, text, buildStatsCountryKeyboard());
-    if (data.playerIds.length > 0) {
-      const txt = formatPlayersIdsTxt(data.country, data.dayKey, data.siteLabel, data.playerIds);
-      await telegram.sendDocument(
-        chatId,
-        `players-${data.country}-${data.dayKey}.txt`,
-        Buffer.from(txt, "utf8"),
-        {
-          caption: `<b>${data.country}</b> · ${data.playerIds.length} ID · ${data.dayKey}`,
-          replyMarkup: buildStatsCountryKeyboard(),
-        },
-      );
+    const parts = formatPlayersIdsMessageParts(data.country, data);
+    for (let p = 0; p < parts.length; p++) {
+      await telegram.sendMessage(chatId, parts[p]!, p === parts.length - 1 ? keyboard : undefined);
     }
   } catch (error) {
     await telegram.sendMessage(
