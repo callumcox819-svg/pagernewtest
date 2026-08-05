@@ -22,7 +22,7 @@ type GraphQlBatchItem = {
 
 const BASE = "https://1xpartners.com";
 const GRAPHQL = `${BASE}/graphql/`;
-const XP_FETCH_TIMEOUT_MS = 45_000;
+const XP_FETCH_TIMEOUT_MS = 90_000;
 
 const BROWSER_HEADERS = {
   "User-Agent":
@@ -70,7 +70,9 @@ query GetQuickReport($filter: QuickReportFilter!) {
           status
           total {
             countOfRegistrations
-            countOfNewAccountsWithDeposits
+            newDepositors
+            countOfRegistrationsWithDeposits
+            countOfAccountsWithDeposits
           }
         }
       }
@@ -495,7 +497,9 @@ export class XPartnersClient {
                   status?: string;
                   total?: {
                     countOfRegistrations?: number;
-                    countOfNewAccountsWithDeposits?: number;
+                    newDepositors?: number;
+                    countOfRegistrationsWithDeposits?: number;
+                    countOfAccountsWithDeposits?: number;
                   };
                 };
               };
@@ -518,9 +522,14 @@ export class XPartnersClient {
     const total = first?.data?.authorized?.partner?.reports?.quickReport?.total;
     const sites = await this.listSites();
     const siteLabel = sites.find((s) => s.id === websiteId)?.name ?? siteUrlForCountry(this.env, country);
+    const ftd =
+      total?.newDepositors ??
+      total?.countOfRegistrationsWithDeposits ??
+      total?.countOfAccountsWithDeposits ??
+      0;
     return {
       registrations: Number(total?.countOfRegistrations ?? 0),
-      newAccountsWithDeposits: Number(total?.countOfNewAccountsWithDeposits ?? 0),
+      newAccountsWithDeposits: Number(ftd),
       fetchedAt: new Date().toISOString(),
       siteLabel,
     };
