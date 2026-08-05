@@ -69,10 +69,18 @@ query GetQuickReport($filter: QuickReportFilter!) {
         quickReport(filter: $filter) {
           status
           total {
+            countOfViews
+            countOfClicks
+            countOfDirectLinks
             countOfRegistrations
-            newDepositors
             countOfRegistrationsWithDeposits
+            newDepositsSum
+            newDepositors
             countOfAccountsWithDeposits
+            depositAmount
+            profit
+            countOfDeposits
+            countOfActivePlayers
           }
         }
       }
@@ -95,13 +103,36 @@ const DEFAULT_SITE_URL: Record<XPartnersCountry, string> = {
 /** Same calendar day as 1xPartners UI (moment startOf/endOf day in partner TZ). */
 const XP_REPORT_TIMEZONE = "Europe/Kyiv";
 
-/** 1xPartners UI sends local calendar day bounds as UTC ISO (moment utc keepLocalTime). */
+/** Partner UI normalizes start/end to the same UTC midnight for "today". */
 function quickReportTodayPeriod(): { startPeriod: string; endPeriod: string } {
   const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: XP_REPORT_TIMEZONE }).format(new Date());
+  const midnight = `${dayKey}T00:00:00.000Z`;
   return {
-    startPeriod: `${dayKey}T00:00:00.000Z`,
-    endPeriod: `${dayKey}T23:59:59.999Z`,
+    startPeriod: midnight,
+    endPeriod: midnight,
   };
+}
+
+function resolveCurrencyId(env: AppEnv): number {
+  const raw = Number(env.XPARTNERS_CURRENCY_ID || 6);
+  // Railway often kept legacy default 1; USD in partner UI is 6.
+  if (raw === 1) {
+    return 6;
+  }
+  return raw > 0 ? raw : 6;
+}
+
+function totalsLookEmpty(total: QuickReportTotals | undefined): boolean {
+  if (!total) {
+    return true;
+  }
+  const keys: (keyof QuickReportTotals)[] = [
+    "countOfRegistrations",
+    "newDepositors",
+    "countOfRegistrationsWithDeposits",
+    "countOfAccountsWithDeposits",
+  ];
+  return keys.every((k) => !Number(total[k] ?? 0));
 }
 
 type QuickReportTotals = {
@@ -486,28 +517,43 @@ export class XPartnersClient {
 
   private async listSites(): Promise<Array<{ id: number; name: string }>> {
     await this.ensureSession();
-    const batch = await this.graphql<
-      Array<{
-        data?: {
-          authorized?: {
-            partnerAndManager?: {
-              data?: { sites?: Array<{ id: string | number; name: string; hidden?: boolean }> };
+    const run = async (hidden: boolean | undefined) => {
+      const filter: { partnerId: null; hidden?: boolean } = { partnerId: null };
+      if (hidden !== undefined) {
+        filter.hidden = hidden;
+      }
+      const batch = await this.graphql<
+        Array<{
+          data?: {
+            authorized?: {
+              partnerAndManager?: {
+                data?: { sites?: Array<{ id: string | number; name: string; hidden?: boolean }> };
+              };
             };
           };
-        };
-      }>
-    >([
-      {
-        operationName: "PartnerSites",
-        variables: { filter: { hidden: false, partnerId: null } },
-        query: PARTNER_SITES,
-      },
-    ]);
-    const sites = batch?.[0]?.data?.authorized?.partnerAndManager?.data?.sites ?? [];
-    return sites
-      .filter((s) => !s.hidden)
-      .map((s) => ({ id: Number(s.id), name: (s.name || "").trim() }))
-      .filter((s) => s.id > 0 && s.name);
+        }>
+      >([
+        {
+          operationName: "PartnerSites",
+          variables: { filter },
+          query: PARTNER_SITES,
+        },
+      ]);
+      return batch?.[0]?.data?.authorized?.partnerAndManager?.data?.sites ?? [];
+    };
+    const merged = [...(await run(false)), ...(await run(true))];
+    const byId = new Map<number, { id: number; name: string }>();
+    for (const s of merged) {
+      if (s.hidden) {
+        continue;
+      }
+      const id = Number(s.id);
+      const name = (s.name || "").trim();
+      if (id > 0 && name) {
+        byId.set(id, { id, name });
+      }
+    }
+    return [...byId.values()];
   }
 
   private async resolveSitesForCountry(
@@ -531,10 +577,14 @@ export class XPartnersClient {
 
     const wantUrl = siteUrlForCountry(this.env, country).toLowerCase();
     const hints = SITE_HINTS[country];
-    const matched = allSites.filter((s) => {
-      const n = s.name.toLowerCase();
-      return n === wantUrl || hints.some((h) => n.includes(h));
-    });
+    const exact = allSites.filter((s) => s.name.toLowerCase() === wantUrl);
+    const matched =
+      exact.length > 0
+        ? exact
+        : allSites.filter((s) => {
+            const n = s.name.toLowerCase();
+            return hints.some((h) => n.includes(h));
+          });
     const unique = [...new Map(matched.map((s) => [s.id, s])).values()];
     if (!unique.length) {
       throw new Error(
@@ -559,10 +609,11 @@ export class XPartnersClient {
     siteId?: number;
     startPeriod: string;
     endPeriod: string;
-  }): Promise<QuickReportTotals> {
+  }): Promise<{ status?: string; total: QuickReportTotals }> {
     const deadline = Date.now() + 60_000;
     let lastStatus: string | undefined;
     let total: QuickReportTotals | undefined;
+    let partnerMissing = false;
 
     for (;;) {
       const batch = await this.graphql<
@@ -576,7 +627,7 @@ export class XPartnersClient {
                     total?: QuickReportTotals;
                   };
                 };
-              };
+              } | null;
             };
           };
           errors?: Array<{ message?: string; extensions?: unknown }>;
@@ -593,7 +644,12 @@ export class XPartnersClient {
         console.warn("1xPartners GetQuickReport errors:", JSON.stringify(first.errors).slice(0, 2000));
         throw new Error(formatGraphqlErrors(first.errors));
       }
-      const quickReport = first?.data?.authorized?.partner?.reports?.quickReport;
+      const partner = first?.data?.authorized?.partner;
+      if (!partner) {
+        partnerMissing = true;
+        break;
+      }
+      const quickReport = partner.reports?.quickReport;
       lastStatus = quickReport?.status;
       total = quickReport?.total;
       if (lastStatus !== "PENDING") {
@@ -605,26 +661,94 @@ export class XPartnersClient {
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
 
+    if (partnerMissing) {
+      throw new Error(
+        "1xPartners: нет доступа к partner.reports (сессия не партнёрская или cookie устарел).",
+      );
+    }
+
     if (lastStatus === "ERROR") {
       throw new Error("1xPartners: ошибка формирования быстрого отчёта (status ERROR).");
     }
-    return total ?? {};
+
+    if (lastStatus === "SUCCESS" && totalsLookEmpty(total)) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const retry = await this.graphql<
+        Array<{
+          data?: {
+            authorized?: {
+              partner?: {
+                reports?: {
+                  quickReport?: { status?: string; total?: QuickReportTotals };
+                };
+              } | null;
+            };
+          };
+        }>
+      >([
+        {
+          operationName: "GetQuickReport",
+          variables: { filter },
+          query: GET_QUICK_REPORT,
+        },
+      ]);
+      const qr = retry?.[0]?.data?.authorized?.partner?.reports?.quickReport;
+      if (qr?.total && !totalsLookEmpty(qr.total)) {
+        return { status: qr.status, total: qr.total };
+      }
+    }
+
+    return { status: lastStatus, total: total ?? {} };
   }
 
   async fetchQuickStatsToday(country: XPartnersCountry): Promise<XPartnersQuickStats> {
     await this.ensureSession();
     const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
     const { startPeriod, endPeriod } = quickReportTodayPeriod();
-    const currencyId = Number(this.env.XPARTNERS_CURRENCY_ID || 6);
+    const currencyId = resolveCurrencyId(this.env);
     const baseFilter = { currencyId, startPeriod, endPeriod };
 
     const perSite: QuickReportTotals[] = [];
-    for (const site of sites) {
-      const total = await this.fetchQuickReportTotals({ ...baseFilter, siteId: site.id });
-      perSite.push(total);
-    }
+    let usedFilter = baseFilter;
 
-    const total = sites.length === 1 ? (perSite[0] ?? {}) : sumQuickReportTotals(perSite);
+    const fetchAllSites = async (filter: typeof baseFilter & { siteId?: number }) => {
+      const totals: QuickReportTotals[] = [];
+      for (const site of sites) {
+        const { status, total } = await this.fetchQuickReportTotals({ ...filter, siteId: site.id });
+        totals.push(total);
+        if (totalsLookEmpty(total)) {
+          console.warn(
+            `1xPartners ${country}: empty total · siteId=${site.id} name=${site.label} status=${status} filter=${JSON.stringify({ ...filter, siteId: site.id })}`,
+          );
+        }
+      }
+      return totals;
+    };
+
+    perSite.push(...(await fetchAllSites(baseFilter)));
+
+    let total =
+      sites.length === 1 ? (perSite[0] ?? {}) : sumQuickReportTotals(perSite);
+
+    if (totalsLookEmpty(total)) {
+      const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: XP_REPORT_TIMEZONE }).format(
+        new Date(),
+      );
+      const altFilter = {
+        ...baseFilter,
+        startPeriod: `${dayKey}T00:00:00.000Z`,
+        endPeriod: `${dayKey}T23:59:59.999Z`,
+      };
+      const altPerSite = await fetchAllSites(altFilter);
+      const altTotal =
+        sites.length === 1 ? (altPerSite[0] ?? {}) : sumQuickReportTotals(altPerSite);
+      if (!totalsLookEmpty(altTotal)) {
+        perSite.length = 0;
+        perSite.push(...altPerSite);
+        total = altTotal;
+        usedFilter = altFilter;
+      }
+    }
     const ftd =
       total.newDepositors ??
       total.countOfRegistrationsWithDeposits ??
@@ -635,7 +759,7 @@ export class XPartnersClient {
 
     if (registrations === 0 && ftdN === 0) {
       console.warn(
-        `1xPartners ${country}: zero totals · sites=${sites.map((s) => s.id).join(",")} · filter=${JSON.stringify(baseFilter)}`,
+        `1xPartners ${country}: zero after fetch · sites=${sites.map((s) => `${s.id}:${s.label}`).join("|")} · currencyId=${currencyId} · period=${usedFilter.startPeriod}/${usedFilter.endPeriod}`,
       );
     }
 
