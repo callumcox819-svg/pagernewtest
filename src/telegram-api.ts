@@ -553,19 +553,19 @@ export function buildStatsIntervalKeyboard(currentHours: number): ReplyMarkup {
   };
 }
 
-/** Bottom quick menu — premium icons, no colored style (style hides labels on many clients). */
+/** Bottom quick menu — premium icons + colored styles (match inline main menu). */
 export function buildOperatorReplyKeyboard(): ReplyMarkup {
   return {
     keyboard: [
       [
-        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock }),
-        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels }),
+        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
+        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
       ],
       [
         replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
-        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status }),
+        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
       ],
-      [replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart })],
+      [replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart, style: "primary" })],
     ],
     resize_keyboard: true,
     is_persistent: true,
