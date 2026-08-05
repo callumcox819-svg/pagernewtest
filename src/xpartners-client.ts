@@ -412,10 +412,18 @@ export class XPartnersClient {
     return raw || null;
   }
 
-  /** GetPlayersReport иногда режет строки без отдельной cookie со страницы отчёта. */
+  private playersReportCookieHeader(): string | null {
+    const reports = this.reportsCookieFromEnv();
+    if (reports) {
+      return reports;
+    }
+    return cookiesFromEnv(this.env);
+  }
+
+  /** GetPlayersReport: явный Cookie (reports или основной), иначе jar-сессия. */
   private async graphqlPlayersReport<T>(items: GraphQlBatchItem[]): Promise<T> {
-    const reportsCookie = this.reportsCookieFromEnv();
-    if (!reportsCookie) {
+    const cookie = this.playersReportCookieHeader();
+    if (!cookie) {
       return this.graphql<T>(items);
     }
     const response = await fetch(GRAPHQL, {
@@ -424,7 +432,7 @@ export class XPartnersClient {
         "Content-Type": "application/json",
         Origin: BASE,
         Referer: `${BASE}/ru/partner/reports/players`,
-        Cookie: reportsCookie,
+        Cookie: cookie,
       }),
       body: JSON.stringify(items),
       signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS),
@@ -901,6 +909,7 @@ export class XPartnersClient {
       methood: "get",
       onlyNewPlayers: options?.onlyNewPlayers ?? false,
       withoutDepositsOnly: options?.withoutDepositsOnly ?? false,
+      subId: "",
     };
     if ("siteId" in scope) {
       filter.siteId = scope.siteId;
@@ -1047,18 +1056,25 @@ export class XPartnersClient {
 
   private async collectPlayerIdsFromReports(
     idSet: Set<string>,
-    scope: { siteId: number } | { country: XPartnersCountry },
+    scope: { siteId: number },
     dayKey: string,
     label: string,
   ): Promise<void> {
+    // Сначала «без депозита», потом «с депозитом» — вместе = countOfRegistrations, не FTD.
     const variants = [
-      { onlyNewPlayers: true, withoutDepositsOnly: false },
       { onlyNewPlayers: true, withoutDepositsOnly: true },
+      { onlyNewPlayers: true, withoutDepositsOnly: false },
       { onlyNewPlayers: false, withoutDepositsOnly: false },
+      { onlyNewPlayers: false, withoutDepositsOnly: true },
     ] as const;
 
+    let first = true;
     for (const period of todayReportPeriodVariants()) {
       for (const variant of variants) {
+        if (!first) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+        first = false;
         try {
           const rows = await this.fetchPlayersReportAllRows(scope, {
             ...variant,
@@ -1090,10 +1106,40 @@ export class XPartnersClient {
       await this.collectPlayerIdsFromReports(idSet, { siteId: site.id }, dayKey, `${country}:site${site.id}`);
     }
 
+    if (idSet.size < quick.registrations) {
+      for (const site of sites) {
+        for (const period of todayReportPeriodVariants()) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          try {
+            const rows = await this.fetchPlayersReportAllRows(
+              { siteId: site.id },
+              { onlyNewPlayers: true, withoutDepositsOnly: true, ...period },
+            );
+            this.ingestPlayerReportRows(idSet, rows, dayKey, "all");
+          } catch (error) {
+            console.warn(
+              `1xPartners ${country}: retry noDep site=${site.id}`,
+              error instanceof Error ? error.message : error,
+            );
+          }
+        }
+      }
+    }
+
     const playerIds = [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
+    if (
+      quick.registrations > 0 &&
+      playerIds.length === quick.newAccountsWithDeposits &&
+      playerIds.length < quick.registrations
+    ) {
+      console.warn(
+        `1xPartners ${country}: ID count matches FTD (${playerIds.length}) but registrations=${quick.registrations} — need XPARTNERS_REPORTS_COOKIE from «Отчёт по игрокам»`,
+      );
+    }
+
     if (quick.registrations > 0 && playerIds.length !== quick.registrations) {
-      const hint = this.reportsCookieFromEnv()
+      const hint = this.playersReportCookieHeader()
         ? ""
         : " · задайте XPARTNERS_REPORTS_COOKIE со страницы «Отчёт по игрокам»";
       console.warn(

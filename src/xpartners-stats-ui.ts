@@ -52,7 +52,7 @@ export function formatPlayersIdsMessageParts(
       ? `<b>Кол-во:</b> ${playerIds.length} <i>(в сводке рег: ${registrationsExpected})</i>`
       : `<b>Кол-во:</b> ${playerIds.length}`;
   const headerLines = [
-    `<b>1xPartners · ID игроков · ${label}</b>`,
+    `<b>1xPartners · ID регистраций · ${label}</b>`,
     `<b>Сайт:</b> <code>${escapeHtml(siteLabel)}</code>`,
     `<b>Период:</b> сегодня (USD) · ${dayKey}`,
     countLine,
@@ -66,7 +66,7 @@ export function formatPlayersIdsMessageParts(
     headerLines.splice(
       headerLines.length - 1,
       0,
-      "<i>Не все ID: обновите XPARTNERS_COOKIE на странице «Отчёт по игрокам» (graphql → Cookie) или добавьте XPARTNERS_REPORTS_COOKIE.</i>",
+      "<i>Не все ID регистраций (не FTD): обновите cookie на странице «Отчёт по игрокам» → graphql → Cookie, переменная XPARTNERS_REPORTS_COOKIE в Railway.</i>",
       "",
     );
   }
