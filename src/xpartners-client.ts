@@ -108,6 +108,7 @@ query GetPlayersReport($filter: PlayersReportFilter!) {
           rows {
             playerId
             registrationDate
+            depositAmount
             siteName
             siteId
           }
@@ -180,9 +181,21 @@ function todayReportPeriodVariants(): Array<{ startPeriod: string; endPeriod: st
 type PlayersReportRow = {
   playerId?: string | number;
   registrationDate?: string;
+  depositAmount?: string | number | null;
   siteName?: string;
   siteId?: number | string;
 };
+
+function depositIsZero(amount: string | number | null | undefined): boolean {
+  if (amount == null || amount === "") {
+    return true;
+  }
+  if (typeof amount === "number") {
+    return !Number.isFinite(amount) || amount <= 0;
+  }
+  const n = Number.parseFloat(String(amount).replace(/[^0-9.-]/g, ""));
+  return !Number.isFinite(n) || n <= 0;
+}
 
 function resolveCurrencyId(env: AppEnv): number {
   const raw = Number(env.XPARTNERS_CURRENCY_ID || 6);
@@ -966,6 +979,15 @@ export class XPartnersClient {
     };
   }
 
+  private addPlayerIdsFromRows(idSet: Set<string>, rows: PlayersReportRow[]): void {
+    for (const row of rows) {
+      const id = String(row.playerId ?? "").trim();
+      if (id) {
+        idSet.add(id);
+      }
+    }
+  }
+
   private async fetchPlayersReportAllRows(
     siteId: number,
     options?: {
@@ -976,21 +998,31 @@ export class XPartnersClient {
     },
   ): Promise<PlayersReportRow[]> {
     const base = this.playersReportBaseFilter(siteId, options);
-    // Как в кабинете: первый запрос без pageNumber/countOnPage (полный отчёт), иначе API режет страницу.
-    const first = await this.fetchPlayersReportOnce({ ...base });
-    const rows = [...(first.rows ?? [])];
-    const pagesCount = Math.max(1, Number(first.pagesCount ?? 1));
-    let hash = first.hash;
+    const load = async (extra: Record<string, unknown>) => {
+      const first = await this.fetchPlayersReportOnce({ ...base, ...extra });
+      const acc = [...(first.rows ?? [])];
+      const pagesCount = Math.max(1, Number(first.pagesCount ?? 1));
+      let hash = first.hash;
+      for (let page = 2; page <= pagesCount && page <= 100; page++) {
+        const next = await this.fetchPlayersReportOnce({
+          ...base,
+          ...extra,
+          pageNumber: page,
+          countOnPage: 100,
+          ...(hash ? { hash } : {}),
+        });
+        acc.push(...(next.rows ?? []));
+        hash = next.hash ?? hash;
+      }
+      return acc;
+    };
 
-    for (let page = 2; page <= pagesCount && page <= 100; page++) {
-      const next = await this.fetchPlayersReportOnce({
-        ...base,
-        pageNumber: page,
-        countOnPage: 100,
-        ...(hash ? { hash } : {}),
-      });
-      rows.push(...(next.rows ?? []));
-      hash = next.hash ?? hash;
+    let rows = await load({});
+    if (rows.length <= 4) {
+      const paged = await load({ pageNumber: 1, countOnPage: 100 });
+      if (paged.length > rows.length) {
+        rows = paged;
+      }
     }
     return rows;
   }
@@ -1000,34 +1032,52 @@ export class XPartnersClient {
     const dayKey = todayDayKey();
     const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
     const quick = await this.fetchQuickStatsToday(country);
-    const period = playersReportTodayPeriodFullDay();
     const idSet = new Set<string>();
 
     for (const site of sites) {
-      const rows = await this.fetchPlayersReportAllRows(site.id, {
-        onlyNewPlayers: false,
-        withoutDepositsOnly: false,
-        ...period,
-      });
-      console.log(
-        `1xPartners ${country}: GetPlayersReport siteId=${site.id} rows=${rows.length} (UI-style, no pagination on 1st req)`,
-      );
-      for (const id of this.collectPlayerIdsRegisteredOnDay(rows, dayKey)) {
-        idSet.add(id);
-      }
-    }
-
-    if (idSet.size < quick.registrations) {
-      for (const withoutDepositsOnly of [false, true] as const) {
-        for (const site of sites) {
+      for (const period of todayReportPeriodVariants()) {
+        // «Новые игроки» в периоде: с депозитом и без (≈ countOfRegistrations, не только FTD).
+        for (const withoutDepositsOnly of [false, true] as const) {
           const rows = await this.fetchPlayersReportAllRows(site.id, {
             onlyNewPlayers: true,
             withoutDepositsOnly,
             ...period,
           });
-          for (const id of this.collectPlayerIdsFromRows(rows)) {
-            idSet.add(id);
-          }
+          console.log(
+            `1xPartners ${country}: newPlayers site=${site.id} noDepOnly=${withoutDepositsOnly} period=${period.endPeriod} rows=${rows.length}`,
+          );
+          this.addPlayerIdsFromRows(idSet, rows);
+        }
+      }
+
+      const openPeriod = playersReportTodayPeriodFullDay();
+      const openRows = await this.fetchPlayersReportAllRows(site.id, {
+        onlyNewPlayers: false,
+        withoutDepositsOnly: false,
+        ...openPeriod,
+      });
+      console.log(
+        `1xPartners ${country}: openReport site=${site.id} rows=${openRows.length} regToday=${openRows.filter((r) => registrationDayKey(r.registrationDate) === dayKey).length}`,
+      );
+      for (const row of openRows) {
+        if (registrationDayKey(row.registrationDate) !== dayKey) {
+          continue;
+        }
+        const id = String(row.playerId ?? "").trim();
+        if (id) {
+          idSet.add(id);
+        }
+      }
+      for (const row of openRows) {
+        if (registrationDayKey(row.registrationDate) !== dayKey) {
+          continue;
+        }
+        if (!depositIsZero(row.depositAmount)) {
+          continue;
+        }
+        const id = String(row.playerId ?? "").trim();
+        if (id) {
+          idSet.add(id);
         }
       }
     }
