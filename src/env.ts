@@ -66,6 +66,15 @@ const envSchema = z.object({
   XPARTNERS_SITE_CM: z.string().default("http://Camerun.com"),
   XPARTNERS_SITE_EG: z.string().default("http://Egypt.com"),
   XPARTNERS_SITE_ZM: z.string().default("http://Zambia.com"),
+  XPARTNERS_SITE_ID_CM: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : value), z.coerce.number().int().positive())
+    .optional(),
+  XPARTNERS_SITE_ID_EG: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : value), z.coerce.number().int().positive())
+    .optional(),
+  XPARTNERS_SITE_ID_ZM: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : value), z.coerce.number().int().positive())
+    .optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

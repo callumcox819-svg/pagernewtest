@@ -1716,7 +1716,7 @@ async function sendCountryStats(
   }
   await telegram.answerCallbackQuery(callbackId, "Загрузка…");
   try {
-    const { stats } = await fetchAndCacheCountryStats(chatId, state, country, false);
+    const { stats } = await fetchAndCacheCountryStats(chatId, state, country, true);
     const text = formatStatsMessage(country, stats, partnerRefreshHours(state));
     await telegram.sendMessage(chatId, text, buildStatsCountryKeyboard());
   } catch (error) {

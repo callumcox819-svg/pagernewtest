@@ -95,34 +95,31 @@ const DEFAULT_SITE_URL: Record<XPartnersCountry, string> = {
 /** Same calendar day as 1xPartners UI (moment startOf/endOf day in partner TZ). */
 const XP_REPORT_TIMEZONE = "Europe/Kyiv";
 
-function getTimezoneOffsetMs(timeZone: string, date: Date): number {
-  const utc = new Date(date.toLocaleString("en-US", { timeZone: "UTC" }));
-  const zoned = new Date(date.toLocaleString("en-US", { timeZone }));
-  return zoned.getTime() - utc.getTime();
-}
-
-function zonedWallTimeToUtc(
-  year: number,
-  month: number,
-  day: number,
-  hour: number,
-  minute: number,
-  second: number,
-  ms: number,
-  timeZone: string,
-): Date {
-  const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second, ms);
-  const offset = getTimezoneOffsetMs(timeZone, new Date(utcGuess));
-  return new Date(utcGuess - offset);
-}
-
+/** 1xPartners UI sends local calendar day bounds as UTC ISO (moment utc keepLocalTime). */
 function quickReportTodayPeriod(): { startPeriod: string; endPeriod: string } {
-  const tz = XP_REPORT_TIMEZONE;
-  const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
-  const [y, m, d] = dayKey.split("-").map(Number);
-  const start = zonedWallTimeToUtc(y, m, d, 0, 0, 0, 0, tz);
-  const end = zonedWallTimeToUtc(y, m, d, 23, 59, 59, 999, tz);
-  return { startPeriod: start.toISOString(), endPeriod: end.toISOString() };
+  const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: XP_REPORT_TIMEZONE }).format(new Date());
+  return {
+    startPeriod: `${dayKey}T00:00:00.000Z`,
+    endPeriod: `${dayKey}T23:59:59.999Z`,
+  };
+}
+
+type QuickReportTotals = {
+  countOfRegistrations?: number;
+  newDepositors?: number;
+  countOfRegistrationsWithDeposits?: number;
+  countOfAccountsWithDeposits?: number;
+};
+
+function sumQuickReportTotals(totals: QuickReportTotals[]): QuickReportTotals {
+  const sum = (pick: (t: QuickReportTotals) => number | undefined) =>
+    totals.reduce((acc, t) => acc + Number(pick(t) ?? 0), 0);
+  return {
+    countOfRegistrations: sum((t) => t.countOfRegistrations),
+    newDepositors: sum((t) => t.newDepositors),
+    countOfRegistrationsWithDeposits: sum((t) => t.countOfRegistrationsWithDeposits),
+    countOfAccountsWithDeposits: sum((t) => t.countOfAccountsWithDeposits),
+  };
 }
 
 function formatGraphqlErrors(errors: Array<{ message?: string; extensions?: unknown }>): string {
@@ -138,6 +135,16 @@ function formatGraphqlErrors(errors: Array<{ message?: string; extensions?: unkn
     return msg;
   });
   return [...new Set(parts)].join("; ");
+}
+
+function siteIdOverride(env: AppEnv, country: XPartnersCountry): number | undefined {
+  const raw =
+    country === "CM"
+      ? env.XPARTNERS_SITE_ID_CM
+      : country === "EG"
+        ? env.XPARTNERS_SITE_ID_EG
+        : env.XPARTNERS_SITE_ID_ZM;
+  return raw && raw > 0 ? raw : undefined;
 }
 
 function siteUrlForCountry(env: AppEnv, country: XPartnersCountry): string {
@@ -200,7 +207,10 @@ export class XPartnersClient {
   private jar: CookieJar;
   private fetchWithCookies: typeof fetch;
   private loggedIn = false;
-  private siteIdCache = new Map<XPartnersCountry, { id: number; label: string }>();
+  private siteBundleCache = new Map<
+    XPartnersCountry,
+    { sites: Array<{ id: number; label: string }>; label: string }
+  >();
   private bootstrapped = false;
   private signInInFlight: Promise<void> | null = null;
   /** After captcha/login failure, do not hammer SignIn (e.g. «Обновить все» × 3 countries). */
@@ -500,52 +510,59 @@ export class XPartnersClient {
       .filter((s) => s.id > 0 && s.name);
   }
 
-  private async resolveSite(country: XPartnersCountry): Promise<{ id: number; label: string }> {
-    const cached = this.siteIdCache.get(country);
+  private async resolveSitesForCountry(
+    country: XPartnersCountry,
+  ): Promise<{ sites: Array<{ id: number; label: string }>; label: string }> {
+    const cached = this.siteBundleCache.get(country);
     if (cached) {
       return cached;
     }
+    const allSites = await this.listSites();
+    const overrideId = siteIdOverride(this.env, country);
+    if (overrideId) {
+      const hit = allSites.find((s) => s.id === overrideId);
+      if (!hit) {
+        throw new Error(`1xPartners: XPARTNERS_SITE_ID_${country}=${overrideId} не найден в списке сайтов.`);
+      }
+      const bundle = { sites: [{ id: hit.id, label: hit.name }], label: hit.name };
+      this.siteBundleCache.set(country, bundle);
+      return bundle;
+    }
+
     const wantUrl = siteUrlForCountry(this.env, country).toLowerCase();
     const hints = SITE_HINTS[country];
-    const sites = await this.listSites();
-    let hit = sites.find((s) => s.name.toLowerCase() === wantUrl);
-    if (!hit) {
-      hit = sites.find((s) => {
-        const n = s.name.toLowerCase();
-        return hints.some((h) => n.includes(h));
-      });
-    }
-    if (!hit) {
+    const matched = allSites.filter((s) => {
+      const n = s.name.toLowerCase();
+      return n === wantUrl || hints.some((h) => n.includes(h));
+    });
+    const unique = [...new Map(matched.map((s) => [s.id, s])).values()];
+    if (!unique.length) {
       throw new Error(
-        `1xPartners: не найден сайт для ${country} (ожидали ${wantUrl}). Проверьте XPARTNERS_SITE_${country}.`,
+        `1xPartners: не найден сайт для ${country} (ожидали ${wantUrl} или подсказки ${hints.join(", ")}).`,
       );
     }
-    const resolved = { id: hit.id, label: hit.name };
-    this.siteIdCache.set(country, resolved);
-    return resolved;
+
+    const label =
+      unique.length === 1
+        ? unique[0]!.name
+        : `${unique.length} сайта · ${country} (${unique.map((s) => s.name).slice(0, 2).join(", ")}${unique.length > 2 ? "…" : ""})`;
+    const bundle = {
+      sites: unique.map((s) => ({ id: s.id, label: s.name })),
+      label,
+    };
+    this.siteBundleCache.set(country, bundle);
+    return bundle;
   }
 
-  async fetchQuickStatsToday(country: XPartnersCountry): Promise<XPartnersQuickStats> {
-    await this.ensureSession();
-    const site = await this.resolveSite(country);
-    const { startPeriod, endPeriod } = quickReportTodayPeriod();
-    const filter = {
-      currencyId: Number(this.env.XPARTNERS_CURRENCY_ID || 6),
-      siteId: site.id,
-      startPeriod,
-      endPeriod,
-    };
-
+  private async fetchQuickReportTotals(filter: {
+    currencyId: number;
+    siteId?: number;
+    startPeriod: string;
+    endPeriod: string;
+  }): Promise<QuickReportTotals> {
     const deadline = Date.now() + 60_000;
     let lastStatus: string | undefined;
-    let total:
-      | {
-          countOfRegistrations?: number;
-          newDepositors?: number;
-          countOfRegistrationsWithDeposits?: number;
-          countOfAccountsWithDeposits?: number;
-        }
-      | undefined;
+    let total: QuickReportTotals | undefined;
 
     for (;;) {
       const batch = await this.graphql<
@@ -556,12 +573,7 @@ export class XPartnersClient {
                 reports?: {
                   quickReport?: {
                     status?: string;
-                    total?: {
-                      countOfRegistrations?: number;
-                      newDepositors?: number;
-                      countOfRegistrationsWithDeposits?: number;
-                      countOfAccountsWithDeposits?: number;
-                    };
+                    total?: QuickReportTotals;
                   };
                 };
               };
@@ -596,16 +608,40 @@ export class XPartnersClient {
     if (lastStatus === "ERROR") {
       throw new Error("1xPartners: ошибка формирования быстрого отчёта (status ERROR).");
     }
+    return total ?? {};
+  }
 
-    const siteLabel = site.label;
+  async fetchQuickStatsToday(country: XPartnersCountry): Promise<XPartnersQuickStats> {
+    await this.ensureSession();
+    const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
+    const { startPeriod, endPeriod } = quickReportTodayPeriod();
+    const currencyId = Number(this.env.XPARTNERS_CURRENCY_ID || 6);
+    const baseFilter = { currencyId, startPeriod, endPeriod };
+
+    const perSite: QuickReportTotals[] = [];
+    for (const site of sites) {
+      const total = await this.fetchQuickReportTotals({ ...baseFilter, siteId: site.id });
+      perSite.push(total);
+    }
+
+    const total = sites.length === 1 ? (perSite[0] ?? {}) : sumQuickReportTotals(perSite);
     const ftd =
-      total?.newDepositors ??
-      total?.countOfRegistrationsWithDeposits ??
-      total?.countOfAccountsWithDeposits ??
+      total.newDepositors ??
+      total.countOfRegistrationsWithDeposits ??
+      total.countOfAccountsWithDeposits ??
       0;
+    const registrations = Number(total.countOfRegistrations ?? 0);
+    const ftdN = Number(ftd);
+
+    if (registrations === 0 && ftdN === 0) {
+      console.warn(
+        `1xPartners ${country}: zero totals · sites=${sites.map((s) => s.id).join(",")} · filter=${JSON.stringify(baseFilter)}`,
+      );
+    }
+
     return {
-      registrations: Number(total?.countOfRegistrations ?? 0),
-      newAccountsWithDeposits: Number(ftd),
+      registrations,
+      newAccountsWithDeposits: ftdN,
       fetchedAt: new Date().toISOString(),
       siteLabel,
     };
