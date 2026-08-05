@@ -42,6 +42,7 @@ import {
   buildPagerAccountKeyboard,
   buildStatsCountryKeyboard,
   buildStatsIntervalKeyboard,
+  buildStatsPlayersKeyboard,
   buildTemplateKeyboard,
   getDeployLabel,
   type TelegramMessage,
@@ -59,6 +60,8 @@ import {
   defaultRefreshHours,
   formatStatsMessage,
   formatAllCountriesStats,
+  formatPlayersIdsTxt,
+  formatPlayersIdsMessage,
   parseRefreshHours,
   type StatsRefreshHours,
 } from "./xpartners-stats-ui.js";
@@ -463,6 +466,24 @@ async function handleCallback(
     }
     if (value === "country" && (extra === "CM" || extra === "EG" || extra === "ZM")) {
       await sendCountryStats(chatId, latest, extra, callbackId);
+      return;
+    }
+    if (value === "players" && extra === "menu") {
+      await telegram.answerCallbackQuery(callbackId);
+      await safeEditMenu(
+        chatId,
+        messageId,
+        "<b>1xPartners · ID игроков за сегодня</b>\n\nКак в отчёте «По игрокам»: регистрации за сегодня (USD). Выберите страну или «Все 3» — пришлю список и файл .txt.",
+        buildStatsPlayersKeyboard(),
+        callbackId,
+      );
+      return;
+    }
+    if (
+      value === "players" &&
+      (extra === "CM" || extra === "EG" || extra === "ZM" || extra === "ALL")
+    ) {
+      await sendPlayersIdsExport(chatId, extra === "ALL" ? "ALL" : extra, callbackId);
       return;
     }
   }
@@ -1696,6 +1717,77 @@ async function fetchAndCacheCountryStats(
       },
     })) ?? state;
   return { state: next, stats };
+}
+
+async function sendPlayersIdsExport(
+  chatId: number,
+  target: XPartnersCountry | "ALL",
+  callbackId: string,
+): Promise<void> {
+  const client = getXPartnersClient(env);
+  if (!client) {
+    await telegram.answerCallbackQuery(callbackId, "1xPartners выключен");
+    return;
+  }
+  await telegram.answerCallbackQuery(callbackId, "Загружаю ID игроков…");
+
+  try {
+    const countries: XPartnersCountry[] =
+      target === "ALL" ? [...XP_STATS_COUNTRIES] : [target];
+
+    const exports = await Promise.all(countries.map((c) => client.fetchPlayerIdsToday(c)));
+
+    if (target === "ALL") {
+      const dayKey = exports[0]?.dayKey ?? "";
+      const txtParts = exports.map((e) =>
+        formatPlayersIdsTxt(e.country, e.dayKey, e.siteLabel, e.playerIds),
+      );
+      const txt = txtParts.join("\n");
+      const total = exports.reduce((n, e) => n + e.playerIds.length, 0);
+      const summary = exports
+        .map((e) => `${e.country}: ${e.playerIds.length}`)
+        .join(" · ");
+      await telegram.sendMessage(
+        chatId,
+        `<b>ID игроков · все страны · ${dayKey}</b>\n${summary}\n<b>Всего:</b> ${total}`,
+        buildStatsCountryKeyboard(),
+      );
+      if (total > 0) {
+        await telegram.sendDocument(
+          chatId,
+          `players-ALL-${dayKey}.txt`,
+          Buffer.from(txt, "utf8"),
+          {
+            caption: `<b>1xPartners</b> · регистрации за ${dayKey} · ${total} ID`,
+            replyMarkup: buildStatsCountryKeyboard(),
+          },
+        );
+      }
+      return;
+    }
+
+    const data = exports[0]!;
+    const text = formatPlayersIdsMessage(data.country, data);
+    await telegram.sendMessage(chatId, text, buildStatsCountryKeyboard());
+    if (data.playerIds.length > 0) {
+      const txt = formatPlayersIdsTxt(data.country, data.dayKey, data.siteLabel, data.playerIds);
+      await telegram.sendDocument(
+        chatId,
+        `players-${data.country}-${data.dayKey}.txt`,
+        Buffer.from(txt, "utf8"),
+        {
+          caption: `<b>${data.country}</b> · ${data.playerIds.length} ID · ${data.dayKey}`,
+          replyMarkup: buildStatsCountryKeyboard(),
+        },
+      );
+    }
+  } catch (error) {
+    await telegram.sendMessage(
+      chatId,
+      `⚠️ ${formatError(error)}`,
+      buildStatsCountryKeyboard(),
+    );
+  }
 }
 
 async function sendCountryStats(

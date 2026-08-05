@@ -148,6 +148,44 @@ export class TelegramApi {
     return result.message_id;
   }
 
+  async sendDocument(
+    chatId: number,
+    filename: string,
+    content: Buffer,
+    options?: { caption?: string; replyMarkup?: ReplyMarkup },
+  ): Promise<void> {
+    const send = async (markup?: ReplyMarkup) => {
+      const form = new FormData();
+      form.append("chat_id", String(chatId));
+      form.append("document", new Blob([new Uint8Array(content)]), filename);
+      if (options?.caption) {
+        form.append("caption", options.caption);
+        form.append("parse_mode", "HTML");
+      }
+      if (markup) {
+        form.append("reply_markup", JSON.stringify(markup));
+      }
+      const response = await fetch(`${this.baseUrl}/sendDocument`, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(120_000),
+      });
+      const payload = (await response.json()) as TelegramResponse<unknown>;
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.description ?? `Telegram sendDocument failed: ${response.status}`);
+      }
+    };
+
+    try {
+      await send(options?.replyMarkup);
+    } catch (error) {
+      if (!options?.replyMarkup || !isMarkupFeatureError(error)) {
+        throw error;
+      }
+      await send(stripButtonStyles(stripCustomEmoji(options.replyMarkup)));
+    }
+  }
+
   /** Drop stale Telegram reply-keyboard menus from older bot builds. */
   async removeReplyKeyboard(chatId: number): Promise<void> {
     await this.request("sendMessage", {
@@ -534,7 +572,29 @@ export function buildStatsCountryKeyboard(): ReplyMarkup {
           style: "primary",
         }),
       ],
+      [
+        inlineBtn("По ID (игроки)", "stats:players:menu", {
+          emojiId: PREMIUM_EMOJI.email,
+          style: "primary",
+        }),
+      ],
       [inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })],
+    ],
+  };
+}
+
+export function buildStatsPlayersKeyboard(): ReplyMarkup {
+  return {
+    inline_keyboard: [
+      [
+        inlineBtn("Камерун", "stats:players:CM", { emojiId: PREMIUM_EMOJI.flagCm, style: "primary" }),
+        inlineBtn("Египет", "stats:players:EG", { emojiId: PREMIUM_EMOJI.flagEg, style: "primary" }),
+      ],
+      [
+        inlineBtn("Замбия", "stats:players:ZM", { emojiId: PREMIUM_EMOJI.flagZm, style: "primary" }),
+        inlineBtn("Все 3", "stats:players:ALL", { emojiId: PREMIUM_EMOJI.globe, style: "success" }),
+      ],
+      [inlineBtn("Назад", "menu:stats", { emojiId: PREMIUM_EMOJI.back })],
     ],
   };
 }

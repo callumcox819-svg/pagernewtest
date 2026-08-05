@@ -14,6 +14,14 @@ export type XPartnersQuickStats = {
   siteLabel: string;
 };
 
+export type XPartnersPlayersToday = {
+  country: XPartnersCountry;
+  dayKey: string;
+  siteLabel: string;
+  playerIds: string[];
+  fetchedAt: string;
+};
+
 type GraphQlBatchItem = {
   operationName: string;
   variables?: Record<string, unknown>;
@@ -88,6 +96,27 @@ query GetQuickReport($filter: QuickReportFilter!) {
   }
 }`;
 
+const GET_PLAYERS_REPORT = `
+query GetPlayersReport($filter: PlayersReportFilter!) {
+  authorized {
+    partner {
+      reports {
+        playersReport(filter: $filter) {
+          status
+          hash
+          pagesCount
+          rows {
+            playerId
+            registrationDate
+            siteName
+            siteId
+          }
+        }
+      }
+    }
+  }
+}`;
+
 const SITE_HINTS: Record<XPartnersCountry, string[]> = {
   CM: ["camerun", "cameroon"],
   EG: ["egypt", "egypt0011", "egypt"],
@@ -112,6 +141,25 @@ function quickReportTodayPeriod(): { startPeriod: string; endPeriod: string } {
     endPeriod: midnight,
   };
 }
+
+function todayDayKey(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: XP_REPORT_TIMEZONE }).format(new Date());
+}
+
+function isRegisteredOnDay(registrationDate: string | undefined, dayKey: string): boolean {
+  if (!registrationDate?.trim()) {
+    return false;
+  }
+  const d = registrationDate.trim().slice(0, 10);
+  return d === dayKey;
+}
+
+type PlayersReportRow = {
+  playerId?: string | number;
+  registrationDate?: string;
+  siteName?: string;
+  siteId?: number | string;
+};
 
 function resolveCurrencyId(env: AppEnv): number {
   const raw = Number(env.XPARTNERS_CURRENCY_ID || 6);
@@ -768,6 +816,149 @@ export class XPartnersClient {
       newAccountsWithDeposits: ftdN,
       fetchedAt: new Date().toISOString(),
       siteLabel,
+    };
+  }
+
+  private playersReportBaseFilter(siteId: number): Record<string, unknown> {
+    const { startPeriod, endPeriod } = quickReportTodayPeriod();
+    return {
+      currencyId: resolveCurrencyId(this.env),
+      siteId,
+      startPeriod,
+      endPeriod,
+      methood: "get",
+      onlyNewPlayers: false,
+      withoutDepositsOnly: false,
+      subId: "",
+    };
+  }
+
+  private async fetchPlayersReportOnce(filter: Record<string, unknown>): Promise<{
+    status?: string;
+    hash?: string;
+    pagesCount?: number;
+    rows: PlayersReportRow[];
+  }> {
+    const deadline = Date.now() + 90_000;
+    let lastStatus: string | undefined;
+    let payload:
+      | {
+          status?: string;
+          hash?: string;
+          pagesCount?: number;
+          rows?: PlayersReportRow[];
+        }
+      | undefined;
+
+    for (;;) {
+      const batch = await this.graphql<
+        Array<{
+          data?: {
+            authorized?: {
+              partner?: {
+                reports?: {
+                  playersReport?: {
+                    status?: string;
+                    hash?: string;
+                    pagesCount?: number;
+                    rows?: PlayersReportRow[];
+                  };
+                };
+              } | null;
+            };
+          };
+          errors?: Array<{ message?: string; extensions?: unknown }>;
+        }>
+      >([
+        {
+          operationName: "GetPlayersReport",
+          variables: { filter },
+          query: GET_PLAYERS_REPORT,
+        },
+      ]);
+      const first = batch?.[0];
+      if (first?.errors?.length) {
+        console.warn("1xPartners GetPlayersReport errors:", JSON.stringify(first.errors).slice(0, 2000));
+        throw new Error(formatGraphqlErrors(first.errors));
+      }
+      const partner = first?.data?.authorized?.partner;
+      if (!partner) {
+        throw new Error(
+          "1xPartners: нет доступа к отчёту по игрокам (partner.reports).",
+        );
+      }
+      payload = partner.reports?.playersReport;
+      lastStatus = payload?.status;
+      if (lastStatus !== "PENDING") {
+        break;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("1xPartners: отчёт по игрокам ещё формируется (PENDING).");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+
+    if (lastStatus === "ERROR") {
+      throw new Error("1xPartners: ошибка отчёта по игрокам (status ERROR).");
+    }
+
+    return {
+      status: lastStatus,
+      hash: payload?.hash,
+      pagesCount: payload?.pagesCount,
+      rows: payload?.rows ?? [],
+    };
+  }
+
+  private async fetchPlayersReportAllRows(siteId: number): Promise<PlayersReportRow[]> {
+    const base = this.playersReportBaseFilter(siteId);
+    const first = await this.fetchPlayersReportOnce({
+      ...base,
+      pageNumber: 1,
+      countOnPage: 500,
+    });
+    const rows = [...(first.rows ?? [])];
+    const pagesCount = Math.max(1, Number(first.pagesCount ?? 1));
+    let hash = first.hash;
+
+    for (let page = 2; page <= pagesCount && page <= 100; page++) {
+      const next = await this.fetchPlayersReportOnce({
+        ...base,
+        pageNumber: page,
+        countOnPage: 500,
+        ...(hash ? { hash } : {}),
+      });
+      rows.push(...(next.rows ?? []));
+      hash = next.hash ?? hash;
+    }
+    return rows;
+  }
+
+  async fetchPlayerIdsToday(country: XPartnersCountry): Promise<XPartnersPlayersToday> {
+    await this.ensureSession();
+    const dayKey = todayDayKey();
+    const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
+    const idSet = new Set<string>();
+
+    for (const site of sites) {
+      const rows = await this.fetchPlayersReportAllRows(site.id);
+      for (const row of rows) {
+        if (!isRegisteredOnDay(row.registrationDate, dayKey)) {
+          continue;
+        }
+        const id = String(row.playerId ?? "").trim();
+        if (id) {
+          idSet.add(id);
+        }
+      }
+    }
+
+    return {
+      country,
+      dayKey,
+      siteLabel,
+      playerIds: [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+      fetchedAt: new Date().toISOString(),
     };
   }
 }

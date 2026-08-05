@@ -32,6 +32,52 @@ const COUNTRY_LABEL: Record<XPartnersCountry, string> = {
   ZM: "Zambia",
 };
 
+export function formatPlayersIdsTxt(
+  country: XPartnersCountry,
+  dayKey: string,
+  siteLabel: string,
+  playerIds: string[],
+): string {
+  const label = COUNTRY_LABEL[country];
+  const header = [
+    `# 1xPartners · отчёт по игрокам · ${label}`,
+    `# Дата регистрации: ${dayKey}`,
+    `# Сайт: ${siteLabel}`,
+    `# Всего ID: ${playerIds.length}`,
+    "",
+  ].join("\n");
+  return `${header}${playerIds.join("\n")}\n`;
+}
+
+export function formatPlayersIdsMessage(
+  country: XPartnersCountry,
+  exportData: { dayKey: string; siteLabel: string; playerIds: string[] },
+): string {
+  const { dayKey, siteLabel, playerIds } = exportData;
+  if (!playerIds.length) {
+    return [
+      `<b>1xPartners · ID игроков · ${COUNTRY_LABEL[country]}</b>`,
+      `<b>Сайт:</b> <code>${escapeHtml(siteLabel)}</code>`,
+      `<b>Дата:</b> ${dayKey}`,
+      "",
+      "За сегодня регистраций не найдено.",
+    ].join("\n");
+  }
+  const preview = playerIds.slice(0, 35);
+  const lines = [
+    `<b>1xPartners · ID игроков · ${COUNTRY_LABEL[country]}</b>`,
+    `<b>Сайт:</b> <code>${escapeHtml(siteLabel)}</code>`,
+    `<b>Дата:</b> ${dayKey}`,
+    `<b>Кол-во:</b> ${playerIds.length}`,
+    "",
+    `<code>${escapeHtml(preview.join("\n"))}</code>`,
+  ];
+  if (playerIds.length > preview.length) {
+    lines.push(`<i>… и ещё ${playerIds.length - preview.length} (см. файл .txt)</i>`);
+  }
+  return lines.join("\n");
+}
+
 export function formatAllCountriesStats(
   byCountry: Partial<Record<XPartnersCountry, XPartnersQuickStats>>,
   refreshHours: StatsRefreshHours,
