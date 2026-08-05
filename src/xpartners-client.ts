@@ -146,6 +146,22 @@ function todayDayKey(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: XP_REPORT_TIMEZONE }).format(new Date());
 }
 
+/** Registration date column in partner UI (YYYY-MM-DD). */
+function registrationDayKey(registrationDate: string | undefined): string | null {
+  if (!registrationDate?.trim()) {
+    return null;
+  }
+  const raw = registrationDate.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    return raw.slice(0, 10);
+  }
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) {
+    return null;
+  }
+  return new Intl.DateTimeFormat("en-CA", { timeZone: XP_REPORT_TIMEZONE }).format(new Date(ms));
+}
+
 /** «Сегодня» в отчёте «По игрокам»: startOf/endOf day → ISO (как moment в кабинете). */
 function playersReportTodayPeriodFullDay(): { startPeriod: string; endPeriod: string } {
   const dayKey = todayDayKey();
@@ -842,10 +858,24 @@ export class XPartnersClient {
       startPeriod: options?.startPeriod ?? period.startPeriod,
       endPeriod: options?.endPeriod ?? period.endPeriod,
       methood: "get",
-      onlyNewPlayers: options?.onlyNewPlayers ?? true,
+      onlyNewPlayers: options?.onlyNewPlayers ?? false,
       withoutDepositsOnly: options?.withoutDepositsOnly ?? false,
       subId: "",
     };
+  }
+
+  private collectPlayerIdsRegisteredOnDay(rows: PlayersReportRow[], dayKey: string): string[] {
+    const idSet = new Set<string>();
+    for (const row of rows) {
+      if (registrationDayKey(row.registrationDate) !== dayKey) {
+        continue;
+      }
+      const id = String(row.playerId ?? "").trim();
+      if (id) {
+        idSet.add(id);
+      }
+    }
+    return [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }
 
   private collectPlayerIdsFromRows(rows: PlayersReportRow[]): string[] {
@@ -946,11 +976,8 @@ export class XPartnersClient {
     },
   ): Promise<PlayersReportRow[]> {
     const base = this.playersReportBaseFilter(siteId, options);
-    const first = await this.fetchPlayersReportOnce({
-      ...base,
-      pageNumber: 1,
-      countOnPage: 500,
-    });
+    // Как в кабинете: первый запрос без pageNumber/countOnPage (полный отчёт), иначе API режет страницу.
+    const first = await this.fetchPlayersReportOnce({ ...base });
     const rows = [...(first.rows ?? [])];
     const pagesCount = Math.max(1, Number(first.pagesCount ?? 1));
     let hash = first.hash;
@@ -959,7 +986,7 @@ export class XPartnersClient {
       const next = await this.fetchPlayersReportOnce({
         ...base,
         pageNumber: page,
-        countOnPage: 500,
+        countOnPage: 100,
         ...(hash ? { hash } : {}),
       });
       rows.push(...(next.rows ?? []));
@@ -973,11 +1000,24 @@ export class XPartnersClient {
     const dayKey = todayDayKey();
     const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
     const quick = await this.fetchQuickStatsToday(country);
+    const period = playersReportTodayPeriodFullDay();
     const idSet = new Set<string>();
 
-    // «Только новые игроки» + оба чекбокса депозита: в кабинете регистрации часто
-    // split between withoutDepositsOnly true/false; union ≈ countOfRegistrations.
-    for (const period of todayReportPeriodVariants()) {
+    for (const site of sites) {
+      const rows = await this.fetchPlayersReportAllRows(site.id, {
+        onlyNewPlayers: false,
+        withoutDepositsOnly: false,
+        ...period,
+      });
+      console.log(
+        `1xPartners ${country}: GetPlayersReport siteId=${site.id} rows=${rows.length} (UI-style, no pagination on 1st req)`,
+      );
+      for (const id of this.collectPlayerIdsRegisteredOnDay(rows, dayKey)) {
+        idSet.add(id);
+      }
+    }
+
+    if (idSet.size < quick.registrations) {
       for (const withoutDepositsOnly of [false, true] as const) {
         for (const site of sites) {
           const rows = await this.fetchPlayersReportAllRows(site.id, {
