@@ -36,17 +36,40 @@ const TELEGRAM_HTML_MAX = 4096;
 
 export function formatPlayersIdsMessageParts(
   country: XPartnersCountry,
-  exportData: { dayKey: string; siteLabel: string; playerIds: string[] },
+  exportData: {
+    dayKey: string;
+    siteLabel: string;
+    playerIds: string[];
+    registrationsExpected?: number;
+  },
 ): string[] {
-  const { dayKey, siteLabel, playerIds } = exportData;
+  const { dayKey, siteLabel, playerIds, registrationsExpected } = exportData;
   const label = COUNTRY_LABEL[country];
+  const countLine =
+    registrationsExpected != null &&
+    registrationsExpected > 0 &&
+    playerIds.length !== registrationsExpected
+      ? `<b>Кол-во:</b> ${playerIds.length} <i>(в сводке рег: ${registrationsExpected})</i>`
+      : `<b>Кол-во:</b> ${playerIds.length}`;
   const headerLines = [
     `<b>1xPartners · ID игроков · ${label}</b>`,
     `<b>Сайт:</b> <code>${escapeHtml(siteLabel)}</code>`,
     `<b>Период:</b> сегодня (USD) · ${dayKey}`,
-    `<b>Кол-во:</b> ${playerIds.length}`,
+    countLine,
     "",
   ];
+  if (
+    registrationsExpected != null &&
+    registrationsExpected > playerIds.length &&
+    playerIds.length > 0
+  ) {
+    headerLines.splice(
+      headerLines.length - 1,
+      0,
+      "<i>Не все ID: обновите XPARTNERS_COOKIE на странице «Отчёт по игрокам» (graphql → Cookie) или добавьте XPARTNERS_REPORTS_COOKIE.</i>",
+      "",
+    );
+  }
   if (!playerIds.length) {
     return [
       [

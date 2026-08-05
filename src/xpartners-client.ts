@@ -19,7 +19,14 @@ export type XPartnersPlayersToday = {
   dayKey: string;
   siteLabel: string;
   playerIds: string[];
+  registrationsExpected: number;
   fetchedAt: string;
+};
+
+const COUNTRY_API_NAME: Record<XPartnersCountry, string> = {
+  CM: "Cameroon",
+  EG: "Egypt",
+  ZM: "Zambia",
 };
 
 type GraphQlBatchItem = {
@@ -185,17 +192,6 @@ type PlayersReportRow = {
   siteName?: string;
   siteId?: number | string;
 };
-
-function depositIsZero(amount: string | number | null | undefined): boolean {
-  if (amount == null || amount === "") {
-    return true;
-  }
-  if (typeof amount === "number") {
-    return !Number.isFinite(amount) || amount <= 0;
-  }
-  const n = Number.parseFloat(String(amount).replace(/[^0-9.-]/g, ""));
-  return !Number.isFinite(n) || n <= 0;
-}
 
 function resolveCurrencyId(env: AppEnv): number {
   const raw = Number(env.XPARTNERS_CURRENCY_ID || 6);
@@ -409,6 +405,39 @@ export class XPartnersClient {
     }
     await this.persistSessionCookies();
     return parsed as T;
+  }
+
+  private reportsCookieFromEnv(): string | null {
+    const raw = (this.env.XPARTNERS_REPORTS_COOKIE || "").trim();
+    return raw || null;
+  }
+
+  /** GetPlayersReport иногда режет строки без отдельной cookie со страницы отчёта. */
+  private async graphqlPlayersReport<T>(items: GraphQlBatchItem[]): Promise<T> {
+    const reportsCookie = this.reportsCookieFromEnv();
+    if (!reportsCookie) {
+      return this.graphql<T>(items);
+    }
+    const response = await fetch(GRAPHQL, {
+      method: "POST",
+      headers: this.requestHeaders({
+        "Content-Type": "application/json",
+        Origin: BASE,
+        Referer: `${BASE}/ru/partner/reports/players`,
+        Cookie: reportsCookie,
+      }),
+      body: JSON.stringify(items),
+      signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`1xPartners HTTP ${response.status}: ${text.slice(0, 300)}`);
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(`1xPartners invalid JSON: ${text.slice(0, 200)}`);
+    }
   }
 
   private async clearStaleSessionForLogin(): Promise<void> {
@@ -856,7 +885,7 @@ export class XPartnersClient {
   }
 
   private playersReportBaseFilter(
-    siteId: number,
+    scope: { siteId: number } | { country: XPartnersCountry },
     options?: {
       onlyNewPlayers?: boolean;
       withoutDepositsOnly?: boolean;
@@ -865,41 +894,20 @@ export class XPartnersClient {
     },
   ): Record<string, unknown> {
     const period = playersReportTodayPeriodFullDay();
-    return {
+    const filter: Record<string, unknown> = {
       currencyId: resolveCurrencyId(this.env),
-      siteId,
       startPeriod: options?.startPeriod ?? period.startPeriod,
       endPeriod: options?.endPeriod ?? period.endPeriod,
       methood: "get",
       onlyNewPlayers: options?.onlyNewPlayers ?? false,
       withoutDepositsOnly: options?.withoutDepositsOnly ?? false,
-      subId: "",
     };
-  }
-
-  private collectPlayerIdsRegisteredOnDay(rows: PlayersReportRow[], dayKey: string): string[] {
-    const idSet = new Set<string>();
-    for (const row of rows) {
-      if (registrationDayKey(row.registrationDate) !== dayKey) {
-        continue;
-      }
-      const id = String(row.playerId ?? "").trim();
-      if (id) {
-        idSet.add(id);
-      }
+    if ("siteId" in scope) {
+      filter.siteId = scope.siteId;
+    } else {
+      filter.country = COUNTRY_API_NAME[scope.country];
     }
-    return [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  }
-
-  private collectPlayerIdsFromRows(rows: PlayersReportRow[]): string[] {
-    const idSet = new Set<string>();
-    for (const row of rows) {
-      const id = String(row.playerId ?? "").trim();
-      if (id) {
-        idSet.add(id);
-      }
-    }
-    return [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return filter;
   }
 
   private async fetchPlayersReportOnce(filter: Record<string, unknown>): Promise<{
@@ -920,7 +928,7 @@ export class XPartnersClient {
       | undefined;
 
     for (;;) {
-      const batch = await this.graphql<
+      const batch = await this.graphqlPlayersReport<
         Array<{
           data?: {
             authorized?: {
@@ -979,17 +987,8 @@ export class XPartnersClient {
     };
   }
 
-  private addPlayerIdsFromRows(idSet: Set<string>, rows: PlayersReportRow[]): void {
-    for (const row of rows) {
-      const id = String(row.playerId ?? "").trim();
-      if (id) {
-        idSet.add(id);
-      }
-    }
-  }
-
   private async fetchPlayersReportAllRows(
-    siteId: number,
+    scope: { siteId: number } | { country: XPartnersCountry },
     options?: {
       onlyNewPlayers?: boolean;
       withoutDepositsOnly?: boolean;
@@ -997,7 +996,7 @@ export class XPartnersClient {
       endPeriod?: string;
     },
   ): Promise<PlayersReportRow[]> {
-    const base = this.playersReportBaseFilter(siteId, options);
+    const base = this.playersReportBaseFilter(scope, options);
     const load = async (extra: Record<string, unknown>) => {
       const first = await this.fetchPlayersReportOnce({ ...base, ...extra });
       const acc = [...(first.rows ?? [])];
@@ -1027,6 +1026,47 @@ export class XPartnersClient {
     return rows;
   }
 
+  private ingestPlayerReportRows(
+    idSet: Set<string>,
+    rows: PlayersReportRow[],
+    dayKey: string,
+    mode: "all" | "registeredToday",
+  ): void {
+    for (const row of rows) {
+      if (mode === "registeredToday" && registrationDayKey(row.registrationDate) !== dayKey) {
+        continue;
+      }
+      const id = String(row.playerId ?? "").trim();
+      if (id) {
+        idSet.add(id);
+      }
+    }
+  }
+
+  private async collectPlayerIdsFromReports(
+    idSet: Set<string>,
+    scope: { siteId: number } | { country: XPartnersCountry },
+    dayKey: string,
+    label: string,
+  ): Promise<void> {
+    for (const period of todayReportPeriodVariants()) {
+      for (const onlyNewPlayers of [false, true] as const) {
+        for (const withoutDepositsOnly of [false, true] as const) {
+          const rows = await this.fetchPlayersReportAllRows(scope, {
+            onlyNewPlayers,
+            withoutDepositsOnly,
+            ...period,
+          });
+          const mode = onlyNewPlayers ? "all" : "registeredToday";
+          console.log(
+            `1xPartners ${label}: playersReport onlyNew=${onlyNewPlayers} noDep=${withoutDepositsOnly} end=${period.endPeriod} rows=${rows.length}`,
+          );
+          this.ingestPlayerReportRows(idSet, rows, dayKey, mode);
+        }
+      }
+    }
+  }
+
   async fetchPlayerIdsToday(country: XPartnersCountry): Promise<XPartnersPlayersToday> {
     await this.ensureSession();
     const dayKey = todayDayKey();
@@ -1035,58 +1075,21 @@ export class XPartnersClient {
     const idSet = new Set<string>();
 
     for (const site of sites) {
-      for (const period of todayReportPeriodVariants()) {
-        // «Новые игроки» в периоде: с депозитом и без (≈ countOfRegistrations, не только FTD).
-        for (const withoutDepositsOnly of [false, true] as const) {
-          const rows = await this.fetchPlayersReportAllRows(site.id, {
-            onlyNewPlayers: true,
-            withoutDepositsOnly,
-            ...period,
-          });
-          console.log(
-            `1xPartners ${country}: newPlayers site=${site.id} noDepOnly=${withoutDepositsOnly} period=${period.endPeriod} rows=${rows.length}`,
-          );
-          this.addPlayerIdsFromRows(idSet, rows);
-        }
-      }
+      await this.collectPlayerIdsFromReports(idSet, { siteId: site.id }, dayKey, `${country}:site${site.id}`);
+    }
 
-      const openPeriod = playersReportTodayPeriodFullDay();
-      const openRows = await this.fetchPlayersReportAllRows(site.id, {
-        onlyNewPlayers: false,
-        withoutDepositsOnly: false,
-        ...openPeriod,
-      });
-      console.log(
-        `1xPartners ${country}: openReport site=${site.id} rows=${openRows.length} regToday=${openRows.filter((r) => registrationDayKey(r.registrationDate) === dayKey).length}`,
-      );
-      for (const row of openRows) {
-        if (registrationDayKey(row.registrationDate) !== dayKey) {
-          continue;
-        }
-        const id = String(row.playerId ?? "").trim();
-        if (id) {
-          idSet.add(id);
-        }
-      }
-      for (const row of openRows) {
-        if (registrationDayKey(row.registrationDate) !== dayKey) {
-          continue;
-        }
-        if (!depositIsZero(row.depositAmount)) {
-          continue;
-        }
-        const id = String(row.playerId ?? "").trim();
-        if (id) {
-          idSet.add(id);
-        }
-      }
+    if (idSet.size < quick.registrations) {
+      await this.collectPlayerIdsFromReports(idSet, { country }, dayKey, `${country}:country`);
     }
 
     const playerIds = [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
     if (quick.registrations > 0 && playerIds.length !== quick.registrations) {
+      const hint = this.reportsCookieFromEnv()
+        ? ""
+        : " · задайте XPARTNERS_REPORTS_COOKIE со страницы «Отчёт по игрокам»";
       console.warn(
-        `1xPartners ${country}: player IDs count ${playerIds.length} vs quick report registrations ${quick.registrations}`,
+        `1xPartners ${country}: player IDs ${playerIds.length} vs registrations ${quick.registrations}${hint}`,
       );
     }
 
@@ -1095,6 +1098,7 @@ export class XPartnersClient {
       dayKey,
       siteLabel,
       playerIds,
+      registrationsExpected: quick.registrations,
       fetchedAt: new Date().toISOString(),
     };
   }

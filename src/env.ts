@@ -60,6 +60,10 @@ const envSchema = z.object({
   XPARTNERS_COOKIE: z
     .preprocess((value) => (value === "" || value === undefined ? undefined : String(value)), z.string())
     .optional(),
+  /** Optional: Cookie copied while on «Отчёт по игрокам» (F12 → graphql → Request Headers). Used only for GetPlayersReport. */
+  XPARTNERS_REPORTS_COOKIE: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : String(value)), z.string())
+    .optional(),
   XPARTNERS_KEEPALIVE_MINUTES: z.coerce.number().int().positive().default(3),
   /** 1xPartners currency id (6 = USD in partner UI). */
   XPARTNERS_CURRENCY_ID: z.coerce.number().int().positive().default(6),
