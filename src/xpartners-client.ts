@@ -92,6 +92,33 @@ const DEFAULT_SITE_URL: Record<XPartnersCountry, string> = {
   ZM: "http://Zambia.com",
 };
 
+/** Same as 1xPartners UI: start/end of calendar day (UTC on server). */
+function quickReportTodayPeriod(): { startPeriod: string; endPeriod: string } {
+  const now = new Date();
+  const start = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
+  );
+  const end = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999),
+  );
+  return { startPeriod: start.toISOString(), endPeriod: end.toISOString() };
+}
+
+function formatGraphqlErrors(errors: Array<{ message?: string; extensions?: unknown }>): string {
+  const parts = errors.map((e) => {
+    const msg = (e.message || "GraphQL error").trim();
+    if (e.extensions && typeof e.extensions === "object") {
+      const ext = e.extensions as Record<string, unknown>;
+      const code = ext.code ?? ext.errorCode ?? ext.type;
+      if (code != null) {
+        return `${msg} [${String(code)}]`;
+      }
+    }
+    return msg;
+  });
+  return [...new Set(parts)].join("; ");
+}
+
 function siteUrlForCountry(env: AppEnv, country: XPartnersCountry): string {
   const key =
     country === "CM"
@@ -152,7 +179,7 @@ export class XPartnersClient {
   private jar: CookieJar;
   private fetchWithCookies: typeof fetch;
   private loggedIn = false;
-  private siteIdCache = new Map<XPartnersCountry, number>();
+  private siteIdCache = new Map<XPartnersCountry, { id: number; label: string }>();
   private bootstrapped = false;
   private signInInFlight: Promise<void> | null = null;
   /** After captcha/login failure, do not hammer SignIn (e.g. «Обновить все» × 3 countries). */
@@ -452,7 +479,7 @@ export class XPartnersClient {
       .filter((s) => s.id > 0 && s.name);
   }
 
-  private async resolveWebsiteId(country: XPartnersCountry): Promise<number> {
+  private async resolveSite(country: XPartnersCountry): Promise<{ id: number; label: string }> {
     const cached = this.siteIdCache.get(country);
     if (cached) {
       return cached;
@@ -472,20 +499,20 @@ export class XPartnersClient {
         `1xPartners: не найден сайт для ${country} (ожидали ${wantUrl}). Проверьте XPARTNERS_SITE_${country}.`,
       );
     }
-    this.siteIdCache.set(country, hit.id);
-    return hit.id;
+    const resolved = { id: hit.id, label: hit.name };
+    this.siteIdCache.set(country, resolved);
+    return resolved;
   }
 
   async fetchQuickStatsToday(country: XPartnersCountry): Promise<XPartnersQuickStats> {
     await this.ensureSession();
-    const websiteId = await this.resolveWebsiteId(country);
+    const site = await this.resolveSite(country);
+    const { startPeriod, endPeriod } = quickReportTodayPeriod();
     const filter = {
       currencyId: Number(this.env.XPARTNERS_CURRENCY_ID || 1),
-      websiteId,
-      marketingToolId: null,
-      period: {
-        interval: "TODAY",
-      },
+      siteId: site.id,
+      startPeriod,
+      endPeriod,
     };
     const batch = await this.graphql<
       Array<{
@@ -517,11 +544,11 @@ export class XPartnersClient {
     ]);
     const first = batch?.[0];
     if (first?.errors?.length) {
-      throw new Error(first.errors.map((e) => e.message).join("; "));
+      console.warn("1xPartners GetQuickReport errors:", JSON.stringify(first.errors).slice(0, 2000));
+      throw new Error(formatGraphqlErrors(first.errors));
     }
     const total = first?.data?.authorized?.partner?.reports?.quickReport?.total;
-    const sites = await this.listSites();
-    const siteLabel = sites.find((s) => s.id === websiteId)?.name ?? siteUrlForCountry(this.env, country);
+    const siteLabel = site.label;
     const ftd =
       total?.newDepositors ??
       total?.countOfRegistrationsWithDeposits ??
