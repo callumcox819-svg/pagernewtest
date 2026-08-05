@@ -146,13 +146,19 @@ function todayDayKey(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: XP_REPORT_TIMEZONE }).format(new Date());
 }
 
-function todayReportPeriodVariants(): Array<{ startPeriod: string; endPeriod: string }> {
+/** «Сегодня» в отчёте «По игрокам»: startOf/endOf day → ISO (как moment в кабинете). */
+function playersReportTodayPeriodFullDay(): { startPeriod: string; endPeriod: string } {
   const dayKey = todayDayKey();
   const start = `${dayKey}T00:00:00.000Z`;
-  return [
-    { startPeriod: start, endPeriod: start },
-    { startPeriod: start, endPeriod: `${dayKey}T23:59:59.999Z` },
-  ];
+  return {
+    startPeriod: start,
+    endPeriod: `${dayKey}T23:59:59.999Z`,
+  };
+}
+
+function todayReportPeriodVariants(): Array<{ startPeriod: string; endPeriod: string }> {
+  const quick = quickReportTodayPeriod();
+  return [quick, playersReportTodayPeriodFullDay()];
 }
 
 type PlayersReportRow = {
@@ -824,11 +830,12 @@ export class XPartnersClient {
     siteId: number,
     options?: {
       onlyNewPlayers?: boolean;
+      withoutDepositsOnly?: boolean;
       startPeriod?: string;
       endPeriod?: string;
     },
   ): Record<string, unknown> {
-    const period = quickReportTodayPeriod();
+    const period = playersReportTodayPeriodFullDay();
     return {
       currencyId: resolveCurrencyId(this.env),
       siteId,
@@ -836,7 +843,7 @@ export class XPartnersClient {
       endPeriod: options?.endPeriod ?? period.endPeriod,
       methood: "get",
       onlyNewPlayers: options?.onlyNewPlayers ?? true,
-      withoutDepositsOnly: false,
+      withoutDepositsOnly: options?.withoutDepositsOnly ?? false,
       subId: "",
     };
   }
@@ -933,6 +940,7 @@ export class XPartnersClient {
     siteId: number,
     options?: {
       onlyNewPlayers?: boolean;
+      withoutDepositsOnly?: boolean;
       startPeriod?: string;
       endPeriod?: string;
     },
@@ -965,52 +973,30 @@ export class XPartnersClient {
     const dayKey = todayDayKey();
     const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
     const quick = await this.fetchQuickStatsToday(country);
-    const targetCount = quick.registrations;
+    const idSet = new Set<string>();
 
-    let bestIds: string[] = [];
-    let bestDistance = Number.POSITIVE_INFINITY;
-
+    // «Только новые игроки» + оба чекбокса депозита: в кабинете регистрации часто
+    // split between withoutDepositsOnly true/false; union ≈ countOfRegistrations.
     for (const period of todayReportPeriodVariants()) {
-      for (const onlyNewPlayers of [true, false] as const) {
-        const idSet = new Set<string>();
+      for (const withoutDepositsOnly of [false, true] as const) {
         for (const site of sites) {
           const rows = await this.fetchPlayersReportAllRows(site.id, {
-            onlyNewPlayers,
+            onlyNewPlayers: true,
+            withoutDepositsOnly,
             ...period,
           });
           for (const id of this.collectPlayerIdsFromRows(rows)) {
             idSet.add(id);
           }
         }
-        const ids = [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-        const diff = targetCount > 0 ? ids.length - targetCount : 0;
-        const distance =
-          targetCount > 0
-            ? Math.abs(diff) + (diff > 0 ? diff : 0)
-            : ids.length === 0
-              ? 0
-              : ids.length;
-        const better =
-          distance < bestDistance ||
-          (distance === bestDistance && onlyNewPlayers && ids.length >= bestIds.length);
-        if (better) {
-          bestIds = ids;
-          bestDistance = distance;
-        }
-        if (targetCount > 0 && ids.length === targetCount) {
-          bestIds = ids;
-          bestDistance = 0;
-          break;
-        }
-      }
-      if (bestDistance === 0) {
-        break;
       }
     }
 
-    if (targetCount > 0 && bestIds.length !== targetCount) {
+    const playerIds = [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    if (quick.registrations > 0 && playerIds.length !== quick.registrations) {
       console.warn(
-        `1xPartners ${country}: player IDs count ${bestIds.length} vs quick report registrations ${targetCount}`,
+        `1xPartners ${country}: player IDs count ${playerIds.length} vs quick report registrations ${quick.registrations}`,
       );
     }
 
@@ -1018,7 +1004,7 @@ export class XPartnersClient {
       country,
       dayKey,
       siteLabel,
-      playerIds: bestIds,
+      playerIds,
       fetchedAt: new Date().toISOString(),
     };
   }
