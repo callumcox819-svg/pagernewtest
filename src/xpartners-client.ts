@@ -976,7 +976,9 @@ export class XPartnersClient {
     }
 
     if (lastStatus === "ERROR") {
-      throw new Error("1xPartners: ошибка отчёта по игрокам (status ERROR).");
+      throw new Error(
+        `1xPartners: ошибка отчёта по игрокам (status ERROR) · filter=${JSON.stringify(filter).slice(0, 400)}`,
+      );
     }
 
     return {
@@ -1049,19 +1051,29 @@ export class XPartnersClient {
     dayKey: string,
     label: string,
   ): Promise<void> {
+    const variants = [
+      { onlyNewPlayers: true, withoutDepositsOnly: false },
+      { onlyNewPlayers: true, withoutDepositsOnly: true },
+      { onlyNewPlayers: false, withoutDepositsOnly: false },
+    ] as const;
+
     for (const period of todayReportPeriodVariants()) {
-      for (const onlyNewPlayers of [false, true] as const) {
-        for (const withoutDepositsOnly of [false, true] as const) {
+      for (const variant of variants) {
+        try {
           const rows = await this.fetchPlayersReportAllRows(scope, {
-            onlyNewPlayers,
-            withoutDepositsOnly,
+            ...variant,
             ...period,
           });
-          const mode = onlyNewPlayers ? "all" : "registeredToday";
+          const mode = variant.onlyNewPlayers ? "all" : "registeredToday";
           console.log(
-            `1xPartners ${label}: playersReport onlyNew=${onlyNewPlayers} noDep=${withoutDepositsOnly} end=${period.endPeriod} rows=${rows.length}`,
+            `1xPartners ${label}: playersReport onlyNew=${variant.onlyNewPlayers} noDep=${variant.withoutDepositsOnly} end=${period.endPeriod} rows=${rows.length}`,
           );
           this.ingestPlayerReportRows(idSet, rows, dayKey, mode);
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `1xPartners ${label}: skip playersReport variant onlyNew=${variant.onlyNewPlayers} noDep=${variant.withoutDepositsOnly} · ${msg}`,
+          );
         }
       }
     }
@@ -1076,10 +1088,6 @@ export class XPartnersClient {
 
     for (const site of sites) {
       await this.collectPlayerIdsFromReports(idSet, { siteId: site.id }, dayKey, `${country}:site${site.id}`);
-    }
-
-    if (idSet.size < quick.registrations) {
-      await this.collectPlayerIdsFromReports(idSet, { country }, dayKey, `${country}:country`);
     }
 
     const playerIds = [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));

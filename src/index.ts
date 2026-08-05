@@ -1734,23 +1734,50 @@ async function sendPlayersIdsExport(
     const countries: XPartnersCountry[] =
       target === "ALL" ? [...XP_STATS_COUNTRIES] : [target];
 
-    const exports = await Promise.all(countries.map((c) => client.fetchPlayerIdsToday(c)));
+    const results = await Promise.allSettled(
+      countries.map((c) => client.fetchPlayerIdsToday(c)),
+    );
 
     const keyboard = buildStatsCountryKeyboard();
     if (target === "ALL") {
-      for (let i = 0; i < exports.length; i++) {
-        const e = exports[i]!;
+      let lastSuccessIndex = -1;
+      for (let i = 0; i < results.length; i++) {
+        if (results[i]?.status === "fulfilled") {
+          lastSuccessIndex = i;
+        }
+      }
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i]!;
+        const country = countries[i]!;
+        if (r.status === "rejected") {
+          const isLast = i === results.length - 1;
+          await telegram.sendMessage(
+            chatId,
+            `⚠️ <b>${country}</b>: ${escapeHtmlLite(formatError(r.reason))}`,
+            isLast && lastSuccessIndex < 0 ? keyboard : undefined,
+          );
+          continue;
+        }
+        const e = r.value;
         const parts = formatPlayersIdsMessageParts(e.country, e);
-        const isLastCountry = i === exports.length - 1;
+        const isLastCountry = i === results.length - 1;
         for (let p = 0; p < parts.length; p++) {
           const isLastPart = isLastCountry && p === parts.length - 1;
           await telegram.sendMessage(chatId, parts[p]!, isLastPart ? keyboard : undefined);
         }
       }
+      if (lastSuccessIndex < 0) {
+        await telegram.sendMessage(chatId, "Не удалось загрузить ID ни для одной страны.", keyboard);
+      }
       return;
     }
 
-    const data = exports[0]!;
+    const single = results[0];
+    if (!single || single.status === "rejected") {
+      throw single?.reason ?? new Error("1xPartners: нет ответа");
+    }
+
+    const data = single.value;
     const parts = formatPlayersIdsMessageParts(data.country, data);
     for (let p = 0; p < parts.length; p++) {
       await telegram.sendMessage(chatId, parts[p]!, p === parts.length - 1 ? keyboard : undefined);
