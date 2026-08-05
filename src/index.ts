@@ -1739,6 +1739,15 @@ async function refreshAllPartnerStats(
     return;
   }
   await telegram.answerCallbackQuery(callbackId, "Обновляю CM, EG, ZM…");
+  if (messageId) {
+    await safeEditMenu(
+      chatId,
+      messageId,
+      "⏳ Загрузка отчётов 1xPartners…",
+      buildStatsCountryKeyboard(),
+      callbackId,
+    );
+  }
   let current = state;
   const hours = partnerRefreshHours(state);
   const blocks: string[] = ["<b>1xPartners · все страны · сегодня</b>", ""];

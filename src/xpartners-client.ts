@@ -21,7 +21,8 @@ type GraphQlBatchItem = {
 };
 
 const BASE = "https://1xpartners.com";
-const GRAPHQL = `${BASE}/graphql`;
+const GRAPHQL = `${BASE}/graphql/`;
+const XP_FETCH_TIMEOUT_MS = 45_000;
 
 const BROWSER_HEADERS = {
   "User-Agent":
@@ -212,7 +213,7 @@ export class XPartnersClient {
   }
 
   private async graphql<T>(items: GraphQlBatchItem[]): Promise<T> {
-    const response = await this.fetchWithCookies(GRAPHQL, {
+    const response = await this.fetchTimed(GRAPHQL, {
       method: "POST",
       headers: this.requestHeaders({
         "Content-Type": "application/json",
@@ -244,6 +245,24 @@ export class XPartnersClient {
     this.fetchWithCookies = makeFetchCookie(fetch, this.jar) as typeof fetch;
   }
 
+  private async fetchTimed(url: string, init: RequestInit): Promise<Response> {
+    return this.fetchWithCookies(url, {
+      ...init,
+      signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS),
+    });
+  }
+
+  private async reloadEnvCookieSession(): Promise<boolean> {
+    const envCookie = cookiesFromEnv(this.env);
+    if (!envCookie) {
+      return false;
+    }
+    await this.clearStaleSessionForLogin();
+    await this.seedCookies(envCookie);
+    this.bootstrapped = true;
+    return this.pingAuthorized();
+  }
+
   async ensureSession(): Promise<void> {
     await this.bootstrapCookiesIfNeeded();
     if (await this.pingAuthorized()) {
@@ -251,6 +270,25 @@ export class XPartnersClient {
       return;
     }
     this.loggedIn = false;
+
+    if (cookiesFromEnv(this.env)) {
+      if (await this.reloadEnvCookieSession()) {
+        this.loggedIn = true;
+        return;
+      }
+      throw new Error(
+        "XPARTNERS_COOKIE не принят (истёк или обрезан при вставке). Скопируйте Cookie из graphql заново — одной строкой, с connect.sid.",
+      );
+    }
+
+    const cookieHeader = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
+    if (cookieHeader) {
+      await this.seedCookies(cookieHeader);
+      if (await this.pingAuthorized()) {
+        this.loggedIn = true;
+        return;
+      }
+    }
 
     const creds = parseCredentials(this.env);
     if (creds) {
@@ -260,18 +298,8 @@ export class XPartnersClient {
       return;
     }
 
-    const cookieHeader =
-      (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim() || cookiesFromEnv(this.env);
-    if (cookieHeader) {
-      await this.seedCookies(cookieHeader);
-      if (await this.pingAuthorized()) {
-        this.loggedIn = true;
-        return;
-      }
-    }
-
     throw new Error(
-      "1xPartners: задайте XPARTNERS_CREDENTIALS (login:password) или актуальный XPARTNERS_COOKIE в Railway.",
+      "1xPartners: задайте XPARTNERS_COOKIE или XPARTNERS_CREDENTIALS в Railway.",
     );
   }
 
@@ -322,17 +350,35 @@ export class XPartnersClient {
 
   private async pingAuthorized(): Promise<boolean> {
     try {
-      const data = await this.graphql<Array<{ data?: { authorized?: unknown } }>>([
-        { operationName: "GetAuthState", query: GET_AUTH_STATE },
+      const data = await this.graphql<
+        Array<{
+          data?: {
+            authorized?: {
+              partnerAndManager?: { data?: { sites?: unknown[] } };
+            };
+          };
+          errors?: Array<{ message?: string }>;
+        }>
+      >([
+        {
+          operationName: "PartnerSites",
+          variables: { filter: { hidden: false, partnerId: null } },
+          query: PARTNER_SITES,
+        },
       ]);
-      return Boolean(data?.[0]?.data?.authorized);
+      const first = data?.[0];
+      if (first?.errors?.length) {
+        return false;
+      }
+      const sites = first?.data?.authorized?.partnerAndManager?.data?.sites;
+      return Array.isArray(sites);
     } catch {
       return false;
     }
   }
 
   private async loginWithPassword(login: string, password: string): Promise<void> {
-    await this.fetchWithCookies(`${BASE}/ru/sign-in`, {
+    await this.fetchTimed(`${BASE}/ru/sign-in`, {
       method: "GET",
       headers: this.requestHeaders({ Accept: "text/html" }),
     });
