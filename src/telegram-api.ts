@@ -407,6 +407,12 @@ export function buildChannelKeyboard(
       }),
       [inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh })],
       [
+        inlineBtn("RW · 3 канала обуч.", "channels:rw_train", {
+          emojiId: PREMIUM_EMOJI.globe,
+          style: "success",
+        }),
+      ],
+      [
         inlineBtn("Включить все", "channels:all_on", {
           emojiId: PREMIUM_EMOJI.check,
           style: "success",
@@ -539,7 +545,7 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
           emojiId: PREMIUM_EMOJI.chart,
           style: "primary",
         }),
-        inlineBtn("Руанда · лог", "menu:learn", {
+        inlineBtn("Обучение RW", "menu:learn", {
           emojiId: PREMIUM_EMOJI.email,
           style: "primary",
         }),
@@ -570,6 +576,10 @@ export function buildStatsCountryKeyboard(): ReplyMarkup {
       [
         inlineBtn("Замбия", "stats:country:ZM", {
           emojiId: PREMIUM_EMOJI.flagZm,
+          style: "primary",
+        }),
+        inlineBtn("Руанда", "stats:country:RW", {
+          emojiId: PREMIUM_EMOJI.globe,
           style: "primary",
         }),
       ],
@@ -603,7 +613,10 @@ export function buildStatsPlayersKeyboard(): ReplyMarkup {
       ],
       [
         inlineBtn("Замбия", "stats:players:ZM", { emojiId: PREMIUM_EMOJI.flagZm, style: "primary" }),
-        inlineBtn("Все 3", "stats:players:ALL", { emojiId: PREMIUM_EMOJI.globe, style: "success" }),
+        inlineBtn("Руанда", "stats:players:RW", { emojiId: PREMIUM_EMOJI.globe, style: "primary" }),
+      ],
+      [
+        inlineBtn("Все 4", "stats:players:ALL", { emojiId: PREMIUM_EMOJI.globe, style: "success" }),
       ],
       [inlineBtn("Назад", "menu:stats", { emojiId: PREMIUM_EMOJI.back })],
     ],
@@ -624,19 +637,13 @@ export function buildStatsIntervalKeyboard(currentHours: number): ReplyMarkup {
   };
 }
 
-/** Bottom quick menu — premium icons + colored styles (match inline main menu). */
+/** Bottom quick menu — обычный текст (icon_custom_emoji на reply-клавиатуре скрывает подписи в Telegram). */
 export function buildOperatorReplyKeyboard(): ReplyMarkup {
   return {
     keyboard: [
-      [
-        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
-        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
-      ],
-      [
-        replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
-        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
-      ],
-      [replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart, style: "primary" })],
+      [{ text: "Pager аккаунт" }, { text: "Каналы" }],
+      [{ text: "Папки" }, { text: "Статус" }],
+      [{ text: "Статистика" }, { text: "Обучение RW" }],
     ],
     resize_keyboard: true,
     is_persistent: true,

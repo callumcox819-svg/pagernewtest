@@ -80,7 +80,7 @@ export type ChatState = {
     cachedAt?: string;
     byCountry?: Partial<
       Record<
-        "CM" | "EG" | "ZM",
+        "CM" | "EG" | "ZM" | "RW",
         {
           registrations: number;
           newAccountsWithDeposits: number;

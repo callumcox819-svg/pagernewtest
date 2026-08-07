@@ -5,7 +5,7 @@ import type { AppMetaStore } from "./app-meta-store.js";
 
 export const XPARTNERS_SESSION_META_KEY = "xpartners_session_cookie";
 
-export type XPartnersCountry = "CM" | "EG" | "ZM";
+export type XPartnersCountry = "CM" | "EG" | "ZM" | "RW";
 
 export type XPartnersQuickStats = {
   registrations: number;
@@ -27,6 +27,7 @@ const COUNTRY_API_NAME: Record<XPartnersCountry, string> = {
   CM: "Cameroon",
   EG: "Egypt",
   ZM: "Zambia",
+  RW: "Rwanda",
 };
 
 type GraphQlBatchItem = {
@@ -129,12 +130,14 @@ const SITE_HINTS: Record<XPartnersCountry, string[]> = {
   CM: ["camerun", "cameroon"],
   EG: ["egypt", "egypt0011", "eg011", "hapka"],
   ZM: ["zambia", "zam"],
+  RW: ["rwanda", "ruanda", "rw"],
 };
 
 const DEFAULT_SITE_URL: Record<XPartnersCountry, string> = {
   CM: "http://Camerun.com",
   EG: "http://Egypt.com",
   ZM: "http://Zambia.com",
+  RW: "http://Rwanda.com",
 };
 
 /** Same calendar day as 1xPartners UI (moment startOf/endOf day in partner TZ). */
@@ -254,7 +257,9 @@ function siteIdOverride(env: AppEnv, country: XPartnersCountry): number | undefi
       ? env.XPARTNERS_SITE_ID_CM
       : country === "EG"
         ? env.XPARTNERS_SITE_ID_EG
-        : env.XPARTNERS_SITE_ID_ZM;
+        : country === "RW"
+          ? env.XPARTNERS_SITE_ID_RW
+          : env.XPARTNERS_SITE_ID_ZM;
   return raw && raw > 0 ? raw : undefined;
 }
 
@@ -264,7 +269,9 @@ function siteUrlForCountry(env: AppEnv, country: XPartnersCountry): string {
       ? env.XPARTNERS_SITE_CM
       : country === "EG"
         ? env.XPARTNERS_SITE_EG
-        : env.XPARTNERS_SITE_ZM;
+        : country === "RW"
+          ? env.XPARTNERS_SITE_RW
+          : env.XPARTNERS_SITE_ZM;
   return (key || DEFAULT_SITE_URL[country]).trim();
 }
 

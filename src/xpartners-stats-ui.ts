@@ -30,6 +30,7 @@ const COUNTRY_LABEL: Record<XPartnersCountry, string> = {
   CM: "Cameroon",
   EG: "Egypt",
   ZM: "Zambia",
+  RW: "Rwanda",
 };
 
 const TELEGRAM_HTML_MAX = 4096;
@@ -122,7 +123,7 @@ export function formatAllCountriesStats(
     "<b>1xPartners · все страны · сегодня (USD)</b>",
     "",
   ];
-  for (const country of ["CM", "EG", "ZM"] as const) {
+  for (const country of ["CM", "EG", "ZM", "RW"] as const) {
     const stats = byCountry[country];
     if (!stats) {
       lines.push(`${COUNTRY_LABEL[country]}: <i>нет данных</i>`);

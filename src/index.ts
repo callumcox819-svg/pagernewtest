@@ -65,7 +65,7 @@ import {
   type StatsRefreshHours,
 } from "./xpartners-stats-ui.js";
 
-import { defaultCountryForChannelName, formatRwLearningSummary } from "./rw-learn.js";
+import { defaultCountryForChannelName, formatRwLearningSummary, isRwLearnChannelName } from "./rw-learn.js";
 
 const COUNTRY_FOLDER_HINTS: Record<"ZM" | "CM" | "EG" | "RW", string[]> = {
   ZM: ["замб", "zamb", "zambia"],
@@ -177,13 +177,21 @@ async function handleCallback(
     if (value === "all_on" || value === "all_off") {
       // handled below
     } else {
-      await telegram.answerCallbackQuery(callbackId);
-      if (value === "back" || value === "refresh") {
+      if (value === "back" || value === "refresh" || value === "rw_train") {
         const nextState =
-          value === "refresh" ? (await refreshPagerData(chatId, state)) ?? state : state;
+          value === "refresh"
+            ? (await refreshPagerData(chatId, state)) ?? state
+            : value === "rw_train"
+              ? (await enableRwTrainingChannels(chatId, state)) ?? state
+              : state;
+        await telegram.answerCallbackQuery(
+          callbackId,
+          value === "rw_train" ? "RW: 3 канала · обучение" : undefined,
+        );
         await showChannelsMenu(chatId, nextState, messageId);
         return;
       }
+      await telegram.answerCallbackQuery(callbackId);
     }
   }
 
@@ -476,7 +484,7 @@ async function handleCallback(
       await refreshAllPartnerStats(chatId, latest, messageId, callbackId);
       return;
     }
-    if (value === "country" && (extra === "CM" || extra === "EG" || extra === "ZM")) {
+    if (value === "country" && (extra === "CM" || extra === "EG" || extra === "ZM" || extra === "RW")) {
       await sendCountryStats(chatId, latest, extra, callbackId);
       return;
     }
@@ -485,7 +493,7 @@ async function handleCallback(
       await safeEditMenu(
         chatId,
         messageId,
-        "<b>1xPartners · ID игроков за сегодня</b>\n\nКак в отчёте «По игрокам»: период «сегодня» (USD). Выберите страну или «Все 3» — пришлю список ID в чат.",
+        "<b>1xPartners · ID игроков за сегодня</b>\n\nКак в отчёте «По игрокам»: период «сегодня» (USD). Выберите страну или «Все 4» — пришлю список ID в чат.",
         buildStatsPlayersKeyboard(),
         callbackId,
       );
@@ -493,7 +501,7 @@ async function handleCallback(
     }
     if (
       value === "players" &&
-      (extra === "CM" || extra === "EG" || extra === "ZM" || extra === "ALL")
+      (extra === "CM" || extra === "EG" || extra === "ZM" || extra === "RW" || extra === "ALL")
     ) {
       await sendPlayersIdsExport(chatId, extra === "ALL" ? "ALL" : extra, callbackId);
       return;
@@ -896,6 +904,36 @@ function collectEnabledChannelIds(state: ChatState): string[] {
     }
   }
   return [...enabled];
+}
+
+async function enableRwTrainingChannels(
+  chatId: number,
+  state: ChatState,
+): Promise<ChatState | undefined> {
+  const live = state.pagerAccount?.liveChannels ?? [];
+  const targets = live.filter((ch) => isRwLearnChannelName(ch.name));
+  if (!targets.length) {
+    return state;
+  }
+  const enabledIds = new Set(collectEnabledChannelIds(state));
+  const channels: Record<string, ChannelRuntimeState> = { ...(state.channels ?? {}) };
+  const banks = getLiveTemplateBanks(state);
+  for (const ch of targets) {
+    enabledIds.add(ch.id);
+    const bank = pickTemplateBankFromLiveBanks(banks, "RW");
+    channels[ch.id] = {
+      ...(channels[ch.id] ?? getChannelRuntime(state, ch.id, "RW")),
+      enabled: true,
+      country: "RW",
+      templateBank: bank?.name ?? channels[ch.id]?.templateBank,
+      templateBankId: bank?.id ?? channels[ch.id]?.templateBankId,
+    };
+  }
+  return stateStore.patch(chatId, {
+    enabledChannelIds: [...enabledIds],
+    channels,
+    operatorSettings: buildOperatorSettings(state, { enabledChannelIds: [...enabledIds] }),
+  });
 }
 
 async function setChannelEnabled(
@@ -1601,9 +1639,9 @@ async function sendPagerAccountMenu(chatId: number, state: ChatState) {
   );
 }
 
-type MenuAction = "main" | "pager_account" | "channels" | "folders" | "status" | "stats" | "reset";
+type MenuAction = "main" | "pager_account" | "channels" | "folders" | "status" | "stats" | "learn" | "reset";
 
-const XP_STATS_COUNTRIES: XPartnersCountry[] = ["CM", "EG", "ZM"];
+const XP_STATS_COUNTRIES: XPartnersCountry[] = ["CM", "EG", "ZM", "RW"];
 
 function normalizeMenuButtonText(text: string): string {
   return text
@@ -1632,6 +1670,9 @@ function resolveMenuTextAction(text?: string): MenuAction | undefined {
   }
   if (/^(статистика|statistics|stats|1xpartners)$/.test(normalized)) {
     return "stats";
+  }
+  if (/^(обучение rw|обучение|rw learn|learn)$/.test(normalized)) {
+    return "learn";
   }
   if (/^(сброс|reset)$/.test(normalized)) {
     return "reset";
@@ -1672,13 +1713,20 @@ async function dispatchMenuAction(
     await showStatsMenu(chatId, state, messageId);
     return;
   }
-  await stateStore.delete(chatId);
-  const nextState = await getOrCreateState(chatId);
-  await telegram.sendMessage(
-    chatId,
-    `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
-    buildMainMenuKeyboard(),
-  );
+  if (action === "learn") {
+    const latest = (await stateStore.get(chatId)) ?? state;
+    await telegram.sendMessage(chatId, formatRwLearningSummary(latest.rwLearning), buildMainMenuKeyboard());
+    return;
+  }
+  if (action === "reset") {
+    await stateStore.delete(chatId);
+    const nextState = await getOrCreateState(chatId);
+    await telegram.sendMessage(
+      chatId,
+      `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
+      buildMainMenuKeyboard(),
+    );
+  }
 }
 
 async function showStatsMenu(chatId: number, state: ChatState, messageId?: number) {
@@ -1701,7 +1749,7 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
     `Кэш: ${stale ? "устарел или пуст — нажмите «Обновить все»" : "актуален"} · ваш интервал <b>${hours} ч</b>`,
     `Аккаунт на сервере: keep-alive каждые ${env.XPARTNERS_KEEPALIVE_MINUTES} мин (сессия в БД, без постоянного копирования cookie).`,
     "",
-    "Cameroon · Egypt · Zambia — выберите страну.",
+    "Cameroon · Egypt · Zambia · Rwanda — выберите страну.",
   ];
   await safeEditMenu(chatId, messageId, lines.join("\n"), buildStatsCountryKeyboard());
 }
@@ -1853,7 +1901,7 @@ async function refreshAllPartnerStats(
     await telegram.answerCallbackQuery(callbackId, "1xPartners выключен");
     return;
   }
-  await telegram.answerCallbackQuery(callbackId, "Обновляю CM, EG, ZM…");
+  await telegram.answerCallbackQuery(callbackId, "Обновляю CM, EG, ZM, RW…");
   if (messageId) {
     await safeEditMenu(
       chatId,
