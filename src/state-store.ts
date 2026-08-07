@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import pg from "pg";
 import type { Stage } from "./config.js";
 import type { AppEnv } from "./env.js";
+import type { RwLearningState } from "./rw-learn.js";
 import type { StatusFolderState } from "./status-folders.js";
 
 export type PendingAction =
@@ -34,7 +35,7 @@ export type PagerAccountState = {
 
 export type ChannelRuntimeState = {
   enabled: boolean;
-  country: "ZM" | "CM" | "EG";
+  country: "ZM" | "CM" | "EG" | "RW";
   templateBank?: string;
   templateBankId?: string;
 };
@@ -71,6 +72,8 @@ export type ChatState = {
   };
   /** When true, worker skips auto-replies for this Telegram operator. */
   paused?: boolean;
+  /** Наблюдение за оператором (Руанда): без take/send, только лог событий. */
+  rwLearning?: RwLearningState;
   /** 1xPartners quick report cache + refresh interval for «Статистика». */
   partnerStats?: {
     refreshIntervalHours: 1 | 3 | 5;

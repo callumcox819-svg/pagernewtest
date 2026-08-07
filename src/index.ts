@@ -65,10 +65,13 @@ import {
   type StatsRefreshHours,
 } from "./xpartners-stats-ui.js";
 
-const COUNTRY_FOLDER_HINTS: Record<"ZM" | "CM" | "EG", string[]> = {
+import { defaultCountryForChannelName, formatRwLearningSummary } from "./rw-learn.js";
+
+const COUNTRY_FOLDER_HINTS: Record<"ZM" | "CM" | "EG" | "RW", string[]> = {
   ZM: ["замб", "zamb", "zambia"],
   EG: ["егип", "egypt", "hapka"],
   CM: ["камер", "cameroon"],
+  RW: ["ruand", "rwand", "rw"],
 };
 
 const env = loadEnv();
@@ -84,6 +87,7 @@ async function main() {
     { command: "start", description: "Открыть меню" },
     { command: "pause", description: "Пауза авто-ответов" },
     { command: "reset_pause", description: "Снять паузу" },
+    { command: "learn", description: "Лог обучения Руанда" },
   ]).catch((error) => {
     console.warn("Telegram setMyCommands failed:", formatError(error));
   });
@@ -258,7 +262,7 @@ async function handleCallback(
       return;
     }
 
-    const country = extra as "ZM" | "CM" | "EG";
+    const country = extra as "ZM" | "CM" | "EG" | "RW";
     const runtime = getChannelRuntime(state, channel.id, country);
     const bank = pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), country);
     await stateStore.patch(chatId, {
@@ -273,7 +277,10 @@ async function handleCallback(
       },
     });
     const nextState = await stateStore.get(chatId) ?? state;
-    await telegram.answerCallbackQuery(callbackId, `Страна: ${country}`);
+    await telegram.answerCallbackQuery(
+      callbackId,
+      country === "RW" ? "Руанда · только обучение" : `Страна: ${country}`,
+    );
     await showChannelsMenu(chatId, nextState, messageId);
     return;
   }
@@ -419,6 +426,12 @@ async function handleCallback(
       return;
     }
 
+    if (value === "learn") {
+      const latest = (await stateStore.get(chatId)) ?? state;
+      await telegram.sendMessage(chatId, formatRwLearningSummary(latest.rwLearning), buildMainMenuKeyboard());
+      return;
+    }
+
     if (value === "reset") {
       await stateStore.delete(chatId);
       const nextState = await getOrCreateState(chatId);
@@ -561,7 +574,16 @@ async function handleMessage(message: TelegramMessage) {
   }
 
   const effectiveChannel = getEffectiveChannel(state);
-  const playbook = getPlaybook(config, effectiveChannel.country);
+  const playbookCountry =
+    effectiveChannel.country === "RW" ? "CM" : effectiveChannel.country;
+  const playbook = getPlaybook(config, playbookCountry);
+  const channelForDecision = {
+    ...effectiveChannel,
+    country: (effectiveChannel.country === "RW" ? "CM" : effectiveChannel.country) as
+      | "ZM"
+      | "CM"
+      | "EG",
+  };
 
   if (message.photo?.length) {
     const largestPhoto = [...message.photo].sort(
@@ -581,7 +603,7 @@ async function handleMessage(message: TelegramMessage) {
       ocrLang: env.OCR_LANG,
     });
 
-    const decision = decideNextAction(config, effectiveChannel, {
+    const decision = decideNextAction(config, channelForDecision, {
       channelId: effectiveChannel.id,
       currentStage: state.currentStage,
       latestCustomerText: message.caption,
@@ -619,7 +641,7 @@ async function handleMessage(message: TelegramMessage) {
     return;
   }
 
-  const decision = decideNextAction(config, effectiveChannel, {
+  const decision = decideNextAction(config, channelForDecision, {
     channelId: effectiveChannel.id,
     currentStage: state.currentStage,
     latestCustomerText: message.text,
@@ -650,6 +672,12 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
 
   if (command === "/start") {
     await sendMainMenu(chatId, state);
+    return;
+  }
+
+  if (command === "/learn") {
+    const latest = (await stateStore.get(chatId)) ?? state;
+    await telegram.sendMessage(chatId, formatRwLearningSummary(latest.rwLearning), buildMainMenuKeyboard());
     return;
   }
 
@@ -985,7 +1013,7 @@ function getLiveTemplateBanks(state: ChatState) {
 function getChannelRuntime(
   state: ChatState,
   channelId: string,
-  fallbackCountry: "ZM" | "CM" | "EG",
+  fallbackCountry: "ZM" | "CM" | "EG" | "RW",
 ) {
   const existing = state.channels?.[channelId];
   if (existing) {
@@ -1003,7 +1031,7 @@ function getChannelRuntime(
 
 function pickTemplateBankFromLiveBanks(
   banks: Array<{ id: string; name: string }>,
-  country: "ZM" | "CM" | "EG",
+  country: "ZM" | "CM" | "EG" | "RW",
 ) {
   if (!banks.length) {
     return undefined;
@@ -1023,7 +1051,7 @@ function buildChannelRuntimeMap(
 ) {
   return Object.fromEntries(
     channels.map((channel) => {
-      const country = inferCountryFromName(channel.name);
+      const country = defaultCountryForChannelName(channel.name);
       const bank = pickTemplateBankFromLiveBanks(templateBanks, country);
       return [
         channel.id,
@@ -1269,20 +1297,13 @@ function getChannelEnabled(state: ChatState, channelId: string): boolean {
 function getChannelCountry(
   state: ChatState,
   channelId: string,
-  fallback: "ZM" | "CM" | "EG",
-): "ZM" | "CM" | "EG" {
+  fallback: "ZM" | "CM" | "EG" | "RW",
+): "ZM" | "CM" | "EG" | "RW" {
   return state.channels?.[channelId]?.country ?? fallback;
 }
 
-function inferCountryFromName(name: string): "ZM" | "CM" | "EG" {
-  const normalized = name.toLowerCase();
-  if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {
-    return "EG";
-  }
-  if (/moukoko|ndzi|ekambi|cameroon|cm|tchouameni/.test(normalized)) {
-    return "CM";
-  }
-  return "ZM";
+function inferCountryFromName(name: string): "ZM" | "CM" | "EG" | "RW" {
+  return defaultCountryForChannelName(name);
 }
 
 function buildPagerClient(cookieHeader: string, orgId?: string, orgSlug?: string, pagerUserId?: string) {

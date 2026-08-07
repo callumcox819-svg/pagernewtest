@@ -1051,23 +1051,25 @@ export class XPartnersClient {
     }
   }
 
-  private async collectPlayerIdsFromReports(
+  private static readonly NEW_PLAYER_REPORT_VARIANTS = [
+    { onlyNewPlayers: true, withoutDepositsOnly: true },
+    { onlyNewPlayers: true, withoutDepositsOnly: false },
+  ] as const;
+
+  private async addPlayerIdsFromReports(
     idSet: Set<string>,
     scope: { siteId: number },
     dayKey: string,
     label: string,
+    options: {
+      variants: ReadonlyArray<{ onlyNewPlayers: boolean; withoutDepositsOnly: boolean }>;
+      periods: Array<{ startPeriod: string; endPeriod: string }>;
+      mode: "all" | "registeredToday";
+    },
   ): Promise<void> {
-    // Сначала «без депозита», потом «с депозитом» — вместе = countOfRegistrations, не FTD.
-    const variants = [
-      { onlyNewPlayers: true, withoutDepositsOnly: true },
-      { onlyNewPlayers: true, withoutDepositsOnly: false },
-      { onlyNewPlayers: false, withoutDepositsOnly: false },
-      { onlyNewPlayers: false, withoutDepositsOnly: true },
-    ] as const;
-
     let first = true;
-    for (const period of todayReportPeriodVariants()) {
-      for (const variant of variants) {
+    for (const period of options.periods) {
+      for (const variant of options.variants) {
         if (!first) {
           await new Promise((resolve) => setTimeout(resolve, 400));
         }
@@ -1077,11 +1079,10 @@ export class XPartnersClient {
             ...variant,
             ...period,
           });
-          // Период «сегодня» уже в filter; колонка regDate часто не совпадает с dayKey (EG/ZM).
           console.log(
-            `1xPartners ${label}: playersReport onlyNew=${variant.onlyNewPlayers} noDep=${variant.withoutDepositsOnly} end=${period.endPeriod} rows=${rows.length}`,
+            `1xPartners ${label}: playersReport onlyNew=${variant.onlyNewPlayers} noDep=${variant.withoutDepositsOnly} end=${period.endPeriod} mode=${options.mode} rows=${rows.length}`,
           );
-          this.ingestPlayerReportRows(idSet, rows, dayKey, "all");
+          this.ingestPlayerReportRows(idSet, rows, dayKey, options.mode);
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           console.warn(
@@ -1098,32 +1099,56 @@ export class XPartnersClient {
     const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
     const quick = await this.fetchQuickStatsToday(country);
     const idSet = new Set<string>();
+    const quickPeriod = quickReportTodayPeriod();
+    const newVariants = XPartnersClient.NEW_PLAYER_REPORT_VARIANTS;
 
     for (const site of sites) {
-      await this.collectPlayerIdsFromReports(idSet, { siteId: site.id }, dayKey, `${country}:site${site.id}`);
+      await this.addPlayerIdsFromReports(idSet, { siteId: site.id }, dayKey, `${country}:site${site.id}`, {
+        variants: newVariants,
+        periods: [quickPeriod],
+        mode: "all",
+      });
     }
 
     if (idSet.size < quick.registrations) {
       for (const site of sites) {
-        for (const period of todayReportPeriodVariants()) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          try {
-            const rows = await this.fetchPlayersReportAllRows(
-              { siteId: site.id },
-              { onlyNewPlayers: false, withoutDepositsOnly: false, ...period },
-            );
-            this.ingestPlayerReportRows(idSet, rows, dayKey, "all");
-          } catch (error) {
-            console.warn(
-              `1xPartners ${country}: retry open report site=${site.id}`,
-              error instanceof Error ? error.message : error,
-            );
-          }
-        }
+        await this.addPlayerIdsFromReports(idSet, { siteId: site.id }, dayKey, `${country}:site${site.id}:fallback`, {
+          variants: newVariants,
+          periods: todayReportPeriodVariants(),
+          mode: "all",
+        });
+        await this.addPlayerIdsFromReports(idSet, { siteId: site.id }, dayKey, `${country}:site${site.id}:fallback`, {
+          variants: [{ onlyNewPlayers: false, withoutDepositsOnly: false }],
+          periods: todayReportPeriodVariants(),
+          mode: "registeredToday",
+        });
       }
     }
 
-    const playerIds = [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    let playerIds = [...idSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    if (playerIds.length > quick.registrations && quick.registrations > 0) {
+      const byRegDate = new Set<string>();
+      for (const site of sites) {
+        await this.addPlayerIdsFromReports(
+          byRegDate,
+          { siteId: site.id },
+          dayKey,
+          `${country}:site${site.id}:trim`,
+          {
+            variants: newVariants,
+            periods: todayReportPeriodVariants(),
+            mode: "registeredToday",
+          },
+        );
+      }
+      if (byRegDate.size > 0 && byRegDate.size <= playerIds.length) {
+        console.log(
+          `1xPartners ${country}: trim player IDs ${playerIds.length} → ${byRegDate.size} (registrationDate=${dayKey}, сводка рег=${quick.registrations})`,
+        );
+        playerIds = [...byRegDate].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      }
+    }
 
     if (
       quick.registrations > 0 &&

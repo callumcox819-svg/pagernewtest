@@ -20,7 +20,15 @@ import {
 import { extractCmClientLoginId17 } from "./cm-proof.js";
 import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import { isLinkAccessProblemMessage, isCustomerClarificationMessage } from "./customer-clarity.js";
-import { isInProgressStatusConversation, isConversationInOperatorEnabledFolders } from "./status-folders.js";
+import {
+  defaultCountryForChannelName,
+  observeRwConversation,
+  type WorkerCountry,
+} from "./rw-learn.js";
+import {
+  isInProgressStatusConversation,
+  isConversationInOperatorEnabledFolders,
+} from "./status-folders.js";
 import {
   buildSupportSnapshot,
   filterScriptKeysForSupportAgent,
@@ -389,7 +397,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
     const country = runtime?.runtime.country;
     const folderIds =
-      country === "EG" || country === "CM" || country === "ZM"
+      country === "EG" || country === "CM" || country === "ZM" || country === "RW"
         ? resolveChannelEnabledFolderIds(
             enabledFolderIds,
             country,
@@ -402,6 +410,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     }
     return conversationAllowedInFolders(conv, folderIds);
   });
+  const rwWatchIds = new Set(Object.keys(freshState.rwLearning?.watch ?? {}));
   const workQueue = await buildWorkQueue(
     client,
     folderScopedConversations,
@@ -410,12 +419,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     !enabledFolderIds || enabledFolderIds.size === 0 ? null : enabledFolderIds,
     hasCmChannel,
     hasEgChannel,
+    rwWatchIds,
   );
   const accountLimit = enabledChannels.some(
     (item) =>
       item.runtime.country === "EG" ||
       item.runtime.country === "CM" ||
-      item.runtime.country === "ZM",
+      item.runtime.country === "ZM" ||
+      item.runtime.country === "RW",
   )
     ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_UNREAD + INBOX_TOP_CM_FOLLOWUP)
     : 150;
@@ -635,7 +646,7 @@ function inboxConversationEligible(
 
 function resolveChannelEnabledFolderIds(
   enabledFolderIds: Set<string> | null,
-  country: "ZM" | "CM" | "EG",
+  country: WorkerCountry,
   hasCmChannel: boolean,
   hasEgChannel: boolean,
 ): Set<string> | null {
@@ -657,10 +668,38 @@ async function buildWorkQueue(
   enabledFolderIds: Set<string> | null,
   hasCmChannel: boolean,
   hasEgChannel: boolean,
+  rwWatchIds: Set<string>,
 ): Promise<PagerConversation[]> {
   const selected = new Map<string, PagerConversation>();
 
   for (const channel of enabledChannels) {
+    if (channel.runtime.country === "RW") {
+      const channelFolderIds = resolveChannelEnabledFolderIds(
+        enabledFolderIds,
+        "RW",
+        hasCmChannel,
+        hasEgChannel,
+      );
+      for (let page = 1; page <= INBOX_PAGES_DEEP; page += 1) {
+        const inboxPage = await client.listConversations({
+          channelId: channel.channelId,
+          page,
+          pageSize: 100,
+        });
+        if (!inboxPage.length) {
+          break;
+        }
+        for (const conv of inboxPage) {
+          const inFolder =
+            !channelFolderIds?.size || conversationAllowedInFolders(conv, channelFolderIds);
+          const watched = rwWatchIds.has(conv.id);
+          if (inFolder || watched) {
+            selected.set(conv.id, conv);
+          }
+        }
+      }
+      continue;
+    }
     if (
       channel.runtime.country !== "CM" &&
       channel.runtime.country !== "EG" &&
@@ -895,10 +934,12 @@ async function processConversation(
     hasCmChannel,
     hasEgChannel,
   );
+  const rwWatchIds = new Set(Object.keys(state.rwLearning?.watch ?? {}));
   if (
     channelFolderIds &&
     channelFolderIds.size > 0 &&
-    !conversationAllowedInFolders(conv, channelFolderIds)
+    !conversationAllowedInFolders(conv, channelFolderIds) &&
+    !(runtime.runtime.country === "RW" && rwWatchIds.has(conv.id))
   ) {
     console.log(
       `Pager worker: skip ${conv.id.slice(0, 8)} — outside enabled folders (status=${conv.status?.name || "none"})`,
@@ -907,6 +948,9 @@ async function processConversation(
   }
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
+  if (runtime.runtime.country === "RW") {
+    return processRwObserveConversation(deps, state, client, conv, runtime);
+  }
   if (channel.country === "CM") {
     return processCmConversation(deps, state, client, conv, runtime, channel);
   }
@@ -917,6 +961,34 @@ async function processConversation(
     return processEgConversation(deps, state, client, conv, runtime, channel);
   }
   return processGenericConversation(deps, state, client, conv, runtime, channel);
+}
+
+async function processRwObserveConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+): Promise<boolean> {
+  const convId = conv.id;
+  const messages = await client.listMessages(convId, 1, 60);
+  if (!messages.length) {
+    return false;
+  }
+  const operatorUserId = await client.probeOperatorUserId();
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const { next, newEvents } = observeRwConversation({
+    conv,
+    channelId: runtime.channelId,
+    channelName: runtime.channelName,
+    messages,
+    operatorUserId,
+    learning: currentState.rwLearning,
+  });
+  if (newEvents.length || next.watch[convId]) {
+    await deps.stateStore.patch(state.chatId, { rwLearning: next });
+  }
+  return false;
 }
 
 async function processCmConversation(
@@ -2889,29 +2961,23 @@ async function ensureCustomerMessageEligible(
   return false;
 }
 
-function inferCountryFromChannelName(name: string): "ZM" | "CM" | "EG" {
-  const normalized = name.toLowerCase();
-  if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {
-    return "EG";
-  }
-  if (/moukoko|ndzi|ekambi|cameroon|cm|tchouameni/.test(normalized)) {
-    return "CM";
-  }
-  return "ZM";
+function inferCountryFromChannelName(name: string): WorkerCountry {
+  return defaultCountryForChannelName(name);
 }
 
 function pickLiveTemplateBank(
   state: ChatState,
-  country: "ZM" | "CM" | "EG",
+  country: WorkerCountry,
 ): { id: string; name: string } | undefined {
   const banks = state.pagerAccount?.liveTemplateBanks ?? [];
   if (!banks.length) {
     return undefined;
   }
-  const hints: Record<"ZM" | "CM" | "EG", string[]> = {
+  const hints: Record<WorkerCountry, string[]> = {
     ZM: ["замб", "zamb", "zambia"],
     EG: ["егип", "egypt", "hapka"],
     CM: ["камер", "cameroon", "cameroun"],
+    RW: ["ruand", "rwand", "rw"],
   };
   const matched = banks.find((bank) => {
     const normalized = bank.name.toLowerCase();
@@ -2974,12 +3040,13 @@ function buildRuntimeChannelConfig(
   const mapped = getChannelConfig(config, runtime.channelId);
   const country = runtime.runtime.country;
   const templateBank = resolveYamlTemplateBankName(config, country, runtime.channelId);
+  const yamlCountry = (country === "RW" ? "CM" : country) as CountryCode;
 
   return {
     id: runtime.channelId,
     name: runtime.channelName,
     enabled: true,
-    country,
+    country: yamlCountry,
     templateBank,
     statusMap: mapped?.statusMap ?? statusMapForCountry(config, country),
   };

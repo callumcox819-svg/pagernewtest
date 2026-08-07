@@ -367,6 +367,7 @@ const COUNTRY_LABELS: Record<string, string> = {
   ZM: "ZM",
   EG: "EG",
   CM: "CM",
+  RW: "RW",
 };
 
 function truncateLabel(value: string, max = 14): string {
@@ -428,8 +429,12 @@ export function buildCountryKeyboard(channelIndex: number): ReplyMarkup {
       ],
       [
         inlineBtn("Камерун", `country_pick:${channelIndex}:CM`, { emojiId: PREMIUM_EMOJI.flagCm }),
-        inlineBtn("Назад", "channels:back", { emojiId: PREMIUM_EMOJI.back }),
+        inlineBtn("Руанда · обуч.", `country_pick:${channelIndex}:RW`, {
+          emojiId: PREMIUM_EMOJI.globe,
+          style: "primary",
+        }),
       ],
+      [inlineBtn("Назад", "channels:back", { emojiId: PREMIUM_EMOJI.back })],
     ],
   };
 }
@@ -534,6 +539,12 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
           emojiId: PREMIUM_EMOJI.chart,
           style: "primary",
         }),
+        inlineBtn("Руанда · лог", "menu:learn", {
+          emojiId: PREMIUM_EMOJI.email,
+          style: "primary",
+        }),
+      ],
+      [
         inlineBtn("Сброс", "menu:reset", {
           emojiId: PREMIUM_EMOJI.reset,
           style: "danger",
