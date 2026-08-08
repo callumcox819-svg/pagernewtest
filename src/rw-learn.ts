@@ -1,4 +1,11 @@
 import type { PagerConversation, PagerMessage } from "./pager-client.js";
+import { isCustomerMessage as pagerIsCustomerMessage } from "./pager-client.js";
+import { isOperatorOutgoingMessage } from "./conversation-reply.js";
+import {
+  mergeRwScriptDraftsFromOperatorText,
+  type RwScriptDraft,
+  type RwScriptDrafts,
+} from "./rw-script-engine.js";
 import {
   isInProgressStatusConversation,
   isNoStatusConversation,
@@ -45,6 +52,8 @@ export type RwLearningWatchEntry = {
   updatedAt: string;
 };
 
+export type { RwScriptDraft, RwScriptDrafts } from "./rw-script-engine.js";
+
 export type RwLearningState = {
   watch: Record<string, RwLearningWatchEntry>;
   events: RwLearningEvent[];
@@ -53,6 +62,8 @@ export type RwLearningState = {
     string,
     { at: string; channelName: string; turns: number }
   >;
+  /** Черновики шаблонов, собранные из операторских сообщений. */
+  scriptDrafts?: RwScriptDrafts;
 };
 
 const MAX_EVENTS = 800;
@@ -91,32 +102,37 @@ function truncateText(text: string, max = 120): string {
   return `${t.slice(0, max - 1)}…`;
 }
 
-function isOperatorMessage(
+function isRwCustomerMessage(
   message: PagerMessage,
   conv: PagerConversation,
   operatorUserId?: string,
 ): boolean {
-  const direction = (message.messageDirection || "").toLowerCase();
-  if (direction.includes("out") || direction.includes("operator")) {
-    return true;
-  }
-  const author = (message.authorId || "").trim();
-  if (operatorUserId && author && author === operatorUserId) {
-    return true;
-  }
-  if (author && !author.startsWith("user_")) {
-    return true;
-  }
-  return direction.includes("incoming") === false && Boolean(message.text?.trim());
+  return pagerIsCustomerMessage(message, conv, operatorUserId);
 }
 
-function isCustomerMessage(message: PagerMessage, conv: PagerConversation): boolean {
-  const direction = (message.messageDirection || "").toLowerCase();
-  if (direction.includes("in") || direction.includes("customer")) {
-    return true;
+function isRwOperatorMessage(
+  message: PagerMessage,
+  conv: PagerConversation,
+  operatorUserId?: string,
+): boolean {
+  return isOperatorOutgoingMessage(message, conv, operatorUserId, "CM");
+}
+
+function applyOperatorDraftFromMessage(
+  drafts: RwScriptDrafts | undefined,
+  message: PagerMessage,
+  convId: string,
+  channelName: string,
+): RwScriptDrafts {
+  const text = (message.text || "").trim();
+  if (!text) {
+    return drafts ?? {};
   }
-  const author = (message.authorId || "").trim();
-  return author.startsWith("user_") || direction.includes("incoming");
+  return mergeRwScriptDraftsFromOperatorText(drafts, {
+    text,
+    source: `${channelName} · ${convId.slice(0, 8)}`,
+    at: message.createdAt ?? new Date().toISOString(),
+  });
 }
 
 export function mergeRwLearningState(
@@ -125,6 +141,7 @@ export function mergeRwLearningState(
     watch?: Record<string, RwLearningWatchEntry>;
     events?: RwLearningEvent[];
     harvestedCompleted?: Record<string, { at: string; channelName: string; turns: number }>;
+    scriptDrafts?: RwScriptDrafts;
   },
 ): RwLearningState {
   const watch = { ...(current?.watch ?? {}), ...(patch.watch ?? {}) };
@@ -133,7 +150,8 @@ export function mergeRwLearningState(
     ...(current?.harvestedCompleted ?? {}),
     ...(patch.harvestedCompleted ?? {}),
   };
-  return { watch, events, harvestedCompleted };
+  const scriptDrafts = patch.scriptDrafts ?? current?.scriptDrafts;
+  return { watch, events, harvestedCompleted, scriptDrafts };
 }
 
 export function harvestRwCompletedConversation(input: {
@@ -170,6 +188,7 @@ export function harvestRwCompletedConversation(input: {
   ];
 
   let turns = 0;
+  let scriptDrafts = learning?.scriptDrafts;
   for (const message of sorted) {
     if (turns >= MAX_TRANSCRIPT_TURNS) {
       break;
@@ -178,7 +197,7 @@ export function harvestRwCompletedConversation(input: {
     if (!text) {
       continue;
     }
-    if (isCustomerMessage(message, conv)) {
+    if (isRwCustomerMessage(message, conv, operatorUserId)) {
       newEvents.push({
         at: message.createdAt ?? now,
         channelId,
@@ -189,7 +208,8 @@ export function harvestRwCompletedConversation(input: {
         textPreview: truncateText(text, 240),
       });
       turns += 1;
-    } else if (isOperatorMessage(message, conv, operatorUserId)) {
+    } else if (isRwOperatorMessage(message, conv, operatorUserId)) {
+      scriptDrafts = applyOperatorDraftFromMessage(scriptDrafts, message, convId, channelName);
       newEvents.push({
         at: message.createdAt ?? now,
         channelId,
@@ -208,6 +228,7 @@ export function harvestRwCompletedConversation(input: {
     harvestedCompleted: {
       [convId]: { at: now, channelName, turns },
     },
+    scriptDrafts,
   });
 
   for (const event of newEvents) {
@@ -273,10 +294,11 @@ export function observeRwConversation(input: {
 
   let latestCustomer: PagerMessage | undefined;
   let latestOperator: PagerMessage | undefined;
+  let scriptDrafts = learning?.scriptDrafts;
   for (const message of sorted) {
-    if (isCustomerMessage(message, conv)) {
+    if (isRwCustomerMessage(message, conv, operatorUserId)) {
       latestCustomer = message;
-    } else if (isOperatorMessage(message, conv, operatorUserId)) {
+    } else if (isRwOperatorMessage(message, conv, operatorUserId)) {
       latestOperator = message;
     }
   }
@@ -307,6 +329,10 @@ export function observeRwConversation(input: {
       latestOperator.id !== prev?.lastOperatorMessageId &&
       (prev != null || sawNewLead);
     if (isNewOperatorMsg) {
+      const opText = (latestOperator.text || "").trim();
+      if (opText) {
+        scriptDrafts = applyOperatorDraftFromMessage(scriptDrafts, latestOperator, convId, channelName);
+      }
       newEvents.push({
         at: now,
         channelId,
@@ -338,6 +364,7 @@ export function observeRwConversation(input: {
   const next = mergeRwLearningState(learning, {
     watch: watchEntry ? { [convId]: watchEntry } : undefined,
     events: newEvents,
+    scriptDrafts,
   });
 
   for (const event of newEvents) {
@@ -349,51 +376,24 @@ export function observeRwConversation(input: {
   return { next, newEvents };
 }
 
-export function formatRwLearningSummary(learning?: RwLearningState): string {
-  const harvested = learning?.harvestedCompleted
-    ? Object.keys(learning.harvestedCompleted).length
-    : 0;
-  if (!learning?.events.length) {
-    return [
-      "Руанда (обучение): событий пока нет.",
-      "",
-      "Живое: «Без статусу» → оператор → «В процессе».",
-      "Эталоны: папка «Завершено» на 3 RW-каналах (полная переписка, без авто-ответов).",
-      "Нужно: каналы RW включены; «Без статусу» в боте — для новых лидов.",
-    ].join("\n");
-  }
-  const recent = learning.events.slice(-15).reverse();
-  const lines = recent.map((event) => {
-    const head = `${event.at.slice(11, 19)} ${event.channelName} ${event.conversationId.slice(0, 8)}`;
-    if (event.kind === "status_changed") {
-      const toProgress = /процес|process/i.test(event.statusName ?? "");
-      return `${head}: ${event.previousStatusName} → ${event.statusName}${toProgress ? " ✓" : ""}`;
-    }
-    if (event.kind === "no_status_lead") {
-      return `${head}: лид «Без статусу»`;
-    }
-    if (event.kind === "completed_harvest") {
-      return `${head}: 📁 Завершено — ${event.textPreview ?? "переписка"}`;
-    }
-    if (event.kind === "transcript_operator") {
-      return `${head}: оператор — ${event.textPreview ?? ""}`;
-    }
-    if (event.kind === "transcript_customer") {
-      return `${head}: клиент — ${event.textPreview ?? ""}`;
-    }
-    if (event.kind === "operator_message") {
-      return `${head}: оператор [${event.statusName ?? "?"}] — ${event.textPreview ?? ""}`;
-    }
-    if (event.kind === "customer_message") {
-      return `${head}: клиент — ${event.textPreview ?? ""}`;
-    }
-    return `${head}: ${event.kind}`;
-  });
-  const watching = Object.keys(learning.watch).length;
+export function formatRwAutoFunnelHelp(): string {
   return [
-    `Руанда (обучение) · watchlist ${watching} · эталонов «Завершено»: ${harvested}`,
-    "Живое: Без статусу → оператор → В процессе · Эталон: полный диалог в «Завершено»",
+    "Руанда (RW): авто-воронка включена.",
+    "Скан «Завершено» и режим обучения отключены.",
     "",
-    lines.join("\n"),
+    "Сценарий:",
+    "1) intro после интереса клиента",
+    "2) How it works + таблица RWF (два сообщения)",
+    "3) регистрация RND555 + https://tinyurl.com/rund555",
+    "4) статус «В процессе реєстрації» после ссылки",
+    "",
+    "Каналы: Remorseful Respectful, Ekambi Aboubakar, Patrick Uwimana.",
+    "В боте включите «Без статусу» для новых лидов.",
+    "",
+    "Пауза без деплоя: RW_FUNNEL_ENABLED=false на Railway.",
   ].join("\n");
+}
+
+export function formatRwLearningSummary(_learning?: RwLearningState): string {
+  return formatRwAutoFunnelHelp();
 }

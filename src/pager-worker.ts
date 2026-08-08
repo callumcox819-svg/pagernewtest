@@ -22,8 +22,6 @@ import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import { isLinkAccessProblemMessage, isCustomerClarificationMessage } from "./customer-clarity.js";
 import {
   defaultCountryForChannelName,
-  harvestRwCompletedConversation,
-  observeRwConversation,
   type WorkerCountry,
 } from "./rw-learn.js";
 import {
@@ -94,6 +92,21 @@ import {
   depositSentInHistory as egDepositSentInHistory,
 } from "./eg-script-engine.js";
 import {
+  classifyRwMessage,
+  collectRwOutgoingTexts,
+  hasMinimumRwScriptDrafts,
+  limitRwScriptsForCustomerTurn,
+  resolveRwFunnelScripts,
+  rwActiveScriptDrafts,
+  rwAllowsMultiSend,
+  rwFunnelStepFromScriptGaps,
+  rwRegLinkSentInHistory,
+  rwScriptSentInHistory,
+  rwScriptText,
+  rwStatusMoveAfterSend,
+  type RwScriptKey,
+} from "./rw-script-engine.js";
+import {
   classifyZmMessage,
   collectOutgoingTexts as collectZmOutgoingTexts,
   explainScriptsSentInHistory as zmExplainScriptsSentInHistory,
@@ -156,12 +169,9 @@ import {
   ALL_INBOX_FOLDER_ID,
   NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
-  expandRwLearnFolderIds,
-  findCompletedFolderIds,
   getEnabledFolderIds,
   hasEnabledStatusFolders,
   isNoStatusConversation,
-  isRwCompletedConversation,
   isZmInProgressRegistrationStatusName,
   isZmRegistrationCompleteStatusName,
 } from "./status-folders.js";
@@ -186,8 +196,6 @@ const INBOX_TOP_EG = 250;
 const INBOX_PAGES_EG = 25;
 /** Deep enough for large inboxes (2500+ chats) — do not stop until unread cap or end. */
 const INBOX_PAGES_DEEP = 25;
-const RW_INBOX_PAGES_LIVE = 3;
-const RW_COMPLETED_PAGES = 10;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -416,7 +424,6 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     }
     return conversationAllowedInFolders(conv, folderIds);
   });
-  const rwWatchIds = new Set(Object.keys(freshState.rwLearning?.watch ?? {}));
   const workQueue = await buildWorkQueue(
     client,
     folderScopedConversations,
@@ -425,7 +432,6 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     !enabledFolderIds || enabledFolderIds.size === 0 ? null : enabledFolderIds,
     hasCmChannel,
     hasEgChannel,
-    rwWatchIds,
     freshState,
   );
   const accountLimit = enabledChannels.some(
@@ -675,84 +681,23 @@ async function buildWorkQueue(
   enabledFolderIds: Set<string> | null,
   hasCmChannel: boolean,
   hasEgChannel: boolean,
-  rwWatchIds: Set<string>,
-  chatState: ChatState,
+  _chatState: ChatState,
 ): Promise<PagerConversation[]> {
   const selected = new Map<string, PagerConversation>();
-  const statusFolders =
-    chatState.operatorSettings?.statusFolders ?? chatState.statusFolders ?? [];
-  const completedFolderIds = findCompletedFolderIds(statusFolders);
-  const harvested = chatState.rwLearning?.harvestedCompleted ?? {};
 
   for (const channel of enabledChannels) {
-    if (channel.runtime.country === "RW") {
-      for (const statusId of completedFolderIds) {
-        let completedAdded = 0;
-        for (let page = 1; page <= RW_COMPLETED_PAGES; page += 1) {
-          if (completedAdded >= 5) {
-            break;
-          }
-          const inboxPage = await client.listConversations({
-            channelId: channel.channelId,
-            statusId,
-            page,
-            pageSize: 50,
-          });
-          if (!inboxPage.length) {
-            break;
-          }
-          for (const conv of inboxPage) {
-            if (harvested[conv.id]) {
-              continue;
-            }
-            selected.set(conv.id, conv);
-            completedAdded += 1;
-            if (completedAdded >= 5) {
-              break;
-            }
-          }
-        }
-      }
-
-      const channelFolderIds = expandRwLearnFolderIds(
-        resolveChannelEnabledFolderIds(
-          enabledFolderIds,
-          "RW",
-          hasCmChannel,
-          hasEgChannel,
-        ),
-        statusFolders,
-      );
-      for (let page = 1; page <= RW_INBOX_PAGES_LIVE; page += 1) {
-        const inboxPage = await client.listConversations({
-          channelId: channel.channelId,
-          page,
-          pageSize: 100,
-        });
-        if (!inboxPage.length) {
-          break;
-        }
-        for (const conv of inboxPage) {
-          const inFolder =
-            !channelFolderIds?.size || conversationAllowedInFolders(conv, channelFolderIds);
-          const watched = rwWatchIds.has(conv.id);
-          if (inFolder || watched) {
-            selected.set(conv.id, conv);
-          }
-        }
-      }
-      continue;
-    }
     if (
       channel.runtime.country !== "CM" &&
       channel.runtime.country !== "EG" &&
-      channel.runtime.country !== "ZM"
+      channel.runtime.country !== "ZM" &&
+      channel.runtime.country !== "RW"
     ) {
       continue;
     }
     const isEg = channel.runtime.country === "EG";
     const isCm = channel.runtime.country === "CM";
     const isZm = channel.runtime.country === "ZM";
+    const isRw = channel.runtime.country === "RW";
     const channelFolderIds = resolveChannelEnabledFolderIds(
       enabledFolderIds,
       channel.runtime.country,
@@ -796,8 +741,11 @@ async function buildWorkQueue(
         if (isZm && !shouldQueueZmConversation(conv)) {
           continue;
         }
+        if (isRw && !shouldQueueZmConversation(conv)) {
+          continue;
+        }
         if (
-          (isCm || isZm || isEg) &&
+          (isCm || isZm || isEg || isRw) &&
           isOutgoingDirection(conv.lastMessageDirection) &&
           !hasUnreadMarkers(conv)
         ) {
@@ -814,7 +762,9 @@ async function buildWorkQueue(
             ? shouldQueueCmConversation(conv)
             : isZm
               ? shouldQueueZmConversation(conv)
-              : hasUnreadMarkers(conv) ||
+              : isRw
+                ? shouldQueueZmConversation(conv)
+                : hasUnreadMarkers(conv) ||
                 isIncomingDirection(conv.lastMessageDirection) ||
                 isNewLeadConversation(conv);
 
@@ -828,7 +778,7 @@ async function buildWorkQueue(
           continue;
         }
 
-        if ((isCm || isZm) && followUpAdded < followUpCap) {
+        if ((isCm || isZm || isRw) && followUpAdded < followUpCap) {
           const lastAt = resolveLastMessageAt(conv);
           if (
             !isInProgressStatusConversation(conv) ||
@@ -971,29 +921,16 @@ async function processConversation(
   hasCmChannel: boolean,
   hasEgChannel: boolean,
 ): Promise<boolean> {
-  const channelFolderIds =
-    runtime.runtime.country === "RW"
-      ? expandRwLearnFolderIds(
-          resolveChannelEnabledFolderIds(
-            enabledFolderIds,
-            runtime.runtime.country,
-            hasCmChannel,
-            hasEgChannel,
-          ),
-          state.operatorSettings?.statusFolders ?? state.statusFolders,
-        )
-      : resolveChannelEnabledFolderIds(
-          enabledFolderIds,
-          runtime.runtime.country,
-          hasCmChannel,
-          hasEgChannel,
-        );
-  const rwWatchIds = new Set(Object.keys(state.rwLearning?.watch ?? {}));
+  const channelFolderIds = resolveChannelEnabledFolderIds(
+    enabledFolderIds,
+    runtime.runtime.country,
+    hasCmChannel,
+    hasEgChannel,
+  );
   if (
     channelFolderIds &&
     channelFolderIds.size > 0 &&
-    !conversationAllowedInFolders(conv, channelFolderIds) &&
-    !(runtime.runtime.country === "RW" && rwWatchIds.has(conv.id))
+    !conversationAllowedInFolders(conv, channelFolderIds)
   ) {
     console.log(
       `Pager worker: skip ${conv.id.slice(0, 8)} — outside enabled folders (status=${conv.status?.name || "none"})`,
@@ -1003,7 +940,7 @@ async function processConversation(
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
   if (runtime.runtime.country === "RW") {
-    return processRwObserveConversation(deps, state, client, conv, runtime);
+    return processRwConversation(deps, state, client, conv, runtime);
   }
   if (channel.country === "CM") {
     return processCmConversation(deps, state, client, conv, runtime, channel);
@@ -1017,37 +954,36 @@ async function processConversation(
   return processGenericConversation(deps, state, client, conv, runtime, channel);
 }
 
-/** RW: только лог обучения — без takeConversation и без send. */
-async function processRwObserveConversation(
+/** RW: авто-воронка (встроенные скрипты, как ZM). */
+async function processRwConversation(
   deps: WorkerDeps,
   state: ChatState,
   client: PagerClient,
   conv: PagerConversation,
   runtime: EnabledChannel,
 ): Promise<boolean> {
-  const convId = conv.id;
+  if (!deps.env.RW_FUNNEL_ENABLED || !hasMinimumRwScriptDrafts()) {
+    return false;
+  }
+  if (!isNoStatusConversation(conv) && !isInProgressStatusConversation(conv)) {
+    return false;
+  }
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
-  const operatorUserId = await client.probeOperatorUserId();
+  const drafts = rwActiveScriptDrafts(currentState.rwLearning?.scriptDrafts);
+  return processRwFunnelConversation(deps, currentState, client, conv, runtime, drafts);
+}
 
-  if (isRwCompletedConversation(conv)) {
-    if (currentState.rwLearning?.harvestedCompleted?.[convId]) {
-      return false;
-    }
-    const messages = await client.listMessages(convId, 1, 120);
-    if (!messages.length) {
-      return false;
-    }
-    const { next, newEvents } = harvestRwCompletedConversation({
-      conv,
-      channelId: runtime.channelId,
-      channelName: runtime.channelName,
-      messages,
-      operatorUserId,
-      learning: currentState.rwLearning,
-    });
-    if (newEvents.length) {
-      await deps.stateStore.patch(state.chatId, { rwLearning: next });
-    }
+async function processRwFunnelConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  drafts: ReturnType<typeof rwActiveScriptDrafts>,
+): Promise<boolean> {
+  const convId = conv.id;
+  const convState = getConversationState(state, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
     return false;
   }
 
@@ -1055,18 +991,148 @@ async function processRwObserveConversation(
   if (!messages.length) {
     return false;
   }
-  const { next, newEvents } = observeRwConversation({
-    conv,
-    channelId: runtime.channelId,
-    channelName: runtime.channelName,
-    messages,
-    operatorUserId,
-    learning: currentState.rwLearning,
-  });
-  if (newEvents.length || next.watch[convId]) {
-    await deps.stateStore.patch(state.chatId, { rwLearning: next });
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const lastIncoming = findLatestIncomingMessage(sorted, conv, undefined, "CM");
+  if (!lastIncoming) {
+    return false;
   }
-  return false;
+
+  const operatorUserId = await client.probeOperatorUserId();
+  const rwNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !rwScriptSentInHistory(collectRwOutgoingTexts(messages), "01_intro", drafts) &&
+    Boolean((lastIncoming.text || "").trim());
+
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId,
+      country: "CM",
+    })
+  ) {
+    return false;
+  }
+
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      client,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      {
+        bypass: rwNewLeadBypass,
+        operatorUserId,
+        countryLabel: "RW",
+        country: "CM",
+      },
+    ))
+  ) {
+    return false;
+  }
+
+  const outgoingTexts = collectRwOutgoingTexts(messages);
+  const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const gapStep = rwFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0, drafts);
+  const effectiveStep = Math.max(gapStep, convState.funnelStep ?? 0);
+  const intent = classifyRwMessage(latestCustomerText, effectiveStep, outgoingTexts, drafts);
+  let scriptKeys = resolveRwFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    drafts,
+    { recentCustomerTexts },
+  );
+  scriptKeys = limitRwScriptsForCustomerTurn(scriptKeys, outgoingTexts, drafts);
+  if (!scriptKeys.length) {
+    return false;
+  }
+
+  await tryTakeConversationForProcessing(client, convId, "RW");
+
+  const allowMultiSend = rwAllowsMultiSend(scriptKeys);
+  let sentAny = false;
+  const sentScriptKeys: string[] = [];
+
+  for (const scriptKey of scriptKeys) {
+    const replyText = rwScriptText(scriptKey, drafts);
+    if (!replyText) {
+      console.warn(`Pager worker: RW draft missing key=${scriptKey} ${convId.slice(0, 8)}`);
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      const failures = (convState.sendFailures ?? 0) + 1;
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: failures,
+      });
+      console.error(`Pager worker: RW send failed ${convId.slice(0, 8)} key=${scriptKey}`);
+      return sentAny;
+    }
+    sentAny = true;
+    sentScriptKeys.push(scriptKey);
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
+    await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  if (rwStatusMoveAfterSend(sentScriptKeys)) {
+    const statusId = findZmStatusId(state, "in_progress_registration");
+    const operatorId = await client.probeOperatorUserId();
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+    if (statusId && operatorId && currentStatusId !== statusId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(`Pager worker: RW ${convId.slice(0, 8)} status -> in progress`);
+      } catch (error) {
+        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    currentStage: rwRegLinkSentInHistory(
+      [...outgoingTexts, ...sentScriptKeys.map((k) => drafts?.[k as RwScriptKey]?.text ?? "")],
+      drafts,
+    )
+      ? "engaged"
+      : "new_lead",
+    funnelStep: Math.max(effectiveStep, sentScriptKeys.includes("05_link") ? 4 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1],
+    sendFailures: 0,
+  });
+
+  return true;
 }
 
 async function processCmConversation(

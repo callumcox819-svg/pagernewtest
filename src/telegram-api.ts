@@ -407,7 +407,7 @@ export function buildChannelKeyboard(
       }),
       [inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh })],
       [
-        inlineBtn("RW · 3 канала обуч.", "channels:rw_train", {
+        inlineBtn("RW · 3 канала", "channels:rw_train", {
           emojiId: PREMIUM_EMOJI.globe,
           style: "success",
         }),
@@ -435,7 +435,7 @@ export function buildCountryKeyboard(channelIndex: number): ReplyMarkup {
       ],
       [
         inlineBtn("Камерун", `country_pick:${channelIndex}:CM`, { emojiId: PREMIUM_EMOJI.flagCm }),
-        inlineBtn("Руанда · обуч.", `country_pick:${channelIndex}:RW`, {
+        inlineBtn("Руанда", `country_pick:${channelIndex}:RW`, {
           emojiId: PREMIUM_EMOJI.globe,
           style: "primary",
         }),
@@ -545,7 +545,7 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
           emojiId: PREMIUM_EMOJI.chart,
           style: "primary",
         }),
-        inlineBtn("Обучение RW", "menu:learn", {
+        inlineBtn("RW воронка", "menu:learn", {
           emojiId: PREMIUM_EMOJI.email,
           style: "primary",
         }),
@@ -643,7 +643,7 @@ export function buildOperatorReplyKeyboard(): ReplyMarkup {
     keyboard: [
       [{ text: "Pager аккаунт" }, { text: "Каналы" }],
       [{ text: "Папки" }, { text: "Статус" }],
-      [{ text: "Статистика" }, { text: "Обучение RW" }],
+      [{ text: "Статистика" }, { text: "RW воронка" }],
     ],
     resize_keyboard: true,
     is_persistent: true,

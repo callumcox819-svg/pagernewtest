@@ -83,6 +83,11 @@ const envSchema = z.object({
   XPARTNERS_SITE_ID_RW: z
     .preprocess((value) => (value === "" || value === undefined ? undefined : value), z.coerce.number().int().positive())
     .optional(),
+  /** RW auto-funnel on training channels (built-in scripts). Set false to pause sends only. */
+  RW_FUNNEL_ENABLED: z
+    .string()
+    .default("true")
+    .transform((value) => value.toLowerCase() === "true"),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

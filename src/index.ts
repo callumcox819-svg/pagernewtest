@@ -87,7 +87,7 @@ async function main() {
     { command: "start", description: "Открыть меню" },
     { command: "pause", description: "Пауза авто-ответов" },
     { command: "reset_pause", description: "Снять паузу" },
-    { command: "learn", description: "Лог обучения Руанда" },
+    { command: "learn", description: "RW: авто-воронка (справка)" },
   ]).catch((error) => {
     console.warn("Telegram setMyCommands failed:", formatError(error));
   });
@@ -186,7 +186,7 @@ async function handleCallback(
               : state;
         await telegram.answerCallbackQuery(
           callbackId,
-          value === "rw_train" ? "RW: 3 канала · обучение" : undefined,
+          value === "rw_train" ? "RW: 3 канала · авто" : undefined,
         );
         await showChannelsMenu(chatId, nextState, messageId);
         return;
@@ -287,7 +287,7 @@ async function handleCallback(
     const nextState = await stateStore.get(chatId) ?? state;
     await telegram.answerCallbackQuery(
       callbackId,
-      country === "RW" ? "Руанда · только обучение" : `Страна: ${country}`,
+      country === "RW" ? "Руанда · авто-воронка" : `Страна: ${country}`,
     );
     await showChannelsMenu(chatId, nextState, messageId);
     return;
@@ -1671,7 +1671,7 @@ function resolveMenuTextAction(text?: string): MenuAction | undefined {
   if (/^(статистика|statistics|stats|1xpartners)$/.test(normalized)) {
     return "stats";
   }
-  if (/^(обучение rw|обучение|rw learn|learn)$/.test(normalized)) {
+  if (/^(rw воронка|обучение rw|обучение|rw learn|learn)$/.test(normalized)) {
     return "learn";
   }
   if (/^(сброс|reset)$/.test(normalized)) {
