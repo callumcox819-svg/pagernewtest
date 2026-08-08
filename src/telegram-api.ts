@@ -407,12 +407,6 @@ export function buildChannelKeyboard(
       }),
       [inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh })],
       [
-        inlineBtn("RW · 3 канала", "channels:rw_train", {
-          emojiId: PREMIUM_EMOJI.globe,
-          style: "success",
-        }),
-      ],
-      [
         inlineBtn("Включить все", "channels:all_on", {
           emojiId: PREMIUM_EMOJI.check,
           style: "success",
