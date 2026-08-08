@@ -1,5 +1,5 @@
 import type { PagerConversation, PagerMessage } from "./pager-client.js";
-import { isNoStatusConversation } from "./status-folders.js";
+import { isInProgressStatusConversation, isNoStatusConversation } from "./status-folders.js";
 
 /** Каналы с первого скрина — наблюдение до полноценных шаблонов RW. */
 export const RW_LEARN_CHANNEL_HINTS = [
@@ -160,6 +160,11 @@ export function observeRwConversation(input: {
       previousStatusName: prev.statusName || "—",
       statusName: statusName || "—",
     });
+    if (isInProgressStatusConversation(conv)) {
+      console.log(
+        `RW learn · ${channelName} · ${convId.slice(0, 8)} · funnel: «Без статусу» → «В процессе» (как CM/ZM, свои шаблоны позже)`,
+      );
+    }
   }
 
   let lastCustomerMessageId = prev?.lastCustomerMessageId;
@@ -175,9 +180,14 @@ export function observeRwConversation(input: {
     }
   }
 
+  const sawNewLead = newEvents.some((e) => e.kind === "no_status_lead");
+
   if (latestCustomer?.id) {
     lastCustomerMessageId = latestCustomer.id;
-    if (prev?.lastCustomerMessageId && prev.lastCustomerMessageId !== latestCustomer.id) {
+    const isNewCustomerMsg =
+      latestCustomer.id !== prev?.lastCustomerMessageId &&
+      (prev != null || sawNewLead);
+    if (isNewCustomerMsg) {
       newEvents.push({
         at: now,
         channelId,
@@ -192,7 +202,10 @@ export function observeRwConversation(input: {
 
   if (latestOperator?.id) {
     lastOperatorMessageId = latestOperator.id;
-    if (prev?.lastOperatorMessageId && prev.lastOperatorMessageId !== latestOperator.id) {
+    const isNewOperatorMsg =
+      latestOperator.id !== prev?.lastOperatorMessageId &&
+      (prev != null || sawNewLead);
+    if (isNewOperatorMsg) {
       newEvents.push({
         at: now,
         channelId,
@@ -232,19 +245,36 @@ export function observeRwConversation(input: {
 
 export function formatRwLearningSummary(learning?: RwLearningState): string {
   if (!learning?.events.length) {
-    return "Руанда (обучение): событий пока нет. Включите каналы Remorseful / Ekambi / Patrick, страна «Руанда», папку «Без статусу».";
+    return [
+      "Руанда (обучение): событий пока нет.",
+      "",
+      "Бот смотрит, как оператор ведёт чат: «Без статусу» → «В процессе» (логика как CM/ZM, без авто-ответов).",
+      "Нужно: 3 канала RW включены, папка «Без статусу» в боте.",
+    ].join("\n");
   }
   const recent = learning.events.slice(-12).reverse();
   const lines = recent.map((event) => {
     const head = `${event.at.slice(11, 19)} ${event.channelName} ${event.conversationId.slice(0, 8)}`;
     if (event.kind === "status_changed") {
-      return `${head}: статус ${event.previousStatusName} → ${event.statusName}`;
+      const toProgress = /процес|process/i.test(event.statusName ?? "");
+      return `${head}: ${event.previousStatusName} → ${event.statusName}${toProgress ? " ✓" : ""}`;
     }
     if (event.kind === "no_status_lead") {
-      return `${head}: новый «Без статусу»`;
+      return `${head}: лид «Без статусу»`;
     }
-    return `${head}: ${event.kind}${event.textPreview ? ` — ${event.textPreview}` : ""}`;
+    if (event.kind === "operator_message") {
+      return `${head}: оператор [${event.statusName ?? "?"}] — ${event.textPreview ?? ""}`;
+    }
+    if (event.kind === "customer_message") {
+      return `${head}: клиент — ${event.textPreview ?? ""}`;
+    }
+    return `${head}: ${event.kind}`;
   });
   const watching = Object.keys(learning.watch).length;
-  return `Руанда (обучение) · смотрим ${watching} чат(ов)\n\n${lines.join("\n")}`;
+  return [
+    `Руанда (обучение) · в watchlist ${watching} чат(ов)`,
+    "Цепочка: Без статусу → ответы оператора → В процессе",
+    "",
+    lines.join("\n"),
+  ].join("\n");
 }

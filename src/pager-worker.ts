@@ -963,6 +963,7 @@ async function processConversation(
   return processGenericConversation(deps, state, client, conv, runtime, channel);
 }
 
+/** RW: только лог обучения — без takeConversation и без send. */
 async function processRwObserveConversation(
   deps: WorkerDeps,
   state: ChatState,
@@ -971,7 +972,7 @@ async function processRwObserveConversation(
   runtime: EnabledChannel,
 ): Promise<boolean> {
   const convId = conv.id;
-  const messages = await client.listMessages(convId, 1, 60);
+  const messages = await client.listMessages(convId, 1, 80);
   if (!messages.length) {
     return false;
   }
