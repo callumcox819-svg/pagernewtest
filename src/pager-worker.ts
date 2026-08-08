@@ -22,6 +22,7 @@ import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import { isLinkAccessProblemMessage, isCustomerClarificationMessage } from "./customer-clarity.js";
 import {
   defaultCountryForChannelName,
+  harvestRwCompletedConversation,
   observeRwConversation,
   type WorkerCountry,
 } from "./rw-learn.js";
@@ -155,9 +156,12 @@ import {
   ALL_INBOX_FOLDER_ID,
   NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
+  expandRwLearnFolderIds,
+  findCompletedFolderIds,
   getEnabledFolderIds,
   hasEnabledStatusFolders,
   isNoStatusConversation,
+  isRwCompletedConversation,
   isZmInProgressRegistrationStatusName,
   isZmRegistrationCompleteStatusName,
 } from "./status-folders.js";
@@ -182,6 +186,8 @@ const INBOX_TOP_EG = 250;
 const INBOX_PAGES_EG = 25;
 /** Deep enough for large inboxes (2500+ chats) — do not stop until unread cap or end. */
 const INBOX_PAGES_DEEP = 25;
+const RW_INBOX_PAGES_LIVE = 3;
+const RW_COMPLETED_PAGES = 10;
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -420,6 +426,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     hasCmChannel,
     hasEgChannel,
     rwWatchIds,
+    freshState,
   );
   const accountLimit = enabledChannels.some(
     (item) =>
@@ -669,18 +676,54 @@ async function buildWorkQueue(
   hasCmChannel: boolean,
   hasEgChannel: boolean,
   rwWatchIds: Set<string>,
+  chatState: ChatState,
 ): Promise<PagerConversation[]> {
   const selected = new Map<string, PagerConversation>();
+  const statusFolders =
+    chatState.operatorSettings?.statusFolders ?? chatState.statusFolders ?? [];
+  const completedFolderIds = findCompletedFolderIds(statusFolders);
+  const harvested = chatState.rwLearning?.harvestedCompleted ?? {};
 
   for (const channel of enabledChannels) {
     if (channel.runtime.country === "RW") {
-      const channelFolderIds = resolveChannelEnabledFolderIds(
-        enabledFolderIds,
-        "RW",
-        hasCmChannel,
-        hasEgChannel,
+      for (const statusId of completedFolderIds) {
+        let completedAdded = 0;
+        for (let page = 1; page <= RW_COMPLETED_PAGES; page += 1) {
+          if (completedAdded >= 5) {
+            break;
+          }
+          const inboxPage = await client.listConversations({
+            channelId: channel.channelId,
+            statusId,
+            page,
+            pageSize: 50,
+          });
+          if (!inboxPage.length) {
+            break;
+          }
+          for (const conv of inboxPage) {
+            if (harvested[conv.id]) {
+              continue;
+            }
+            selected.set(conv.id, conv);
+            completedAdded += 1;
+            if (completedAdded >= 5) {
+              break;
+            }
+          }
+        }
+      }
+
+      const channelFolderIds = expandRwLearnFolderIds(
+        resolveChannelEnabledFolderIds(
+          enabledFolderIds,
+          "RW",
+          hasCmChannel,
+          hasEgChannel,
+        ),
+        statusFolders,
       );
-      for (let page = 1; page <= INBOX_PAGES_DEEP; page += 1) {
+      for (let page = 1; page <= RW_INBOX_PAGES_LIVE; page += 1) {
         const inboxPage = await client.listConversations({
           channelId: channel.channelId,
           page,
@@ -928,12 +971,23 @@ async function processConversation(
   hasCmChannel: boolean,
   hasEgChannel: boolean,
 ): Promise<boolean> {
-  const channelFolderIds = resolveChannelEnabledFolderIds(
-    enabledFolderIds,
-    runtime.runtime.country,
-    hasCmChannel,
-    hasEgChannel,
-  );
+  const channelFolderIds =
+    runtime.runtime.country === "RW"
+      ? expandRwLearnFolderIds(
+          resolveChannelEnabledFolderIds(
+            enabledFolderIds,
+            runtime.runtime.country,
+            hasCmChannel,
+            hasEgChannel,
+          ),
+          state.operatorSettings?.statusFolders ?? state.statusFolders,
+        )
+      : resolveChannelEnabledFolderIds(
+          enabledFolderIds,
+          runtime.runtime.country,
+          hasCmChannel,
+          hasEgChannel,
+        );
   const rwWatchIds = new Set(Object.keys(state.rwLearning?.watch ?? {}));
   if (
     channelFolderIds &&
@@ -972,12 +1026,35 @@ async function processRwObserveConversation(
   runtime: EnabledChannel,
 ): Promise<boolean> {
   const convId = conv.id;
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const operatorUserId = await client.probeOperatorUserId();
+
+  if (isRwCompletedConversation(conv)) {
+    if (currentState.rwLearning?.harvestedCompleted?.[convId]) {
+      return false;
+    }
+    const messages = await client.listMessages(convId, 1, 120);
+    if (!messages.length) {
+      return false;
+    }
+    const { next, newEvents } = harvestRwCompletedConversation({
+      conv,
+      channelId: runtime.channelId,
+      channelName: runtime.channelName,
+      messages,
+      operatorUserId,
+      learning: currentState.rwLearning,
+    });
+    if (newEvents.length) {
+      await deps.stateStore.patch(state.chatId, { rwLearning: next });
+    }
+    return false;
+  }
+
   const messages = await client.listMessages(convId, 1, 80);
   if (!messages.length) {
     return false;
   }
-  const operatorUserId = await client.probeOperatorUserId();
-  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const { next, newEvents } = observeRwConversation({
     conv,
     channelId: runtime.channelId,

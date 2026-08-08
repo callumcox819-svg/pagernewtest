@@ -118,6 +118,45 @@ export function isConversationInOperatorEnabledFolders(
   return conversationAllowedInFolders(conv, enabled);
 }
 
+/** «Завершено» / completed — эталонные чаты с депозитом для RW-обучения. */
+export function isRwCompletedStatusName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return /заверш|complete|completed|finished|done|deposit.*ok|усп/i.test(normalized);
+}
+
+export function isRwCompletedConversation(conv: PagerConversation): boolean {
+  const name = (conv.status?.name || "").trim();
+  return name.length > 0 && isRwCompletedStatusName(name);
+}
+
+export function findCompletedFolderIds(folders: StatusFolderState[]): string[] {
+  return folders
+    .filter(
+      (folder) =>
+        folder.id &&
+        folder.id !== NO_STATUS_FOLDER_ID &&
+        folder.id !== ALL_INBOX_FOLDER_ID &&
+        isRwCompletedStatusName(folder.name),
+    )
+    .map((folder) => folder.id);
+}
+
+/** RW: всегда смотрим «Завершено» + папки, включённые оператором в боте. */
+export function expandRwLearnFolderIds(
+  enabledFolderIds: Set<string> | null,
+  statusFolders: StatusFolderState[] | undefined,
+): Set<string> | null {
+  const completedIds = findCompletedFolderIds(statusFolders ?? []);
+  if (!completedIds.length && (!enabledFolderIds || enabledFolderIds.size === 0)) {
+    return enabledFolderIds;
+  }
+  const merged = new Set(enabledFolderIds ?? []);
+  for (const id of completedIds) {
+    merged.add(id);
+  }
+  return merged;
+}
+
 export function expandEnabledFolderIds(
   state: { statusFolders?: StatusFolderState[] },
   enabledFolderIds: Set<string> | null,

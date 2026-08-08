@@ -1,5 +1,9 @@
 import type { PagerConversation, PagerMessage } from "./pager-client.js";
-import { isInProgressStatusConversation, isNoStatusConversation } from "./status-folders.js";
+import {
+  isInProgressStatusConversation,
+  isNoStatusConversation,
+  isRwCompletedConversation,
+} from "./status-folders.js";
 
 /** Каналы с первого скрина — наблюдение до полноценных шаблонов RW. */
 export const RW_LEARN_CHANNEL_HINTS = [
@@ -14,7 +18,10 @@ export type RwLearningEventKind =
   | "no_status_lead"
   | "status_changed"
   | "customer_message"
-  | "operator_message";
+  | "operator_message"
+  | "completed_harvest"
+  | "transcript_customer"
+  | "transcript_operator";
 
 export type RwLearningEvent = {
   at: string;
@@ -41,9 +48,15 @@ export type RwLearningWatchEntry = {
 export type RwLearningState = {
   watch: Record<string, RwLearningWatchEntry>;
   events: RwLearningEvent[];
+  /** Уже снята полная переписка из «Завершено». */
+  harvestedCompleted?: Record<
+    string,
+    { at: string; channelName: string; turns: number }
+  >;
 };
 
-const MAX_EVENTS = 300;
+const MAX_EVENTS = 800;
+const MAX_TRANSCRIPT_TURNS = 80;
 
 export function isRwLearnChannelName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
@@ -111,11 +124,99 @@ export function mergeRwLearningState(
   patch: {
     watch?: Record<string, RwLearningWatchEntry>;
     events?: RwLearningEvent[];
+    harvestedCompleted?: Record<string, { at: string; channelName: string; turns: number }>;
   },
 ): RwLearningState {
   const watch = { ...(current?.watch ?? {}), ...(patch.watch ?? {}) };
   const events = [...(current?.events ?? []), ...(patch.events ?? [])].slice(-MAX_EVENTS);
-  return { watch, events };
+  const harvestedCompleted = {
+    ...(current?.harvestedCompleted ?? {}),
+    ...(patch.harvestedCompleted ?? {}),
+  };
+  return { watch, events, harvestedCompleted };
+}
+
+export function harvestRwCompletedConversation(input: {
+  conv: PagerConversation;
+  channelId: string;
+  channelName: string;
+  messages: PagerMessage[];
+  operatorUserId?: string;
+  learning?: RwLearningState;
+}): { next: RwLearningState; newEvents: RwLearningEvent[] } {
+  const { conv, channelId, channelName, messages, operatorUserId, learning } = input;
+  const convId = conv.id;
+  const now = new Date().toISOString();
+
+  if (learning?.harvestedCompleted?.[convId]) {
+    return { next: learning, newEvents: [] };
+  }
+
+  const statusName = (conv.status?.name || "Завершено").trim();
+  const sorted = [...messages].sort(
+    (a, b) => Date.parse(a.createdAt ?? "") - Date.parse(b.createdAt ?? ""),
+  );
+
+  const newEvents: RwLearningEvent[] = [
+    {
+      at: now,
+      channelId,
+      channelName,
+      conversationId: convId,
+      kind: "completed_harvest",
+      statusName,
+      textPreview: `${sorted.length} сообщ. в треде`,
+    },
+  ];
+
+  let turns = 0;
+  for (const message of sorted) {
+    if (turns >= MAX_TRANSCRIPT_TURNS) {
+      break;
+    }
+    const text = (message.text || "").trim();
+    if (!text) {
+      continue;
+    }
+    if (isCustomerMessage(message, conv)) {
+      newEvents.push({
+        at: message.createdAt ?? now,
+        channelId,
+        channelName,
+        conversationId: convId,
+        kind: "transcript_customer",
+        statusName,
+        textPreview: truncateText(text, 240),
+      });
+      turns += 1;
+    } else if (isOperatorMessage(message, conv, operatorUserId)) {
+      newEvents.push({
+        at: message.createdAt ?? now,
+        channelId,
+        channelName,
+        conversationId: convId,
+        kind: "transcript_operator",
+        statusName,
+        textPreview: truncateText(text, 240),
+      });
+      turns += 1;
+    }
+  }
+
+  const next = mergeRwLearningState(learning, {
+    events: newEvents,
+    harvestedCompleted: {
+      [convId]: { at: now, channelName, turns },
+    },
+  });
+
+  for (const event of newEvents) {
+    console.log(
+      `RW learn · ${event.channelName} · ${event.conversationId.slice(0, 8)} · ${event.kind}${event.textPreview ? ` · ${event.textPreview}` : ""}`,
+    );
+  }
+
+  return { next, newEvents };
 }
 
 export function observeRwConversation(input: {
@@ -218,19 +319,24 @@ export function observeRwConversation(input: {
     }
   }
 
-  const watchEntry: RwLearningWatchEntry = {
-    channelId,
-    channelName,
-    statusId,
-    statusName,
-    lastCustomerMessageId,
-    lastOperatorMessageId,
-    firstSeenAt: prev?.firstSeenAt ?? now,
-    updatedAt: now,
-  };
+  const watchEntry: RwLearningWatchEntry | undefined =
+    isNoStatusConversation(conv) ||
+    prev ||
+    newEvents.some((e) => e.kind === "status_changed" || e.kind === "customer_message")
+      ? {
+          channelId,
+          channelName,
+          statusId,
+          statusName,
+          lastCustomerMessageId,
+          lastOperatorMessageId,
+          firstSeenAt: prev?.firstSeenAt ?? now,
+          updatedAt: now,
+        }
+      : undefined;
 
   const next = mergeRwLearningState(learning, {
-    watch: { [convId]: watchEntry },
+    watch: watchEntry ? { [convId]: watchEntry } : undefined,
     events: newEvents,
   });
 
@@ -244,15 +350,19 @@ export function observeRwConversation(input: {
 }
 
 export function formatRwLearningSummary(learning?: RwLearningState): string {
+  const harvested = learning?.harvestedCompleted
+    ? Object.keys(learning.harvestedCompleted).length
+    : 0;
   if (!learning?.events.length) {
     return [
       "Руанда (обучение): событий пока нет.",
       "",
-      "Бот смотрит, как оператор ведёт чат: «Без статусу» → «В процессе» (логика как CM/ZM, без авто-ответов).",
-      "Нужно: 3 канала RW включены, папка «Без статусу» в боте.",
+      "Живое: «Без статусу» → оператор → «В процессе».",
+      "Эталоны: папка «Завершено» на 3 RW-каналах (полная переписка, без авто-ответов).",
+      "Нужно: каналы RW включены; «Без статусу» в боте — для новых лидов.",
     ].join("\n");
   }
-  const recent = learning.events.slice(-12).reverse();
+  const recent = learning.events.slice(-15).reverse();
   const lines = recent.map((event) => {
     const head = `${event.at.slice(11, 19)} ${event.channelName} ${event.conversationId.slice(0, 8)}`;
     if (event.kind === "status_changed") {
@@ -261,6 +371,15 @@ export function formatRwLearningSummary(learning?: RwLearningState): string {
     }
     if (event.kind === "no_status_lead") {
       return `${head}: лид «Без статусу»`;
+    }
+    if (event.kind === "completed_harvest") {
+      return `${head}: 📁 Завершено — ${event.textPreview ?? "переписка"}`;
+    }
+    if (event.kind === "transcript_operator") {
+      return `${head}: оператор — ${event.textPreview ?? ""}`;
+    }
+    if (event.kind === "transcript_customer") {
+      return `${head}: клиент — ${event.textPreview ?? ""}`;
     }
     if (event.kind === "operator_message") {
       return `${head}: оператор [${event.statusName ?? "?"}] — ${event.textPreview ?? ""}`;
@@ -272,8 +391,8 @@ export function formatRwLearningSummary(learning?: RwLearningState): string {
   });
   const watching = Object.keys(learning.watch).length;
   return [
-    `Руанда (обучение) · в watchlist ${watching} чат(ов)`,
-    "Цепочка: Без статусу → ответы оператора → В процессе",
+    `Руанда (обучение) · watchlist ${watching} · эталонов «Завершено»: ${harvested}`,
+    "Живое: Без статусу → оператор → В процессе · Эталон: полный диалог в «Завершено»",
     "",
     lines.join("\n"),
   ].join("\n");
