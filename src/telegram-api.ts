@@ -539,12 +539,6 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
           emojiId: PREMIUM_EMOJI.chart,
           style: "primary",
         }),
-        inlineBtn("RW воронка", "menu:learn", {
-          emojiId: PREMIUM_EMOJI.email,
-          style: "primary",
-        }),
-      ],
-      [
         inlineBtn("Сброс", "menu:reset", {
           emojiId: PREMIUM_EMOJI.reset,
           style: "danger",
@@ -631,13 +625,19 @@ export function buildStatsIntervalKeyboard(currentHours: number): ReplyMarkup {
   };
 }
 
-/** Bottom quick menu — обычный текст (icon_custom_emoji на reply-клавиатуре скрывает подписи в Telegram). */
+/** Нижняя reply-клавиатура с premium emoji (Bot API 9.4+). */
 export function buildOperatorReplyKeyboard(): ReplyMarkup {
   return {
     keyboard: [
-      [{ text: "Pager аккаунт" }, { text: "Каналы" }],
-      [{ text: "Папки" }, { text: "Статус" }],
-      [{ text: "Статистика" }, { text: "RW воронка" }],
+      [
+        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
+        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
+      ],
+      [
+        replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
+        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
+      ],
+      [replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart, style: "primary" })],
     ],
     resize_keyboard: true,
     is_persistent: true,
