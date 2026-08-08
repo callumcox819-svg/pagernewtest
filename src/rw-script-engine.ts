@@ -80,7 +80,12 @@ const RW_GENERIC_NEEDLES: Record<RwScriptKey, string[]> = {
   "01_intro": ["analytical systems", "artificial intelligence", "hi! i want to show you"],
   "02_how_it_works": ["how it works:", "1) you create", "create a casino account"],
   "03_deposit_table": ["rwf", "ready to start today", "here's what you can get", "profit"],
-  "04_registration": ["promo code", "special registration link", "paste it into your google chrome"],
+  "04_registration": [
+    "special registration link",
+    "paste it into your google chrome",
+    "here is the link:",
+    "rnd555",
+  ],
   "05_link": ["tinyurl.com/rund555", "rund555"],
 };
 
@@ -151,10 +156,12 @@ export function rwRegistrationInstructionsSentInHistory(
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
+  // «How it works» mentions promo code — do not treat that as the reg bundle.
   return (
-    blob.includes("special registration link") ||
-    blob.includes("paste it into your google chrome") ||
-    blob.includes("promo code")
+    (blob.includes("special registration link") ||
+      blob.includes("paste it into your google chrome") ||
+      blob.includes("here is the link:")) &&
+    blob.includes("rnd555")
   );
 }
 
