@@ -182,6 +182,30 @@ export function isReadyForRegistration(text: string): boolean {
   return false;
 }
 
+/** Short ack after reg link (Okay/Yes) — not proof of registration. */
+export function isBarePostLinkAcknowledgment(text: string, intent: ZmIntent): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  if (
+    isRegistrationConfirmed(t) ||
+    isRegistrationHelpRequest(t) ||
+    isZmRegistrationAccountQuestion(t) ||
+    wantsRegistrationLink(t) ||
+    isCustomerSaysNotRegisteredYet(t)
+  ) {
+    return false;
+  }
+  if (/^(ok|okay|yes|sure|alright|k|got it|thanks|thank you)\.?$/i.test(t)) {
+    return true;
+  }
+  if ((intent === "positive" || intent === "ready") && t.split(/\s+/).length <= 4) {
+    return /^[\p{L}\s'.!?]+$/u.test(t) && !/\b(registered|account|deposit|id|17\d)\b/i.test(t);
+  }
+  return false;
+}
+
 export function isRegistrationConfirmed(text: string): boolean {
   const t = (text || "").trim();
   if (!t) {

@@ -13,6 +13,7 @@ import {
   isRegistrationConfirmed,
   isRegistrationHelpRequest,
   isZmRegistrationAccountQuestion,
+  isBarePostLinkAcknowledgment,
   wantsDetailsAfterIntro,
   wantsRegistrationLink,
 } from "./zm-intent.js";
@@ -433,7 +434,11 @@ export function resolveZmFunnelScripts(
       !isRegistrationHelpRequest(t) &&
       !isZmRegistrationAccountQuestion(t)
     ) {
-      if (!gameIdAskSent && !depositSent && (signal || isRegistrationConfirmed(t))) {
+      if (
+        !gameIdAskSent &&
+        !depositSent &&
+        (isRegistrationConfirmed(t) || intent === "joined" || idReceived)
+      ) {
         return ["07_game_id"];
       }
       return [];
@@ -451,7 +456,11 @@ export function resolveZmFunnelScripts(
     if (!linkSent) {
       return ["04_registration", "05_link"];
     }
-    if (!gameIdAskSent && !depositSent) {
+    if (
+      !gameIdAskSent &&
+      !depositSent &&
+      (isRegistrationConfirmed(t) || intent === "joined" || idReceived)
+    ) {
       return ["07_game_id"];
     }
     if (!depositSent && (idReceived || signal || options?.hasImage)) {
@@ -495,13 +504,15 @@ export function resolveZmFunnelScripts(
     if (!t && !options?.hasImage) {
       return [];
     }
+    if (isBarePostLinkAcknowledgment(t, intent)) {
+      return [];
+    }
     if (
-      signal ||
-      intent === "positive" ||
-      intent === "ready" ||
-      intent === "joined" ||
       isRegistrationConfirmed(t) ||
-      options?.hasImage
+      intent === "joined" ||
+      intent === "game_id_text" ||
+      idReceived ||
+      (options?.hasImage && options?.proofKind === "registration_screenshot")
     ) {
       return ["07_game_id"];
     }

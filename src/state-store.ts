@@ -50,6 +50,11 @@ export type ConversationRuntimeState = {
   lastReplyRole?: string;
   funnelStep?: number;
   sendFailures?: number;
+  /** Set when the bot moves the chat to «в процессе регистрации» (not legacy folder rows). */
+  inProgressEnteredAt?: string;
+  inProgressFollowUpDueAt?: string;
+  inProgressFollowUpVariant?: 0 | 1;
+  inProgressFollowUpSentAt?: string;
 };
 
 export type ChatState = {

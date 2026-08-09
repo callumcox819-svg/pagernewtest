@@ -30,6 +30,13 @@ import {
   isConversationInOperatorEnabledFolders,
 } from "./status-folders.js";
 import {
+  buildInProgressFollowUpStatePatch,
+  inProgressFollowUpAlreadySent,
+  inProgressFollowUpMessage,
+  isInProgressFollowUpCountry,
+  shouldSendInProgressFollowUp,
+} from "./in-progress-followup.js";
+import {
   buildSupportSnapshot,
   filterScriptKeysForSupportAgent,
   inProgressFollowUpEligible,
@@ -807,6 +814,20 @@ async function buildWorkQueue(
         }
 
         if (
+          (isCm || isZm || isRw) &&
+          isInProgressStatusConversation(conv)
+        ) {
+          const followUpState = chatState.conversations?.[conv.id];
+          if (followUpState && shouldSendInProgressFollowUp(followUpState)) {
+            if (!selected.has(conv.id)) {
+              selected.set(conv.id, conv);
+              addedThisPage += 1;
+            }
+            continue;
+          }
+        }
+
+        if (
           catchUpActive &&
           catchUpAdded < CATCH_UP_INBOX_CAP &&
           (isCm || isZm || isRw) &&
@@ -1001,6 +1022,80 @@ async function buildWorkQueue(
   return { conversations: [...selected.values()], catchUpConversationIds };
 }
 
+async function onMovedToInProgressRegistration(
+  deps: WorkerDeps,
+  chatId: number,
+  convId: string,
+  channelId: string,
+): Promise<void> {
+  await patchConversationState(deps.stateStore, chatId, convId, {
+    conversationId: convId,
+    channelId,
+    ...buildInProgressFollowUpStatePatch(convId),
+  });
+}
+
+async function trySendInProgressRegistrationFollowUp(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+): Promise<boolean> {
+  const country = runtime.runtime.country;
+  if (!isInProgressFollowUpCountry(country)) {
+    return false;
+  }
+  if (!isInProgressStatusConversation(conv)) {
+    return false;
+  }
+
+  const convId = conv.id;
+  const convState = getConversationState(state, convId, runtime.channelId);
+  if (!shouldSendInProgressFollowUp(convState)) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 50);
+  const outgoingTexts =
+    country === "CM"
+      ? collectCmOutgoingTexts(messages)
+      : country === "ZM"
+        ? collectZmOutgoingTexts(messages)
+        : collectRwOutgoingTexts(messages);
+
+  if (inProgressFollowUpAlreadySent(country, outgoingTexts)) {
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      inProgressFollowUpSentAt: new Date().toISOString(),
+    });
+    return false;
+  }
+
+  const variant = convState.inProgressFollowUpVariant ?? 0;
+  const text = inProgressFollowUpMessage(country, variant);
+  await tryTakeConversationForProcessing(client, convId, country);
+  const sent = await client.sendMessageReliable(convId, text, {
+    channelId: runtime.channelId,
+    conv,
+  });
+  if (!sent) {
+    return false;
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    inProgressFollowUpSentAt: new Date().toISOString(),
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: "in_progress_followup",
+    sendFailures: 0,
+  });
+  console.log(
+    `Pager worker: ${country} ${convId.slice(0, 8)} in-progress follow-up sent (variant=${variant})`,
+  );
+  return true;
+}
+
 async function processConversation(
   deps: WorkerDeps,
   state: ChatState,
@@ -1032,6 +1127,10 @@ async function processConversation(
       `Pager worker: skip ${conv.id.slice(0, 8)} — outside enabled folders (status=${conv.status?.name || "none"})`,
     );
     return false;
+  }
+
+  if (await trySendInProgressRegistrationFollowUp(deps, state, client, conv, runtime)) {
+    return true;
   }
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
@@ -1250,6 +1349,7 @@ async function processRwFunnelConversation(
         try {
           await client.patchConversationStatus(convId, statusId, operatorId);
           console.log(`Pager worker: RW ${convId.slice(0, 8)} status -> in progress`);
+          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
         } catch (error) {
           console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
         }
@@ -1668,10 +1768,14 @@ async function processCmConversation(
   if (cmStatusMoveAfterSend(sentScriptKeys)) {
     const statusId = findFunnelFollowUpStatusId(currentState);
     const operatorId = await client.probeOperatorUserId();
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
     if (statusId && operatorId) {
       try {
         await client.patchConversationStatus(convId, statusId, operatorId);
         console.log(`Pager worker: CM ${convId.slice(0, 8)} status -> in progress`);
+        if (currentStatusId !== statusId) {
+          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
+        }
       } catch (error) {
         console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
       }
@@ -2005,6 +2109,9 @@ async function processZmConversation(
         console.log(
           `Pager worker: ZM ${convId.slice(0, 8)} status -> ${statusTarget === "registration_complete" ? "registration" : "in progress registration"}`,
         );
+        if (statusTarget === "in_progress_registration") {
+          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
+        }
       } catch (error) {
         console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
       }
