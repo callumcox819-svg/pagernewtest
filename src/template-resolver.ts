@@ -158,7 +158,13 @@ export async function resolveScriptTextByKey(
   if (country === "CM" && options.scriptKey === "05_registration") {
     const localReg = loadLocalCmScript("05_registration");
     if (localReg?.trim()) {
-      return localReg;
+      return stripCmRegistrationEmbeddedLink(localReg);
+    }
+  }
+  if (country === "CM" && options.scriptKey === "06_link") {
+    const localLink = loadLocalCmScript("06_link");
+    if (localLink?.trim()) {
+      return localLink.trim();
     }
   }
   const folderId =
@@ -172,19 +178,10 @@ export async function resolveScriptTextByKey(
     const replies = await loadFolderReplies(client, folderId);
     const fromPager = matchReplyByScriptKey(replies, options.scriptKey, country);
     if (fromPager?.text?.trim() && isScriptReplyAcceptable(fromPager.text, options.scriptKey, country)) {
-      return fromPager.text;
-    }
-    if (
-      country === "CM" &&
-      options.scriptKey === "06_link" &&
-      fromPager?.text?.trim() &&
-      /^https?:\/\/\S+$/i.test(fromPager.text.trim())
-    ) {
-      const fullReg = loadLocalCmScript("05_registration");
-      if (fullReg?.trim()) {
-        console.warn(`${country} script bare link replaced with 05_registration for key=06_link`);
-        return fullReg;
+      if (country === "CM" && options.scriptKey === "05_registration") {
+        return stripCmRegistrationEmbeddedLink(fromPager.text);
       }
+      return fromPager.text;
     }
     if (
       country === "EG" &&
@@ -217,10 +214,24 @@ export async function resolveScriptTextByKey(
         : loadLocalCmScript(options.scriptKey);
   if (local?.trim()) {
     console.log(`${country} script local fallback key=${options.scriptKey}`);
+    if (country === "CM" && options.scriptKey === "05_registration") {
+      return stripCmRegistrationEmbeddedLink(local);
+    }
     return local;
   }
 
   return undefined;
+}
+
+/** CM: registration script and link are separate bubbles — never embed the URL in 05_registration. */
+function stripCmRegistrationEmbeddedLink(text: string): string {
+  return text
+    .replace(/\n?https?:\/\/\S+/gi, "")
+    .replace(/\n?(?:www\.)?tinyurl\.com\/\S+/gi, "")
+    .replace(/\n?camerun01\b/gi, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
 }
 
 export async function resolveTemplateText(

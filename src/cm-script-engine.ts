@@ -1,5 +1,4 @@
 import type { PagerMessage } from "./pager-client.js";
-import { loadLocalCmScript } from "./cm-local-scripts.js";
 import {
   isCustomerSaysNotRegisteredYet,
   recentTextsIndicateNotRegistered,
@@ -802,12 +801,7 @@ export function limitCmScriptsForCustomerTurn(
     const chromeSent = cmChromeReminderSentInHistory(outgoingTexts);
 
     if (!instructionsSent) {
-      const keys: string[] = [...CM_REG_BUNDLE];
-      const regLocal = loadLocalCmScript("05_registration");
-      if (regLocal && /camerun01|tinyurl\.com\/camerun/i.test(regLocal)) {
-        return keys.filter((key) => key !== "06_link");
-      }
-      return keys;
+      return [...CM_REG_BUNDLE];
     }
     const remaining: string[] = [];
     if (!linkSent) {
