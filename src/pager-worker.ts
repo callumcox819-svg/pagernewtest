@@ -135,8 +135,13 @@ import {
   ZM_EXPLAIN_SEND_KEYS,
   ZM_REG_SEND_KEYS,
   depositSentInHistory as zmDepositSentInHistory,
+  gameIdSentInHistory,
 } from "./zm-script-engine.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
+import {
+  looksLikeZmDepositBalanceScreenshot,
+  resolveZmProofScriptAfterDeposit,
+} from "./zm-proof.js";
 import { extractProofImageUrl, resolveMessageReaction } from "./message-attachments.js";
 import {
   isDepositTierChoice,
@@ -1919,7 +1924,7 @@ async function processZmConversation(
     return true;
   }
 
-  if (imageUrl && zmDepositSentInHistory(outgoingTexts)) {
+  if (imageUrl && (zmDepositSentInHistory(outgoingTexts) || zmRegLinkSentInHistory(outgoingTexts))) {
     const imageHandled = await tryHandleCustomerImage(deps, {
       state,
       client,
@@ -1951,6 +1956,7 @@ async function processZmConversation(
         caption: latestCustomerText,
         ocrEnabled: deps.env.OCR_ENABLED,
         ocrLang: ocrLangForCountry(channel.country),
+        country: "ZM",
       });
       proofKind = classification.proofKind;
       proofText = classification.combinedText;
@@ -2942,6 +2948,16 @@ async function processGenericConversation(
   return true;
 }
 
+function findZmWaitingIdStatusId(state: ChatState): string | undefined {
+  for (const folder of state.statusFolders ?? []) {
+    const name = folder.name.trim().toLowerCase();
+    if (/чекаю\s*id|waiting.*id|жду\s*айди|attente.*id/i.test(name)) {
+      return folder.id;
+    }
+  }
+  return undefined;
+}
+
 function findFunnelFollowUpStatusId(state: ChatState): string | undefined {
   // Prefer «В процесі» / registration-in-progress — never park CM chats in «чекаю ID».
   for (const folder of state.statusFolders ?? []) {
@@ -3709,6 +3725,104 @@ async function sendCmScriptKey(
   return true;
 }
 
+async function trySendZmProofFromCombinedText(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext & { outgoingTexts: string[] },
+  combinedText: string,
+  proofKind: import("./config.js").ProofKind | undefined,
+): Promise<boolean> {
+  if (ctx.channel.country !== "ZM" || !zmRegLinkSentInHistory(ctx.outgoingTexts)) {
+    return false;
+  }
+  const scriptKey = resolveZmProofScriptAfterDeposit(proofKind, combinedText, {
+    depositScriptSent: zmDepositSentInHistory(ctx.outgoingTexts),
+    gameIdScriptSent: gameIdSentInHistory(ctx.outgoingTexts),
+  });
+  if (!scriptKey) {
+    return false;
+  }
+  return sendZmScriptKey(deps, ctx, scriptKey, { moveToWaitingId: true });
+}
+
+async function sendZmScriptKey(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext,
+  scriptKey: string,
+  options?: { moveToWaitingId?: boolean },
+): Promise<boolean> {
+  const currentState = (await deps.stateStore.get(ctx.state.chatId)) ?? ctx.state;
+  const folderId = await resolveZmTemplateFolderId(
+    ctx.client,
+    ctx.runtime.runtime.templateBankId,
+    currentState.pagerAccount?.liveTemplateBanks,
+  );
+  const replyText = await resolveScriptTextByKey(ctx.client, {
+    folderId,
+    liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+    scriptKey,
+    country: "ZM",
+  });
+  const body =
+    replyText?.trim() ||
+    (scriptKey === "07_game_id" ? loadLocalZmScript("07_game_id") : loadLocalZmScript(scriptKey));
+  if (!body?.trim()) {
+    return false;
+  }
+  await tryTakeConversationForProcessing(ctx.client, ctx.convId, "ZM");
+  const sent = await ctx.client.sendMessageReliable(ctx.convId, body.trim(), {
+    channelId: ctx.runtime.channelId,
+    conv: ctx.conv,
+  });
+  if (!sent) {
+    return false;
+  }
+  if (scriptKey === "07_game_id") {
+    const attachment = resolveScriptAttachment("ZM", scriptKey);
+    if (attachment) {
+      try {
+        await ctx.client.sendImageReliable(
+          ctx.convId,
+          {
+            buffer: readFileSync(attachment.path),
+            mimeType: attachment.mimeType,
+            filename: attachment.filename,
+          },
+          { channelId: ctx.runtime.channelId, conv: ctx.conv },
+        );
+      } catch (error) {
+        console.warn(`ZM proof image failed ${ctx.convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+  if (options?.moveToWaitingId) {
+    const statusId = findZmWaitingIdStatusId(currentState);
+    const operatorId = await ctx.client.probeOperatorUserId();
+    const currentStatusId = (ctx.conv.statusId ?? ctx.conv.status?.id ?? "").trim();
+    if (statusId && operatorId && currentStatusId !== statusId) {
+      try {
+        await ctx.client.patchConversationStatus(ctx.convId, statusId, operatorId);
+        console.log(`Pager worker: ZM ${ctx.convId.slice(0, 8)} status -> waiting for ID`);
+      } catch (error) {
+        console.warn(`Pager worker: status patch failed ${ctx.convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+  console.log(
+    `Pager worker: ZM ${ctx.convId.slice(0, 8)} proof -> ${scriptKey} build=${getDeployLabel()}`,
+  );
+  await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+    conversationId: ctx.convId,
+    channelId: ctx.runtime.channelId,
+    lastCustomerMessageId: ctx.lastIncoming.id,
+    lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: scriptKey,
+    currentStage: scriptKey === "07_game_id" ? "waiting_id" : ctx.convState.currentStage,
+    sendFailures: 0,
+  });
+  return true;
+}
+
 async function trySendCmProofFromCombinedText(
   deps: WorkerDeps,
   ctx: SpecialResponseContext & { outgoingTexts: string[] },
@@ -3767,6 +3881,17 @@ async function tryHandleCustomerImage(
         return true;
       }
     }
+    if (ctx.channel.country === "ZM") {
+      const sent = await trySendZmProofFromCombinedText(
+        deps,
+        ctx,
+        classification.combinedText,
+        classification.proofKind,
+      );
+      if (sent) {
+        return true;
+      }
+    }
   } catch (error) {
     console.warn(`OCR failed ${ctx.convId.slice(0, 8)}:`, formatError(error));
     proofKind = classifyProofFromText(ctx.playbook, ctx.text, ctx.channel.country).proofKind;
@@ -3780,6 +3905,30 @@ async function tryHandleCustomerImage(
       if (sent) {
         return true;
       }
+    }
+    if (ctx.channel.country === "ZM") {
+      const fallbackKind = classifyProofFromText(ctx.playbook, ctx.text, "ZM").proofKind;
+      const sent = await trySendZmProofFromCombinedText(deps, ctx, ctx.text, fallbackKind);
+      if (sent) {
+        return true;
+      }
+    }
+  }
+
+  const zmDepositScreenshot =
+    ctx.channel.country === "ZM" &&
+    zmDepositSentInHistory(ctx.outgoingTexts) &&
+    (proofKind === "deposit_balance_screenshot" ||
+      looksLikeZmDepositBalanceScreenshot(ocrCombinedText));
+  if (zmDepositScreenshot) {
+    const sent = await trySendZmProofFromCombinedText(
+      deps,
+      ctx,
+      ocrCombinedText,
+      proofKind as import("./config.js").ProofKind,
+    );
+    if (sent) {
+      return true;
     }
   }
 
@@ -3837,6 +3986,10 @@ async function tryHandleCustomerImage(
     } else if (scriptEchoOnImage) {
       console.log(
         `Pager worker: skip ${ctx.convId.slice(0, 8)} ${ctx.channel.country} AI vision — script_echo_on_screenshot`,
+      );
+    } else if (zmDepositScreenshot) {
+      console.log(
+        `Pager worker: skip ${ctx.convId.slice(0, 8)} ZM AI vision — deposit_screenshot_uses_script`,
       );
     } else {
     const visionReply = await runAiAgentVisionTurn(deps.env, {

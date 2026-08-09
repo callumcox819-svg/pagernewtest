@@ -5,6 +5,7 @@ import {
   recentTextsIndicateNotRegistered,
 } from "./customer-clarity.js";
 import { registrationResendScriptKeys } from "./funnel-common.js";
+import { looksLikeZmDepositBalanceScreenshot } from "./zm-proof.js";
 import {
   type ZmIntent,
   classifyZmIntent,
@@ -511,8 +512,27 @@ export function resolveZmFunnelScripts(
       isRegistrationConfirmed(t) ||
       intent === "joined" ||
       intent === "game_id_text" ||
+      idReceived
+    ) {
+      return ["07_game_id"];
+    }
+    return [];
+  }
+
+  if (depositSent && !gameIdAskSent) {
+    const depositProof =
+      options?.proofKind === "deposit_balance_screenshot" ||
+      intent === "deposit_done" ||
+      (options?.hasImage &&
+        looksLikeZmDepositBalanceScreenshot(
+          [t, options?.proofText ?? ""].filter(Boolean).join("\n"),
+        ));
+    if (
+      depositProof ||
+      isRegistrationConfirmed(t) ||
+      intent === "joined" ||
       idReceived ||
-      (options?.hasImage && options?.proofKind === "registration_screenshot")
+      intent === "game_id_text"
     ) {
       return ["07_game_id"];
     }
@@ -528,7 +548,7 @@ export function resolveZmFunnelScripts(
       isRegistrationConfirmed(t) ||
       intent === "joined" ||
       wantsDepositNow(t, intent) ||
-      signal
+      (signal && !isBarePostLinkAcknowledgment(t, intent))
     ) {
       return ["06_deposit"];
     }

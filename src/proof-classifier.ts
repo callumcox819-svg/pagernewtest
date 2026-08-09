@@ -101,7 +101,7 @@ export function classifyProofFromText(
 
   const hasDepositMarker =
     playbook.depositKeywords.some((keyword) => normalized.includes(normalize(keyword))) ||
-    /(balance|deposit|funded|egp|usd|zar|ksh|kes|fcfa|رصيد|ايداع|إيداع|solde|recharger|retrait)/i.test(
+    /(balance|deposit|funded|egp|usd|zar|ksh|kes|fcfa|zmw|kwacha|رصيد|ايداع|إيداع|solde|recharger|retrait)/i.test(
       inputText,
     ) ||
     (country === "CM" && /\b\d{2,5}\s*F\b/i.test(inputText) && /(1xbet|xbet)/i.test(inputText));
