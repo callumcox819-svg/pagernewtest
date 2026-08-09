@@ -1,28 +1,25 @@
 import type { WorkerCountry } from "./rw-learn.js";
 import type { ConversationRuntimeState } from "./state-store.js";
 
+/** Markets that get delayed «в процессе» check-ins (each in its own language). */
+export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW";
+
 export const IN_PROGRESS_FOLLOWUP_MIN_MS = 10 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_MAX_MS = 15 * 60 * 1000;
 
-const FOLLOWUP_NEEDLES: Record<"ZM" | "CM" | "RW", string[]> = {
+/** ZM/RW English, CM French, EG Arabic — aligned with AI market languages. */
+const FOLLOWUP_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   ZM: ["have you already registered", "what stage are you at"],
   RW: ["have you already registered", "what stage are you at"],
   CM: ["déjà inscrit", "quelle étape"],
+  EG: ["هل قمت بالتسجيل", "في أي مرحلة"],
 };
 
-const FOLLOWUP_MESSAGES: Record<"ZM" | "CM" | "RW", [string, string]> = {
-  ZM: [
-    "Have you already registered?",
-    "What stage are you at now?",
-  ],
-  RW: [
-    "Have you already registered?",
-    "What stage are you at now?",
-  ],
-  CM: [
-    "Vous êtes déjà inscrit(e) ?",
-    "À quelle étape en êtes-vous ?",
-  ],
+const FOLLOWUP_MESSAGES: Record<InProgressFollowUpCountry, [string, string]> = {
+  ZM: ["Have you already registered?", "What stage are you at now?"],
+  RW: ["Have you already registered?", "What stage are you at now?"],
+  CM: ["Vous êtes déjà inscrit(e) ?", "À quelle étape en êtes-vous ?"],
+  EG: ["هل قمت بالتسجيل بالفعل؟", "في أي مرحلة أنت الآن؟"],
 };
 
 function stableHash(value: string): number {
@@ -47,19 +44,23 @@ export function pickInProgressFollowUpVariant(convId: string): 0 | 1 {
 }
 
 export function inProgressFollowUpMessage(
-  country: "ZM" | "CM" | "RW",
+  country: InProgressFollowUpCountry,
   variant: 0 | 1,
 ): string {
   return FOLLOWUP_MESSAGES[country][variant];
 }
 
 export function inProgressFollowUpAlreadySent(
-  country: "ZM" | "CM" | "RW",
+  country: InProgressFollowUpCountry,
   outgoingTexts: string[],
 ): boolean {
+  const blob = outgoingTexts.join("\n");
   const needles = FOLLOWUP_NEEDLES[country];
-  const blob = outgoingTexts.join("\n").toLowerCase();
-  return needles.some((needle) => blob.includes(needle));
+  if (country === "EG") {
+    return needles.some((needle) => blob.includes(needle));
+  }
+  const lower = blob.toLowerCase();
+  return needles.some((needle) => lower.includes(needle.toLowerCase()));
 }
 
 export function shouldSendInProgressFollowUp(
@@ -96,6 +97,6 @@ export function buildInProgressFollowUpStatePatch(
 
 export function isInProgressFollowUpCountry(
   country: WorkerCountry,
-): country is "ZM" | "CM" | "RW" {
-  return country === "ZM" || country === "CM" || country === "RW";
+): country is InProgressFollowUpCountry {
+  return country === "ZM" || country === "CM" || country === "EG" || country === "RW";
 }

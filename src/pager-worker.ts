@@ -814,7 +814,7 @@ async function buildWorkQueue(
         }
 
         if (
-          (isCm || isZm || isRw) &&
+          (isCm || isZm || isRw || isEg) &&
           isInProgressStatusConversation(conv)
         ) {
           const followUpState = chatState.conversations?.[conv.id];
@@ -1062,7 +1062,9 @@ async function trySendInProgressRegistrationFollowUp(
       ? collectCmOutgoingTexts(messages)
       : country === "ZM"
         ? collectZmOutgoingTexts(messages)
-        : collectRwOutgoingTexts(messages);
+        : country === "EG"
+          ? collectEgOutgoingTexts(messages)
+          : collectRwOutgoingTexts(messages);
 
   if (inProgressFollowUpAlreadySent(country, outgoingTexts)) {
     await patchConversationState(deps.stateStore, state.chatId, convId, {
@@ -2751,10 +2753,14 @@ async function processEgConversation(
   if (egRegSendTriggersInProgress(scriptKeys)) {
     const statusId = findFunnelFollowUpStatusId(currentState);
     const operatorId = await client.probeOperatorUserId();
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
     if (statusId && operatorId) {
       try {
         await client.patchConversationStatus(convId, statusId, operatorId);
         console.log(`Pager worker: EG ${convId.slice(0, 8)} status -> in progress`);
+        if (currentStatusId !== statusId) {
+          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
+        }
       } catch (error) {
         console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
       }

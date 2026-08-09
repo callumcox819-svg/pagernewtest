@@ -20,18 +20,26 @@ export const AI_MARKET_LANGUAGE: Record<
   },
 };
 
+/** English AI + scripted replies for Rwanda (same as Zambia). */
+export const RW_MARKET_LANGUAGE = AI_MARKET_LANGUAGE.ZM;
+
 /** AI market code for Rwanda (English scripts — not CM French). */
 export const RW_AI_COUNTRY: CountryCode = "ZM";
 
 export function buildAiLanguageLockRule(country: CountryCode): string {
   const { label, neverUse } = AI_MARKET_LANGUAGE[country];
+  const englishOnly = country === "ZM";
   return [
     `CRITICAL LANGUAGE: The customer is in market ${country}.`,
     `Write your ENTIRE reply ONLY in ${label}.`,
     `Do NOT use ${neverUse} in the reply (except brand names like 1xBET or MTN).`,
-    country === "ZM"
+    englishOnly
       ? "Always write in English even if the customer writes in French or another language."
-      : "Mirror the customer's tone but stay in that language.",
+      : country === "CM"
+        ? "Always write in French even if the customer writes in English or another language."
+        : country === "EG"
+          ? "Always write in Arabic even if the customer writes in English or French."
+          : "Mirror the customer's tone but stay in that language.",
   ].join(" ");
 }
 
