@@ -101,16 +101,16 @@ export function shouldQueueCatchUpUnreadConversation(conv: PagerConversation): b
   if (!hasUnreadMarkers(conv)) {
     return false;
   }
+  // «Без статусу» unread — any age (ghost badges often sit for days).
+  if (isNoStatusConversation(conv)) {
+    return true;
+  }
   if (isOutgoingDirection(conv.lastMessageDirection)) {
     return false;
   }
   const lastAt = resolveLastMessageAt(conv);
   if (!lastAt || !isWithinCatchUpReadWindow(lastAt)) {
     return false;
-  }
-  // «Без статусу» unread backlog — always eligible within the catch-up window.
-  if (isNoStatusConversation(conv)) {
-    return true;
   }
   return (
     isIncomingDirection(conv.lastMessageDirection) ||
@@ -291,8 +291,23 @@ export function shouldSkipConversationBotSpokeLast(
   conv: PagerConversation,
   sortedMessages: PagerMessage[],
   lastIncoming?: PagerMessage,
-  options?: { operatorUserId?: string; country?: CountryCode },
+  options?: { operatorUserId?: string; country?: CountryCode; catchUpRead?: boolean },
 ): boolean {
+  if (
+    options?.catchUpRead &&
+    isNoStatusConversation(conv) &&
+    hasUnreadMarkers(conv) &&
+    lastIncoming &&
+    !hasBotReplyAfterCustomerMessage(
+      sortedMessages,
+      lastIncoming,
+      conv,
+      options?.operatorUserId,
+      options?.country,
+    )
+  ) {
+    return false;
+  }
   const newest = sortedMessages[0];
   if (!newest || !isOutgoingDirection(newest.messageDirection)) {
     return false;
@@ -345,6 +360,22 @@ export function isActionableCustomerMessage(
   }
 
   if (isFreshCustomerMessage(lastIncoming.createdAt)) {
+    return true;
+  }
+
+  if (
+    options?.catchUpRead &&
+    conv &&
+    isNoStatusConversation(conv) &&
+    hasUnreadMarkers(conv) &&
+    !hasBotReplyAfterCustomerMessage(
+      sortedMessages,
+      lastIncoming,
+      conv,
+      options?.operatorUserId,
+      options?.country,
+    )
+  ) {
     return true;
   }
 

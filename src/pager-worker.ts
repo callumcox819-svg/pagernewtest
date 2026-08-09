@@ -495,8 +495,11 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const prioritizedConversations = prioritizeWorkQueue(
     workQueue,
     channelIds,
-    accountLimit,
+    catchUpActive
+      ? Math.max(accountLimit, catchUpConversationIds.size + 40)
+      : accountLimit,
     egChannelIds,
+    catchUpConversationIds,
   ).sort((left, right) => {
     // Interleave countries by priority — do not let EG starve a CM unread backlog.
     return conversationPriorityScore(right) - conversationPriorityScore(left);
@@ -626,20 +629,24 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     `Pager worker: chat ${freshState.chatId} — checked=${checked} replied=${replied} skipped=${skipped} egChecked=${egChecked} egReplied=${egReplied} catchUp=${catchUpChecked}/${catchUpReplied}`,
   );
 
-  if (catchUpActive && (catchUpChecked > 0 || catchUpReplied > 0) && !freshState.catchUpRead?.notifiedAt) {
+  if (catchUpActive && !freshState.catchUpRead?.notifiedAt) {
     try {
-      await deps.telegram.sendMessage(
-        freshState.chatId,
-        [
-          "Догон чатов (24 ч, read+unread):",
-          `в очереди ${catchUpChecked}, отправлено ответов ${catchUpReplied}.`,
-          catchUpReplied < catchUpChecked
-            ? "Остальные — без скрипта или уже отвечены в треде."
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      );
+      const report =
+        catchUpChecked > 0
+          ? [
+              "Догон чатов (24 ч + «Без статусу» unread):",
+              `в очереди ${catchUpChecked}, отправлено ответов ${catchUpReplied}.`,
+              catchUpReplied < catchUpChecked
+                ? "Остальные — без скрипта или уже отвечены в треде."
+                : "",
+            ]
+              .filter(Boolean)
+              .join("\n")
+          : [
+              "Догон: в poll/inbox не найдено чатов для очереди.",
+              "Проверь: включена папка «Без статусу», каналы CM/EG/ZM/RW, unread на клиенте.",
+            ].join("\n");
+      await deps.telegram.sendMessage(freshState.chatId, report);
       await deps.stateStore.patch(freshState.chatId, {
         catchUpRead: {
           ...freshState.catchUpRead,
@@ -661,11 +668,22 @@ function prioritizeWorkQueue(
   channelIds: string[],
   limit: number,
   egChannelIds?: Set<string>,
+  catchUpConversationIds?: Set<string>,
 ): PagerConversation[] {
   const scored = [...conversations].sort(
     (left, right) => conversationPriorityScore(right) - conversationPriorityScore(left),
   );
   const selected = new Map<string, PagerConversation>();
+
+  if (catchUpConversationIds?.size) {
+    for (const conv of scored) {
+      if (!catchUpConversationIds.has(conv.id)) {
+        continue;
+      }
+      selected.set(conv.id, conv);
+    }
+  }
+
   const minPerChannel = Math.min(
     50,
     Math.max(20, Math.floor(limit / Math.max(channelIds.length, 1))),
@@ -768,6 +786,39 @@ async function buildWorkQueue(
   const catchUpConversationIds = new Set<string>();
   const catchUpActive = isCatchUpReadActive(chatState.catchUpRead);
   let catchUpAdded = 0;
+
+  if (catchUpActive) {
+    for (const conv of folderScopedConversations) {
+      if (catchUpAdded >= CATCH_UP_INBOX_CAP) {
+        break;
+      }
+      const channelId = conv.channelId || conv.channel?.id || "";
+      if (!channelIds.includes(channelId)) {
+        continue;
+      }
+      const runtime = enabledChannels.find((item) => item.channelId === channelId);
+      if (
+        !runtime ||
+        (runtime.runtime.country !== "CM" &&
+          runtime.runtime.country !== "EG" &&
+          runtime.runtime.country !== "ZM" &&
+          runtime.runtime.country !== "RW")
+      ) {
+        continue;
+      }
+      if (!shouldQueueCatchUpConversation(conv)) {
+        continue;
+      }
+      if (!selected.has(conv.id)) {
+        selected.set(conv.id, conv);
+        catchUpConversationIds.add(conv.id);
+        catchUpAdded += 1;
+      }
+    }
+    if (catchUpAdded) {
+      console.log(`Pager worker: catch-up pre-scan from poll added=${catchUpAdded}`);
+    }
+  }
 
   for (const channel of enabledChannels) {
     if (
@@ -1241,6 +1292,7 @@ async function processRwFunnelConversation(
     shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
       operatorUserId,
       country: RW_AI_COUNTRY,
+      catchUpRead: isCatchUpReadActive(state.catchUpRead),
     })
   ) {
     console.log(`Pager worker: skip ${convId.slice(0, 8)} RW — bot_spoke_last (awaiting_customer)`);
@@ -1489,6 +1541,7 @@ async function processCmConversation(
     shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
       operatorUserId: operatorUserIdEarly,
       country: "CM",
+      catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
     })
   ) {
     console.log(
@@ -1894,6 +1947,7 @@ async function processZmConversation(
     shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
       operatorUserId: operatorUserIdEarly,
       country: "ZM",
+      catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
     })
   ) {
     console.log(
@@ -2433,6 +2487,7 @@ async function processEgConversation(
     shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
       operatorUserId: operatorUserIdEarly,
       country: "EG",
+      catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
     })
   ) {
     console.log(
@@ -4159,7 +4214,8 @@ async function pollConversations(
       );
     return country === "CM" || country === "ZM" || country === "EG";
   });
-  const maxPages = needsDeepPoll ? 25 : 10;
+  const catchUpDeep = isCatchUpReadActive(state.catchUpRead);
+  const maxPages = needsDeepPoll ? (catchUpDeep ? 40 : 25) : catchUpDeep ? 20 : 10;
   try {
     await client.syncOrgIdFromChannels();
     const conversations = await client.collectConversationsForChannels(channelIds, maxPages);

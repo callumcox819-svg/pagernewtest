@@ -192,12 +192,13 @@ async function handleCallback(
             activeUntil,
             requestedAt: new Date().toISOString(),
             windowHours: 24,
+            notifiedAt: undefined,
           },
         });
-        await telegram.answerCallbackQuery(callbackId, "Догоняю чаты за 24 ч…");
+        await telegram.answerCallbackQuery(callbackId, "Догоняю чаты…");
         await telegram.sendMessage(
           chatId,
-          "Включён догон: непрочитанные и прочитанные чаты за 24 часа (в т.ч. «Без статусу», CM/EG/ZM/RW). Обработка в ближайших циклах…",
+          "Включён догон: все unread в «Без статусу» (любой возраст) + read/unread за 24 ч (CM/EG/ZM/RW). Несколько циклов ~35 мин…",
         );
         void runPagerWorkerOnceForChat({ env, config, stateStore, telegram }, chatId).catch((error) => {
           console.warn(`Catch-up worker kick failed chat ${chatId}:`, formatError(error));
