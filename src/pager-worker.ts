@@ -1684,6 +1684,14 @@ async function processCmConversation(
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
+  if (
+    tierSentInHistory(outgoingTexts) &&
+    !cmRegLinkSentInHistory(outgoingTexts) &&
+    isDepositTierChoice(latestCustomerText) &&
+    !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
+  ) {
+    scriptKeys = ["05_registration", "06_link", "07_chrome"];
+  }
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
   scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support);

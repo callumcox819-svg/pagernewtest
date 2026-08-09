@@ -6,6 +6,8 @@ import {
   type SupportSnapshot,
 } from "./ai-support-phase.js";
 import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion, isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
+import { isDepositTierChoice } from "./cm-intent.js";
+import { tierSentInHistory } from "./cm-script-engine.js";
 import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import {
   type AiAssistContext,
@@ -117,6 +119,14 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
   if (
     !ctx.support?.active &&
     hasPreSupportFunnelScripts(ctx.country, ctx.scriptKeys ?? [])
+  ) {
+    return false;
+  }
+  if (
+    ctx.country === "CM" &&
+    !ctx.support?.active &&
+    isDepositTierChoice(ctx.customerText.trim()) &&
+    tierSentInHistory(ctx.recentOutgoingTexts ?? [])
   ) {
     return false;
   }

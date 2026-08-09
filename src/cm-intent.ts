@@ -121,6 +121,7 @@ export function isDepositTierChoice(text: string): boolean {
   if (!t) {
     return false;
   }
+  const glued = t.replace(/\s+/g, "");
   if (/^(1|2)\.?$/.test(t)) {
     return true;
   }
@@ -140,6 +141,16 @@ export function isDepositTierChoice(text: string): boolean {
   if (/^(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f|fc)?\.?$/i.test(t)) {
     return true;
   }
+  // Glued typo: "1500Fque", "1000f je", "ce1500fque"
+  if (/(?:^|[^0-9])(1000|1500)f(?=[a-z]|$)/i.test(glued)) {
+    return true;
+  }
+  if (/\b(ce|c'est|cest)\s+(1000|1500|1\s?000|1\s?500)\s*f/i.test(t)) {
+    return true;
+  }
+  if (/\bchois/i.test(t) && /(?:^|[^0-9])(1000|1500|1\s?000|1\s?500)/i.test(t.replace(/\s/g, ""))) {
+    return true;
+  }
   if (
     t.split(/\s+/).length <= 14 &&
     /\b(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f|fc)?\b/i.test(t)
@@ -153,6 +164,12 @@ export function isDepositTierChoice(text: string): boolean {
     return true;
   }
   if (/\bpour un d[eé]but\b/i.test(t) && /\b(100|1\s?000|140|cfa)\b/i.test(t)) {
+    return true;
+  }
+  if (
+    /\b(je choisis|je choisi|je prends|je veux|choisis|prends|prend)\b/i.test(t) &&
+    /\b(1000|1500|1\s?000|1\s?500)\b/i.test(t)
+  ) {
     return true;
   }
   return isCmTier1000Choice(t) || isCmTier1500Choice(t);
@@ -241,6 +258,9 @@ function isCmTier1500Choice(t: string): boolean {
       t,
     )
   ) {
+    return true;
+  }
+  if (/\b(je choisi|je choisis)\b/i.test(t) && /\b(1500|1\s?500)\b/i.test(t)) {
     return true;
   }
   if (/\b(le|la)\s+(2eme|deuxieme|second)\b/i.test(t)) {
