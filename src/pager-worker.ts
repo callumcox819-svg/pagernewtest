@@ -626,7 +626,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       await deps.telegram.sendMessage(
         freshState.chatId,
         [
-          "Догон прочитанных (10 ч):",
+          "Догон чатов (10 ч, read+unread):",
           `в очереди ${catchUpChecked}, отправлено ответов ${catchUpReplied}.`,
           catchUpReplied < catchUpChecked
             ? "Остальные — без скрипта или уже отвечены в треде."
