@@ -1,4 +1,5 @@
 import type { PagerMessage } from "./pager-client.js";
+import { loadLocalCmScript } from "./cm-local-scripts.js";
 import {
   isCustomerSaysNotRegisteredYet,
   recentTextsIndicateNotRegistered,
@@ -67,7 +68,7 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
     "investissement → gain",
     "bénéfice",
   ],
-  "05_registration": ["je vous envoie le lien", "télécharger l'application", "cash056", "code promo"],
+  "05_registration": ["je vous envoie le lien", "télécharger l'application", "cash056"],
   "06_link": ["camerun01", "tinyurl"],
   "07_chrome": ["google chrome", "colle le lien"],
   "08_game_id": ["commence par 17", "numéro de joueur"],
@@ -108,6 +109,9 @@ export function cmScriptSentInHistory(outgoingTexts: string[], scriptKey: string
   }
   if (scriptKey === "04_tier") {
     return tierSentInHistory(outgoingTexts);
+  }
+  if (scriptKey === "05_registration") {
+    return cmRegistrationInstructionsSentInHistory(outgoingTexts);
   }
   return scriptSearchNeedles(scriptKey).some((needle) => scriptSentInHistory(outgoingTexts, needle));
 }
@@ -798,7 +802,12 @@ export function limitCmScriptsForCustomerTurn(
     const chromeSent = cmChromeReminderSentInHistory(outgoingTexts);
 
     if (!instructionsSent) {
-      return [...CM_REG_BUNDLE];
+      const keys: string[] = [...CM_REG_BUNDLE];
+      const regLocal = loadLocalCmScript("05_registration");
+      if (regLocal && /camerun01|tinyurl\.com\/camerun/i.test(regLocal)) {
+        return keys.filter((key) => key !== "06_link");
+      }
+      return keys;
     }
     const remaining: string[] = [];
     if (!linkSent) {

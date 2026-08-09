@@ -1724,6 +1724,32 @@ async function processCmConversation(
         console.warn(`CM script optional miss ${convId.slice(0, 8)}: ${scriptKey}`);
         continue;
       }
+      if (scriptKey === "05_registration") {
+        const fallbackText = loadLocalCmScript("05_registration")?.trim();
+        if (fallbackText) {
+          const sent = await client.sendMessageReliable(convId, fallbackText, {
+            channelId: runtime.channelId,
+            conv,
+          });
+          if (sent) {
+            sentAny = true;
+            sentScriptKeys.push(scriptKey);
+            await patchConversationState(deps.stateStore, state.chatId, convId, {
+              conversationId: convId,
+              channelId: runtime.channelId,
+              lastCustomerMessageId: lastIncoming.id,
+              lastCustomerMessageAt: lastIncoming.createdAt,
+              lastReplyAt: new Date().toISOString(),
+              lastReplyRole: scriptKey,
+              sendFailures: 0,
+            });
+            await sleep(500);
+          }
+        } else {
+          console.warn(`CM script missing ${convId.slice(0, 8)}: ${scriptKey}`);
+        }
+        continue;
+      }
       if (scriptKey === "06_link") {
         const fallbackText =
           loadLocalCmScript("06_link")?.trim() || "https://tinyurl.com/Camerun01";

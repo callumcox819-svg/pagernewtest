@@ -155,6 +155,12 @@ export async function resolveScriptTextByKey(
       return localTier;
     }
   }
+  if (country === "CM" && options.scriptKey === "05_registration") {
+    const localReg = loadLocalCmScript("05_registration");
+    if (localReg?.trim()) {
+      return localReg;
+    }
+  }
   const folderId =
     country === "ZM"
       ? await resolveZmTemplateFolderId(client, options.folderId, options.liveBanks)
