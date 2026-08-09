@@ -405,7 +405,13 @@ export function buildChannelKeyboard(
           }),
         ];
       }),
-      [inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh })],
+      [
+        inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh }),
+        inlineBtn("Догнать чаты", "channels:catchup", {
+          emojiId: PREMIUM_EMOJI.robot,
+          style: "primary",
+        }),
+      ],
       [
         inlineBtn("Включить все", "channels:all_on", {
           emojiId: PREMIUM_EMOJI.check,

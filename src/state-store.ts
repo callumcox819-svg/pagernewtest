@@ -72,6 +72,13 @@ export type ChatState = {
   };
   /** When true, worker skips auto-replies for this Telegram operator. */
   paused?: boolean;
+  /** One-shot / timed «догнать чаты»: re-process read threads within the window. */
+  catchUpRead?: {
+    activeUntil: string;
+    requestedAt?: string;
+    windowHours?: number;
+    notifiedAt?: string;
+  };
   /** Наблюдение за оператором (Руанда): без take/send, только лог событий. */
   rwLearning?: RwLearningState;
   /** 1xPartners quick report cache + refresh interval for «Статистика». */

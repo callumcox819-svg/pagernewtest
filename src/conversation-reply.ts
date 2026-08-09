@@ -52,6 +52,47 @@ export function isNewLeadConversation(conv: PagerConversation): boolean {
 /** Brand-new customer messages (always processed). */
 export const FRESH_CUSTOMER_MESSAGE_MS = 30 * 60 * 1000;
 
+/** «Догнать чаты»: look back at read threads with no bot reply. */
+export const CATCH_UP_READ_WINDOW_MS = 10 * 60 * 60 * 1000;
+
+/** How long the channels-menu catch-up stays active after one click. */
+export const CATCH_UP_READ_ACTIVE_MS = 25 * 60 * 1000;
+
+export function isCatchUpReadActive(
+  catchUp?: { activeUntil?: string },
+  nowMs = Date.now(),
+): boolean {
+  const until = catchUp?.activeUntil?.trim();
+  if (!until) {
+    return false;
+  }
+  const ts = Date.parse(until);
+  return Number.isFinite(ts) && ts > nowMs;
+}
+
+export function isWithinCatchUpReadWindow(createdAt?: string, nowMs = Date.now()): boolean {
+  const ts = Date.parse(parseMessageTimestamp(createdAt));
+  if (!Number.isFinite(ts)) {
+    return false;
+  }
+  return nowMs - ts <= CATCH_UP_READ_WINDOW_MS;
+}
+
+/** Read inbox rows: customer spoke last, within catch-up window, no unread badge. */
+export function shouldQueueCatchUpReadConversation(conv: PagerConversation): boolean {
+  if (hasUnreadMarkers(conv)) {
+    return false;
+  }
+  if (isOutgoingDirection(conv.lastMessageDirection)) {
+    return false;
+  }
+  const lastAt = resolveLastMessageAt(conv);
+  if (!lastAt || !isWithinCatchUpReadWindow(lastAt)) {
+    return false;
+  }
+  return isIncomingDirection(conv.lastMessageDirection);
+}
+
 export type ReplyEligibility =
   | { eligible: true }
   | { eligible: false; reason: string; markSeen?: boolean };
@@ -252,7 +293,7 @@ export function isActionableCustomerMessage(
   conv: PagerConversation,
   convState: ConversationRuntimeState,
   sortedMessages: PagerMessage[],
-  options?: { country?: CountryCode; operatorUserId?: string },
+  options?: { country?: CountryCode; operatorUserId?: string; catchUpRead?: boolean },
 ): boolean {
   const incomingAt = Date.parse(parseMessageTimestamp(lastIncoming.createdAt));
   if (!Number.isFinite(incomingAt)) {
@@ -272,6 +313,20 @@ export function isActionableCustomerMessage(
   }
 
   if (isFreshCustomerMessage(lastIncoming.createdAt)) {
+    return true;
+  }
+
+  if (
+    options?.catchUpRead &&
+    isWithinCatchUpReadWindow(lastIncoming.createdAt) &&
+    !hasBotReplyAfterCustomerMessage(
+      sortedMessages,
+      lastIncoming,
+      conv,
+      options?.operatorUserId,
+      options?.country,
+    )
+  ) {
     return true;
   }
 

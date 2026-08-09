@@ -11,7 +11,8 @@ import { ClerkPasswordAuthClient, enrichPagerCookies, parseCookieHeader } from "
 import { decideNextAction } from "./decision-engine.js";
 import { loadEnv } from "./env.js";
 import { PagerClient } from "./pager-client.js";
-import { runPagerWorker } from "./pager-worker.js";
+import { runPagerWorker, runPagerWorkerOnceForChat } from "./pager-worker.js";
+import { CATCH_UP_READ_ACTIVE_MS } from "./conversation-reply.js";
 import { classifyProofFromImage } from "./proof-classifier.js";
 import { clearTemplateReplyCache } from "./template-resolver.js";
 import { createStateStore, type ChannelRuntimeState, type ChatState, type StateStore } from "./state-store.js";
@@ -182,6 +183,25 @@ async function handleCallback(
           value === "refresh" ? (await refreshPagerData(chatId, state)) ?? state : state;
         await telegram.answerCallbackQuery(callbackId);
         await showChannelsMenu(chatId, nextState, messageId);
+        return;
+      }
+      if (value === "catchup") {
+        const activeUntil = new Date(Date.now() + CATCH_UP_READ_ACTIVE_MS).toISOString();
+        await stateStore.patch(chatId, {
+          catchUpRead: {
+            activeUntil,
+            requestedAt: new Date().toISOString(),
+            windowHours: 10,
+          },
+        });
+        await telegram.answerCallbackQuery(callbackId, "Догоняю прочитанные за 10 ч…");
+        await telegram.sendMessage(
+          chatId,
+          "Включён догон: прочитанные чаты за последние 10 часов (CM/ZM/RW, включённые папки). Обработка в ближайшем цикле…",
+        );
+        void runPagerWorkerOnceForChat({ env, config, stateStore, telegram }, chatId).catch((error) => {
+          console.warn(`Catch-up worker kick failed chat ${chatId}:`, formatError(error));
+        });
         return;
       }
       await telegram.answerCallbackQuery(callbackId);

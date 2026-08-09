@@ -52,6 +52,8 @@ import {
   shouldQueueCmConversation,
   shouldQueueZmConversation,
   shouldSkipConversationBotSpokeLast,
+  isCatchUpReadActive,
+  shouldQueueCatchUpReadConversation,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -199,6 +201,19 @@ const INBOX_TOP_EG = 250;
 const INBOX_PAGES_EG = 25;
 /** Deep enough for large inboxes (2500+ chats) — do not stop until unread cap or end. */
 const INBOX_PAGES_DEEP = 25;
+/** Max read threads per channel per cycle during «догнать чаты». */
+const CATCH_UP_INBOX_CAP = 50;
+
+export async function runPagerWorkerOnceForChat(deps: WorkerDeps, chatId: number): Promise<void> {
+  const state = await deps.stateStore.get(chatId);
+  if (!state) {
+    return;
+  }
+  if (!state.pagerAccount?.cookies?.trim() && !(state.pagerAccount?.email && state.pagerAccount?.password)) {
+    return;
+  }
+  await processOperatorAccount(deps, state);
+}
 
 export async function runPagerWorker(deps: WorkerDeps): Promise<never> {
   const pollMs = deps.config.bot.pollIntervalSeconds * 1000;
@@ -427,7 +442,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     }
     return conversationAllowedInFolders(conv, folderIds);
   });
-  const workQueue = await buildWorkQueue(
+  const workQueueResult = await buildWorkQueue(
     client,
     folderScopedConversations,
     enabledChannels,
@@ -437,6 +452,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     hasEgChannel,
     freshState,
   );
+  const workQueue = workQueueResult.conversations;
+  const catchUpConversationIds = workQueueResult.catchUpConversationIds;
+  const catchUpActive = isCatchUpReadActive(freshState.catchUpRead);
   const accountLimit = enabledChannels.some(
     (item) =>
       item.runtime.country === "EG" ||
@@ -492,6 +510,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   let egChecked = 0;
   let egReplied = 0;
 
+  let catchUpChecked = 0;
+  let catchUpReplied = 0;
+
   for (const conv of prioritizedConversations) {
     const channelId = conv.channelId || conv.channel?.id;
     if (!channelId) {
@@ -506,6 +527,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     }
 
     checked += 1;
+    if (catchUpConversationIds.has(conv.id)) {
+      catchUpChecked += 1;
+    }
     const isEg = runtime.runtime.country === "EG";
     if (isEg) {
       egChecked += 1;
@@ -523,6 +547,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       );
       if (didReply) {
         replied += 1;
+        if (catchUpConversationIds.has(conv.id)) {
+          catchUpReplied += 1;
+        }
         if (isEg) {
           egReplied += 1;
         }
@@ -574,8 +601,34 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   console.log(
-    `Pager worker: chat ${freshState.chatId} — checked=${checked} replied=${replied} skipped=${skipped} egChecked=${egChecked} egReplied=${egReplied}`,
+    `Pager worker: chat ${freshState.chatId} — checked=${checked} replied=${replied} skipped=${skipped} egChecked=${egChecked} egReplied=${egReplied} catchUp=${catchUpChecked}/${catchUpReplied}`,
   );
+
+  if (catchUpActive && (catchUpChecked > 0 || catchUpReplied > 0) && !freshState.catchUpRead?.notifiedAt) {
+    try {
+      await deps.telegram.sendMessage(
+        freshState.chatId,
+        [
+          "Догон прочитанных (10 ч):",
+          `в очереди ${catchUpChecked}, отправлено ответов ${catchUpReplied}.`,
+          catchUpReplied < catchUpChecked
+            ? "Остальные — без скрипта или уже отвечены в треде."
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+      await deps.stateStore.patch(freshState.chatId, {
+        catchUpRead: {
+          ...freshState.catchUpRead,
+          activeUntil: freshState.catchUpRead?.activeUntil ?? new Date().toISOString(),
+          notifiedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      console.warn(`Catch-up notify failed chat ${freshState.chatId}:`, formatError(error));
+    }
+  }
 }
 
 function prioritizeWorkQueue(
@@ -684,9 +737,12 @@ async function buildWorkQueue(
   enabledFolderIds: Set<string> | null,
   hasCmChannel: boolean,
   hasEgChannel: boolean,
-  _chatState: ChatState,
-): Promise<PagerConversation[]> {
+  chatState: ChatState,
+): Promise<{ conversations: PagerConversation[]; catchUpConversationIds: Set<string> }> {
   const selected = new Map<string, PagerConversation>();
+  const catchUpConversationIds = new Set<string>();
+  const catchUpActive = isCatchUpReadActive(chatState.catchUpRead);
+  let catchUpAdded = 0;
 
   for (const channel of enabledChannels) {
     if (
@@ -713,6 +769,7 @@ async function buildWorkQueue(
     const followUpCap = isEg ? 0 : INBOX_TOP_CM_FOLLOWUP;
     let unreadAdded = 0;
     let followUpAdded = 0;
+    let catchUpAddedChannel = 0;
     let scanned = 0;
     for (let page = 1; page <= maxPages; page += 1) {
       const inboxPage = await client.listConversations({
@@ -735,6 +792,23 @@ async function buildWorkQueue(
         if (!inboxConversationEligible(conv, channelFolderIds)) {
           continue;
         }
+
+        if (
+          catchUpActive &&
+          catchUpAdded < CATCH_UP_INBOX_CAP &&
+          (isCm || isZm || isRw) &&
+          shouldQueueCatchUpReadConversation(conv)
+        ) {
+          if (!selected.has(conv.id)) {
+            selected.set(conv.id, conv);
+            catchUpConversationIds.add(conv.id);
+            catchUpAdded += 1;
+            catchUpAddedChannel += 1;
+            addedThisPage += 1;
+          }
+          continue;
+        }
+
         if (isEg && !shouldQueueEgConversation(conv)) {
           continue;
         }
@@ -806,7 +880,7 @@ async function buildWorkQueue(
     }
 
     console.log(
-      `Pager worker: channel ${channel.channelName}/${channel.runtime.country} inbox scanned=${scanned} unread=${unreadAdded} followUp=${followUpAdded}`,
+      `Pager worker: channel ${channel.channelName}/${channel.runtime.country} inbox scanned=${scanned} unread=${unreadAdded} followUp=${followUpAdded} catchUp=${catchUpAddedChannel}`,
     );
   }
 
@@ -911,7 +985,7 @@ async function buildWorkQueue(
     );
   }
 
-  return [...selected.values()];
+  return { conversations: [...selected.values()], catchUpConversationIds };
 }
 
 async function processConversation(
@@ -1045,6 +1119,7 @@ async function processRwFunnelConversation(
         bypass: rwNewLeadBypass || rwInProgressBypass,
         operatorUserId,
         countryLabel: "RW",
+        catchUpRead: isCatchUpReadActive(state.catchUpRead),
       },
     ))
   ) {
@@ -1314,6 +1389,7 @@ async function processCmConversation(
         operatorUserId,
         countryLabel: "CM",
         country: "CM",
+        catchUpRead: isCatchUpReadActive(state.catchUpRead),
       },
     ))
   ) {
@@ -1673,6 +1749,7 @@ async function processZmConversation(
         operatorUserId,
         countryLabel: "ZM",
         country: "ZM",
+        catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
       },
     ))
   ) {
@@ -3071,9 +3148,11 @@ async function ensureCustomerMessageEligible(
     operatorUserId?: string;
     countryLabel?: string;
     country?: "ZM" | "CM" | "EG";
+    catchUpRead?: boolean;
   },
 ): Promise<boolean> {
   const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | undefined);
+  const catchUpRead = Boolean(options?.catchUpRead);
   const customerText = (lastIncoming.text || "").trim();
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
   const alreadyRepliedInState =
@@ -3095,7 +3174,7 @@ async function ensureCustomerMessageEligible(
     conv,
     convState,
     sorted,
-    { country, operatorUserId: options?.operatorUserId },
+    { country, operatorUserId: options?.operatorUserId, catchUpRead },
   );
   // Unread / customer-last must reach the script engine — never bury a backlog behind state locks.
   const unreadNeedsScriptPass =
