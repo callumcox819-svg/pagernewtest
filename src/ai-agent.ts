@@ -113,7 +113,7 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
   if (ctx.intent === "declined") {
     return false;
   }
-  if (isSimpleFunnelAcknowledgment(text) && ctx.scriptKeys?.length) {
+  if (isSimpleFunnelAcknowledgment(text)) {
     return false;
   }
   if (isScamOrTrustQuestion(text)) {

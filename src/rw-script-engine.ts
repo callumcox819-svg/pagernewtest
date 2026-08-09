@@ -216,6 +216,8 @@ function wantsExplain(text: string, intent: ZmIntent, effectiveStep: number): bo
   const t = (text || "").trim();
   return (
     wantsDetailsAfterIntro(text) ||
+    /^how\??$/i.test(t) ||
+    /\bshow me examples?\b/i.test(t) ||
     /\blet\s*'?s?\s*do\s*it\b/i.test(t) ||
     intent === "question" ||
     intent === "interested" ||
@@ -229,9 +231,13 @@ function wantsRegistrationBundle(
   intent: ZmIntent,
   effectiveStep: number,
 ): boolean {
+  const t = (text || "").trim();
   return (
     isReadyForRegistration(text) ||
     wantsRegistrationLink(text) ||
+    /\b(create account for me|can you create|make an account for me|create the account for me)\b/i.test(
+      t,
+    ) ||
     intent === "ready" ||
     (positiveSignal(text, intent, effectiveStep) && effectiveStep >= 2)
   );
@@ -312,7 +318,11 @@ export function resolveRwFunnelScripts(
   }
 
   if (!linkSent) {
-    if (wantsRegistrationBundle(t, intent, effectiveStep)) {
+    if (
+      wantsRegistrationBundle(t, intent, effectiveStep) ||
+      /\b(create account for me|can you create|make an account for me)\b/i.test(t) ||
+      (explainSent && /^(ok|okay|yes|yeah|sure|alright|yep)\.?$/i.test(t))
+    ) {
       return ["04_registration", "05_link"];
     }
     return [];

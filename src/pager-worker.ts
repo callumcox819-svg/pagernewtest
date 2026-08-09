@@ -104,6 +104,7 @@ import {
   rwScriptSentInHistory,
   rwScriptText,
   rwStatusMoveAfterSend,
+  RW_SCRIPT_KEYS,
   type RwScriptKey,
 } from "./rw-script-engine.js";
 import {
@@ -940,7 +941,7 @@ async function processConversation(
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
   if (runtime.runtime.country === "RW") {
-    return processRwConversation(deps, state, client, conv, runtime);
+    return processRwConversation(deps, state, client, conv, runtime, channel);
   }
   if (channel.country === "CM") {
     return processCmConversation(deps, state, client, conv, runtime, channel);
@@ -961,6 +962,7 @@ async function processRwConversation(
   client: PagerClient,
   conv: PagerConversation,
   runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
 ): Promise<boolean> {
   if (!deps.env.RW_FUNNEL_ENABLED || !hasMinimumRwScriptDrafts()) {
     return false;
@@ -970,7 +972,7 @@ async function processRwConversation(
   }
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
   const drafts = rwActiveScriptDrafts(currentState.rwLearning?.scriptDrafts);
-  return processRwFunnelConversation(deps, currentState, client, conv, runtime, drafts);
+  return processRwFunnelConversation(deps, currentState, client, conv, runtime, channel, drafts);
 }
 
 async function processRwFunnelConversation(
@@ -979,6 +981,7 @@ async function processRwFunnelConversation(
   client: PagerClient,
   conv: PagerConversation,
   runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
   drafts: ReturnType<typeof rwActiveScriptDrafts>,
 ): Promise<boolean> {
   const convId = conv.id;
@@ -1001,10 +1004,20 @@ async function processRwFunnelConversation(
   }
 
   const operatorUserId = await client.probeOperatorUserId();
+  const outgoingTexts = collectRwOutgoingTexts(messages);
+  const latestCustomerText = (lastIncoming.text || "").trim();
   const rwNewLeadBypass =
     isNoStatusConversation(conv) &&
-    !rwScriptSentInHistory(collectRwOutgoingTexts(messages), "01_intro", drafts) &&
-    Boolean((lastIncoming.text || "").trim());
+    !rwScriptSentInHistory(outgoingTexts, "01_intro", drafts) &&
+    Boolean(latestCustomerText);
+
+  const folderEnabled = isConversationInOperatorEnabledFolders(conv, state);
+  const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: folderEnabled,
+  });
+  const rwInProgressBypass =
+    inProgressFollowUpEligible(support, latestCustomerText, false) ||
+    isCustomerClarificationMessage(latestCustomerText);
 
   if (
     shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
@@ -1012,6 +1025,7 @@ async function processRwFunnelConversation(
       country: "CM",
     })
   ) {
+    console.log(`Pager worker: skip ${convId.slice(0, 8)} RW — bot_spoke_last (awaiting_customer)`);
     return false;
   }
 
@@ -1026,7 +1040,7 @@ async function processRwFunnelConversation(
       lastIncoming,
       sorted,
       {
-        bypass: rwNewLeadBypass,
+        bypass: rwNewLeadBypass || rwInProgressBypass,
         operatorUserId,
         countryLabel: "RW",
         country: "CM",
@@ -1036,9 +1050,25 @@ async function processRwFunnelConversation(
     return false;
   }
 
-  const outgoingTexts = collectRwOutgoingTexts(messages);
-  const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const playbook = getPlaybook(deps.config, channel.country);
+
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
   const gapStep = rwFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0, drafts);
   const effectiveStep = Math.max(gapStep, convState.funnelStep ?? 0);
   const intent = classifyRwMessage(latestCustomerText, effectiveStep, outgoingTexts, drafts);
@@ -1051,88 +1081,152 @@ async function processRwFunnelConversation(
     { recentCustomerTexts },
   );
   scriptKeys = limitRwScriptsForCustomerTurn(scriptKeys, outgoingTexts, drafts);
-  if (!scriptKeys.length) {
-    return false;
-  }
+  scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support).filter(
+    (key): key is RwScriptKey => RW_SCRIPT_KEYS.includes(key as RwScriptKey),
+  );
+  const skipEarlySupportAi = supportAgentSkipsEarlyAi("CM", scriptKeys, support);
 
-  await tryTakeConversationForProcessing(client, convId, "RW");
+  if (scriptKeys.length) {
+    await tryTakeConversationForProcessing(client, convId, "RW");
 
-  const allowMultiSend = rwAllowsMultiSend(scriptKeys);
-  let sentAny = false;
-  const sentScriptKeys: string[] = [];
+    console.log(
+      `Pager worker: RW ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+    );
 
-  for (const scriptKey of scriptKeys) {
-    const replyText = rwScriptText(scriptKey, drafts);
-    if (!replyText) {
-      console.warn(`Pager worker: RW draft missing key=${scriptKey} ${convId.slice(0, 8)}`);
-      continue;
-    }
+    const allowMultiSend = rwAllowsMultiSend(scriptKeys);
+    let sentAny = false;
+    const sentScriptKeys: string[] = [];
 
-    const sent = await client.sendMessageReliable(convId, replyText, {
-      channelId: runtime.channelId,
-      conv,
-    });
-    if (!sent) {
-      const failures = (convState.sendFailures ?? 0) + 1;
-      await patchConversationState(deps.stateStore, state.chatId, convId, {
-        sendFailures: failures,
+    for (const scriptKey of scriptKeys) {
+      const replyText = rwScriptText(scriptKey, drafts);
+      if (!replyText) {
+        console.warn(`Pager worker: RW draft missing key=${scriptKey} ${convId.slice(0, 8)}`);
+        continue;
+      }
+
+      const sent = await client.sendMessageReliable(convId, replyText, {
+        channelId: runtime.channelId,
+        conv,
       });
-      console.error(`Pager worker: RW send failed ${convId.slice(0, 8)} key=${scriptKey}`);
-      return sentAny;
+      if (!sent) {
+        const failures = (convState.sendFailures ?? 0) + 1;
+        await patchConversationState(deps.stateStore, state.chatId, convId, {
+          sendFailures: failures,
+        });
+        console.error(`Pager worker: RW send failed ${convId.slice(0, 8)} key=${scriptKey}`);
+        return sentAny;
+      }
+      sentAny = true;
+      sentScriptKeys.push(scriptKey);
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: scriptKey,
+        sendFailures: 0,
+      });
+      await sleep(500);
+      if (!allowMultiSend) {
+        break;
+      }
     }
-    sentAny = true;
-    sentScriptKeys.push(scriptKey);
+
+    if (!sentAny) {
+      return false;
+    }
+
+    if (rwStatusMoveAfterSend(sentScriptKeys)) {
+      const statusId = findZmStatusId(state, "in_progress_registration");
+      const operatorId = await client.probeOperatorUserId();
+      const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+      if (statusId && operatorId && currentStatusId !== statusId) {
+        try {
+          await client.patchConversationStatus(convId, statusId, operatorId);
+          console.log(`Pager worker: RW ${convId.slice(0, 8)} status -> in progress`);
+        } catch (error) {
+          console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+        }
+      }
+    }
+
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,
+      currentStage: rwRegLinkSentInHistory(
+        [...outgoingTexts, ...sentScriptKeys.map((k) => drafts?.[k as RwScriptKey]?.text ?? "")],
+        drafts,
+      )
+        ? "engaged"
+        : "new_lead",
+      funnelStep: Math.max(effectiveStep, sentScriptKeys.includes("05_link") ? 4 : effectiveStep),
       lastCustomerMessageId: lastIncoming.id,
       lastCustomerMessageAt: lastIncoming.createdAt,
       lastReplyAt: new Date().toISOString(),
-      lastReplyRole: scriptKey,
+      lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1],
       sendFailures: 0,
     });
-    await sleep(500);
-    if (!allowMultiSend) {
-      break;
+
+    return true;
+  }
+
+  if (!skipEarlySupportAi && deps.env.AI_ENABLED) {
+    const aiHandledEarly = await tryRunAiAgentTurn(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "CM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+        folderEnabled,
+      },
+    );
+    if (aiHandledEarly) {
+      return true;
     }
   }
 
-  if (!sentAny) {
-    return false;
+  if (
+    deps.env.AI_ENABLED &&
+    (await trySupportAgentWhenNoScripts(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "CM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+      },
+    ))
+  ) {
+    return true;
   }
-
-  if (rwStatusMoveAfterSend(sentScriptKeys)) {
-    const statusId = findZmStatusId(state, "in_progress_registration");
-    const operatorId = await client.probeOperatorUserId();
-    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
-    if (statusId && operatorId && currentStatusId !== statusId) {
-      try {
-        await client.patchConversationStatus(convId, statusId, operatorId);
-        console.log(`Pager worker: RW ${convId.slice(0, 8)} status -> in progress`);
-      } catch (error) {
-        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
-      }
-    }
-  }
-
-  await patchConversationState(deps.stateStore, state.chatId, convId, {
-    conversationId: convId,
-    channelId: runtime.channelId,
-    currentStage: rwRegLinkSentInHistory(
-      [...outgoingTexts, ...sentScriptKeys.map((k) => drafts?.[k as RwScriptKey]?.text ?? "")],
-      drafts,
-    )
-      ? "engaged"
-      : "new_lead",
-    funnelStep: Math.max(effectiveStep, sentScriptKeys.includes("05_link") ? 4 : effectiveStep),
-    lastCustomerMessageId: lastIncoming.id,
-    lastCustomerMessageAt: lastIncoming.createdAt,
-    lastReplyAt: new Date().toISOString(),
-    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1],
-    sendFailures: 0,
-  });
-
-  return true;
+  console.log(
+    `Pager worker: skip ${convId.slice(0, 8)} RW — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+  );
+  return false;
 }
 
 async function processCmConversation(

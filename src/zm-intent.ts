@@ -130,6 +130,7 @@ export function wantsDetailsAfterIntro(text: string): boolean {
   }
   return (
     /^explain\??$/i.test(t) ||
+    /^how\??$/i.test(t) ||
     /\b(how it works|how does it work|tell me more|more details|explain)\b/i.test(t)
   );
 }
