@@ -22,12 +22,24 @@ import {
   isAgeAnswer,
   isClientReadyPhrase,
   isDepositTierChoice,
-  isReadyForRegistration,
+  isReadyForRegistration as isCmReadyForRegistration,
   isRegistrationConfirmed,
   isCmRegistrationHelpRequest,
   isRegistrationAccountQuestion,
-  wantsRegistrationLink,
+  wantsRegistrationLink as cmWantsRegistrationLink,
 } from "./cm-intent.js";
+import {
+  isReadyForRegistration,
+  wantsRegistrationLink,
+  wantsDetailsAfterIntro,
+} from "./zm-intent.js";
+import {
+  explainScriptsSentInHistory,
+  regLinkSentInHistory,
+  zmScriptSentInHistory,
+  gameIdSentInHistory,
+  depositSentInHistory as zmDepositSentInHistory,
+} from "./zm-script-engine.js";
 import {
   isInProgressStatusConversation,
   isNoStatusConversation,
@@ -555,7 +567,7 @@ export function cmFunnelNeedsContinuation(
   const depositSent = cmDepositSentInHistory(outgoingTexts);
   const ready =
     isClientReadyPhrase(text) ||
-    isReadyForRegistration(text) ||
+    isCmReadyForRegistration(text) ||
     /^(oui|ok|okay|yes|d'accord)\b/i.test(text) ||
     /intéresse|interes|investir|je veux/i.test(text);
 
@@ -576,7 +588,7 @@ export function cmFunnelNeedsContinuation(
       isDepositTierChoice(text) ||
       isCmRegistrationHelpRequest(text) ||
       isRegistrationAccountQuestion(text) ||
-      wantsRegistrationLink(text)
+      cmWantsRegistrationLink(text)
     );
   }
   if (!depositSent) {
@@ -593,6 +605,65 @@ export function cmFunnelNeedsContinuation(
     isRegistrationConfirmed(text) ||
     /d[eé]p[oô]t|screenshot|preuve|image|inscrit|cr[eé][eé]/i.test(text)
   );
+}
+
+/** Re-open mid-funnel ZM chats when the customer gave a clear next-step signal. */
+export function zmFunnelNeedsContinuation(
+  customerText: string,
+  outgoingTexts: string[],
+  options?: { hasImage?: boolean },
+): boolean {
+  const text = (customerText || "").trim();
+  if (options?.hasImage && regLinkSentInHistory(outgoingTexts)) {
+    return true;
+  }
+  if (!text && !options?.hasImage) {
+    return false;
+  }
+  if (isCustomerClarificationMessage(text) || isLinkAccessProblemMessage(text)) {
+    return true;
+  }
+  if (!text) {
+    return false;
+  }
+
+  const introSent = zmScriptSentInHistory(outgoingTexts, "01_intro");
+  const explainSent = explainScriptsSentInHistory(outgoingTexts);
+  const linkSent = regLinkSentInHistory(outgoingTexts);
+  const gameIdAskSent = gameIdSentInHistory(outgoingTexts);
+  const depositSent = zmDepositSentInHistory(outgoingTexts);
+  const ready =
+    isReadyForRegistration(text) ||
+    /^(ok|okay|yes|sure|alright|yeah|yep)\b/i.test(text) ||
+    wantsRegistrationLink(text);
+
+  if (!introSent) {
+    return true;
+  }
+  if (!explainSent) {
+    return (
+      ready ||
+      wantsDetailsAfterIntro(text) ||
+      /how|explain|what|tell me|interested|start/i.test(text)
+    );
+  }
+  if (!linkSent) {
+    return ready || wantsRegistrationLink(text) || /register|promo|code|link/i.test(text);
+  }
+  if (!gameIdAskSent && !depositSent) {
+    return (
+      ready ||
+      Boolean(options?.hasImage) ||
+      /join|registered|account|inscri|created/i.test(text)
+    );
+  }
+  if (gameIdAskSent && !depositSent) {
+    return (
+      Boolean(options?.hasImage) ||
+      /deposit|paid|screenshot|proof|sent|done/i.test(text)
+    );
+  }
+  return false;
 }
 
 export function shouldQueueConversationFromThread(
@@ -658,6 +729,16 @@ export function assessReplyEligibility(
     ) {
       return { eligible: true };
     }
+    if (
+      options?.country === "ZM" &&
+      zmFunnelNeedsContinuation(
+        (lastIncoming.text || "").trim(),
+        collectOutgoingTextsFromThread(sortedMessages),
+        cmFunnelImageOpts(lastIncoming),
+      )
+    ) {
+      return { eligible: true };
+    }
     const botReplied = hasBotReplyAfterCustomerMessage(
       sortedMessages,
       lastIncoming,
@@ -703,6 +784,16 @@ export function assessReplyEligibility(
     ) {
       return { eligible: true };
     }
+    if (
+      options?.country === "ZM" &&
+      zmFunnelNeedsContinuation(
+        (lastIncoming.text || "").trim(),
+        collectOutgoingTextsFromThread(sortedMessages),
+        cmFunnelImageOpts(lastIncoming),
+      )
+    ) {
+      return { eligible: true };
+    }
     return { eligible: false, reason: "awaiting_customer_reply" };
   }
 
@@ -720,6 +811,16 @@ export function assessReplyEligibility(
     if (
       options?.country === "CM" &&
       cmFunnelNeedsContinuation(
+        (lastIncoming.text || "").trim(),
+        collectOutgoingTextsFromThread(sortedMessages),
+        cmFunnelImageOpts(lastIncoming),
+      )
+    ) {
+      return { eligible: true };
+    }
+    if (
+      options?.country === "ZM" &&
+      zmFunnelNeedsContinuation(
         (lastIncoming.text || "").trim(),
         collectOutgoingTextsFromThread(sortedMessages),
         cmFunnelImageOpts(lastIncoming),

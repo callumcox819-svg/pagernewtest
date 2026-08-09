@@ -13,6 +13,7 @@ import {
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
 import { runAiAgentTextTurn, runAiAgentVisionTurn, detectImageMimeType, customerWantsSupportAgentReply } from "./ai-agent.js";
+import { RW_AI_COUNTRY } from "./ai-country-language.js";
 import {
   cmVisionExtractToCombinedText,
   maybeAiVisionExtractCmProof,
@@ -46,6 +47,7 @@ import {
   shouldProcessConversation,
   shouldQueueEgConversation,
   cmFunnelNeedsContinuation,
+  zmFunnelNeedsContinuation,
   isActionableCustomerMessage,
   shouldQueueCmConversation,
   shouldQueueZmConversation,
@@ -998,7 +1000,7 @@ async function processRwFunnelConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const lastIncoming = findLatestIncomingMessage(sorted, conv, undefined, "CM");
+  const lastIncoming = findLatestIncomingMessage(sorted, conv, undefined, RW_AI_COUNTRY);
   if (!lastIncoming) {
     return false;
   }
@@ -1012,7 +1014,7 @@ async function processRwFunnelConversation(
     Boolean(latestCustomerText);
 
   const folderEnabled = isConversationInOperatorEnabledFolders(conv, state);
-  const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
+  const support = buildSupportSnapshot(RW_AI_COUNTRY, isInProgressStatusConversation(conv), outgoingTexts, {
     operatorFolderEnabled: folderEnabled,
   });
   const rwInProgressBypass =
@@ -1022,7 +1024,7 @@ async function processRwFunnelConversation(
   if (
     shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
       operatorUserId,
-      country: "CM",
+      country: RW_AI_COUNTRY,
     })
   ) {
     console.log(`Pager worker: skip ${convId.slice(0, 8)} RW — bot_spoke_last (awaiting_customer)`);
@@ -1043,7 +1045,6 @@ async function processRwFunnelConversation(
         bypass: rwNewLeadBypass || rwInProgressBypass,
         operatorUserId,
         countryLabel: "RW",
-        country: "CM",
       },
     ))
   ) {
@@ -1081,10 +1082,10 @@ async function processRwFunnelConversation(
     { recentCustomerTexts },
   );
   scriptKeys = limitRwScriptsForCustomerTurn(scriptKeys, outgoingTexts, drafts);
-  scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support).filter(
+  scriptKeys = filterScriptKeysForSupportAgent(RW_AI_COUNTRY, scriptKeys, latestCustomerText, support).filter(
     (key): key is RwScriptKey => RW_SCRIPT_KEYS.includes(key as RwScriptKey),
   );
-  const skipEarlySupportAi = supportAgentSkipsEarlyAi("CM", scriptKeys, support);
+  const skipEarlySupportAi = supportAgentSkipsEarlyAi(RW_AI_COUNTRY, scriptKeys, support);
 
   if (scriptKeys.length) {
     await tryTakeConversationForProcessing(client, convId, "RW");
@@ -1182,7 +1183,7 @@ async function processRwFunnelConversation(
       convState,
       lastIncoming,
       {
-        country: "CM",
+        country: RW_AI_COUNTRY,
         customerText: latestCustomerText,
         recentCustomerTexts,
         outgoingTexts,
@@ -1210,7 +1211,7 @@ async function processRwFunnelConversation(
       convState,
       lastIncoming,
       {
-        country: "CM",
+        country: RW_AI_COUNTRY,
         customerText: latestCustomerText,
         recentCustomerTexts,
         outgoingTexts,
@@ -1764,54 +1765,7 @@ async function processZmConversation(
   scriptKeys = filterScriptKeysForSupportAgent("ZM", scriptKeys, latestCustomerText, support);
   const skipEarlySupportAi = supportAgentSkipsEarlyAi("ZM", scriptKeys, support);
 
-  if (!skipEarlySupportAi) {
-    const aiHandledEarly = await tryRunAiAgentTurn(
-      deps,
-      state,
-      client,
-      conv,
-      runtime,
-      convId,
-      convState,
-      lastIncoming,
-      {
-        country: "ZM",
-        customerText: latestCustomerText,
-        recentCustomerTexts,
-        outgoingTexts,
-        funnelStep: effectiveStep,
-        intent,
-        scriptKeys,
-        support,
-        folderEnabled,
-      },
-    );
-    if (aiHandledEarly) {
-      return true;
-    }
-  }
-
-  if (!scriptKeys.length) {
-    if (
-      await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
-        country: "ZM",
-        customerText: latestCustomerText,
-        recentCustomerTexts,
-        outgoingTexts,
-        funnelStep: effectiveStep,
-        intent,
-        scriptKeys,
-        support,
-      })
-    ) {
-      return true;
-    }
-    console.log(
-      `Pager worker: skip ${convId.slice(0, 8)} ZM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
-    );
-    return false;
-  }
-
+  if (scriptKeys.length) {
   await tryTakeConversationForProcessing(client, convId);
 
   console.log(
@@ -1970,6 +1924,53 @@ async function processZmConversation(
   }
 
   return true;
+  }
+
+  if (!skipEarlySupportAi) {
+    const aiHandledEarly = await tryRunAiAgentTurn(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "ZM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+        folderEnabled,
+      },
+    );
+    if (aiHandledEarly) {
+      return true;
+    }
+  }
+
+  if (
+    await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "ZM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      scriptKeys,
+      support,
+    })
+  ) {
+    return true;
+  }
+  console.log(
+    `Pager worker: skip ${convId.slice(0, 8)} ZM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+  );
+  return false;
 }
 
 async function sendEgRegistrationThenLink(
@@ -3107,6 +3108,10 @@ async function ensureCustomerMessageEligible(
       (country === "CM" &&
         cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted), {
           hasImage: Boolean(extractProofImageUrl(lastIncoming)),
+        })) ||
+      (country === "ZM" &&
+        zmFunnelNeedsContinuation(customerText, collectZmOutgoingTexts(sorted), {
+          hasImage: Boolean(extractProofImageUrl(lastIncoming)),
         })));
 
   if ((options?.bypass && actionable) || unreadNeedsScriptPass || funnelContinuation) {
@@ -3122,7 +3127,7 @@ async function ensureCustomerMessageEligible(
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate(customerText)})`,
     );
-    if (unreadOrIncoming) {
+    if (unreadOrIncoming && botAlreadyReplied) {
       try {
         await client.acknowledgeConversation(convId);
       } catch {
@@ -3137,7 +3142,7 @@ async function ensureCustomerMessageEligible(
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (text=${truncate(customerText)})`,
     );
-    if (unreadOrIncoming) {
+    if (unreadOrIncoming && botAlreadyReplied) {
       try {
         await client.acknowledgeConversation(convId);
       } catch {
@@ -3160,7 +3165,7 @@ async function ensureCustomerMessageEligible(
       console.log(
         `Pager worker: skip ${convId.slice(0, 8)}${label} — awaiting_customer_reply (thread synced, text=${truncate(customerText)})`,
       );
-      if (unreadOrIncoming) {
+      if (unreadOrIncoming && botAlreadyReplied) {
         try {
           await client.acknowledgeConversation(convId);
         } catch {

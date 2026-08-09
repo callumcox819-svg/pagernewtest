@@ -20,13 +20,18 @@ export const AI_MARKET_LANGUAGE: Record<
   },
 };
 
+/** AI market code for Rwanda (English scripts — not CM French). */
+export const RW_AI_COUNTRY: CountryCode = "ZM";
+
 export function buildAiLanguageLockRule(country: CountryCode): string {
   const { label, neverUse } = AI_MARKET_LANGUAGE[country];
   return [
     `CRITICAL LANGUAGE: The customer is in market ${country}.`,
     `Write your ENTIRE reply ONLY in ${label}.`,
     `Do NOT use ${neverUse} in the reply (except brand names like 1xBET or MTN).`,
-    "Mirror the customer's tone but stay in that language.",
+    country === "ZM"
+      ? "Always write in English even if the customer writes in French or another language."
+      : "Mirror the customer's tone but stay in that language.",
   ].join(" ");
 }
 
