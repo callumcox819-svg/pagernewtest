@@ -215,7 +215,7 @@ const INBOX_PAGES_EG = 25;
 /** Deep enough for large inboxes (2500+ chats) — do not stop until unread cap or end. */
 const INBOX_PAGES_DEEP = 25;
 /** Max read threads per channel per cycle during «догнать чаты». */
-const CATCH_UP_INBOX_CAP = 50;
+const CATCH_UP_INBOX_CAP = 120;
 
 const operatorCyclesInFlight = new Set<number>();
 const conversationsInFlight = new Set<string>();
@@ -631,7 +631,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       await deps.telegram.sendMessage(
         freshState.chatId,
         [
-          "Догон чатов (10 ч, read+unread):",
+          "Догон чатов (24 ч, read+unread):",
           `в очереди ${catchUpChecked}, отправлено ответов ${catchUpReplied}.`,
           catchUpReplied < catchUpChecked
             ? "Остальные — без скрипта или уже отвечены в треде."
@@ -926,19 +926,33 @@ async function buildWorkQueue(
   for (const conv of folderScopedConversations) {
     const channelId = conv.channelId || conv.channel?.id || "";
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
+    const catchUpEligible =
+      catchUpActive &&
+      catchUpAdded < CATCH_UP_INBOX_CAP &&
+      shouldQueueCatchUpConversation(conv);
     if (runtime?.runtime.country === "EG") {
-      if (!shouldQueueEgConversation(conv)) {
+      if (!shouldQueueEgConversation(conv) && !catchUpEligible) {
         continue;
       }
     } else if (runtime?.runtime.country === "CM") {
-      if (!shouldQueueCmConversation(conv)) {
+      if (!shouldQueueCmConversation(conv) && !catchUpEligible) {
         continue;
       }
     } else if (runtime?.runtime.country === "ZM") {
-      if (!shouldQueueZmConversation(conv)) {
+      if (!shouldQueueZmConversation(conv) && !catchUpEligible) {
         continue;
       }
-    } else if (!shouldProcessConversation(conv)) {
+    } else if (runtime?.runtime.country === "RW") {
+      if (!shouldQueueZmConversation(conv) && !catchUpEligible) {
+        continue;
+      }
+    } else if (!shouldProcessConversation(conv) && !catchUpEligible) {
+      continue;
+    }
+    if (catchUpEligible && !selected.has(conv.id)) {
+      selected.set(conv.id, conv);
+      catchUpConversationIds.add(conv.id);
+      catchUpAdded += 1;
       continue;
     }
     selected.set(conv.id, conv);

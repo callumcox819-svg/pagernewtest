@@ -53,10 +53,10 @@ export function isNewLeadConversation(conv: PagerConversation): boolean {
 export const FRESH_CUSTOMER_MESSAGE_MS = 30 * 60 * 1000;
 
 /** «Догнать чаты»: read + unread threads in the window where the bot has not replied. */
-export const CATCH_UP_READ_WINDOW_MS = 10 * 60 * 60 * 1000;
+export const CATCH_UP_READ_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** How long the channels-menu catch-up stays active after one click. */
-export const CATCH_UP_READ_ACTIVE_MS = 25 * 60 * 1000;
+export const CATCH_UP_READ_ACTIVE_MS = 35 * 60 * 1000;
 
 export function isCatchUpReadActive(
   catchUp?: { activeUntil?: string },
@@ -90,6 +90,9 @@ export function shouldQueueCatchUpReadConversation(conv: PagerConversation): boo
   if (!lastAt || !isWithinCatchUpReadWindow(lastAt)) {
     return false;
   }
+  if (isNoStatusConversation(conv)) {
+    return isIncomingDirection(conv.lastMessageDirection) || isNewLeadConversation(conv);
+  }
   return isIncomingDirection(conv.lastMessageDirection);
 }
 
@@ -104,6 +107,10 @@ export function shouldQueueCatchUpUnreadConversation(conv: PagerConversation): b
   const lastAt = resolveLastMessageAt(conv);
   if (!lastAt || !isWithinCatchUpReadWindow(lastAt)) {
     return false;
+  }
+  // «Без статусу» unread backlog — always eligible within the catch-up window.
+  if (isNoStatusConversation(conv)) {
+    return true;
   }
   return (
     isIncomingDirection(conv.lastMessageDirection) ||
