@@ -117,7 +117,10 @@ export function tierSentInHistory(outgoingTexts: string[]): boolean {
   return (
     blob.includes("140 000 cfa") ||
     blob.includes("190 000 cfa") ||
-    blob.includes("1 000 cfa") ||
+    blob.includes("1 000 cfa — 140") ||
+    blob.includes("1 000 cfa - 140") ||
+    blob.includes("1 500 cfa — 190") ||
+    blob.includes("1 500 cfa - 190") ||
     blob.includes("que vas-tu choisir") ||
     blob.includes("tu choisis quoi") ||
     blob.includes("voici ce que tu peux obtenir") ||

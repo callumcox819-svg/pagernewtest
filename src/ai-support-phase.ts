@@ -197,6 +197,24 @@ export function scriptKeysIncludeDeposit(
   return scriptKeys.some((key) => set.has(key));
 }
 
+/** Pre-«в процессе»: queued funnel scripts must run before the AI agent. */
+export function hasPreSupportFunnelScripts(
+  country: CountryCode,
+  scriptKeys: string[],
+): boolean {
+  if (!scriptKeys.length) {
+    return false;
+  }
+  const cfg = getSupportFunnelConfig(country);
+  const mechanical = new Set([
+    ...cfg.introScriptKeys,
+    ...cfg.linkResendScriptKeys,
+    ...cfg.depositScriptKeys,
+    ...cfg.gameIdScriptKeys,
+  ]);
+  return scriptKeys.some((key) => mechanical.has(key));
+}
+
 export function inProgressFollowUpEligible(
   support: SupportSnapshot,
   customerText: string,

@@ -2,6 +2,7 @@ import type { CountryCode } from "./config.js";
 import type { AppEnv } from "./env.js";
 import {
   getSupportFunnelConfig,
+  hasPreSupportFunnelScripts,
   type SupportSnapshot,
 } from "./ai-support-phase.js";
 import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion, isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
@@ -111,6 +112,12 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
     return false;
   }
   if (ctx.intent === "declined") {
+    return false;
+  }
+  if (
+    !ctx.support?.active &&
+    hasPreSupportFunnelScripts(ctx.country, ctx.scriptKeys ?? [])
+  ) {
     return false;
   }
   if (isSimpleFunnelAcknowledgment(text)) {
