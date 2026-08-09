@@ -60,7 +60,7 @@ import {
   shouldQueueZmConversation,
   shouldSkipConversationBotSpokeLast,
   isCatchUpReadActive,
-  shouldQueueCatchUpReadConversation,
+  shouldQueueCatchUpConversation,
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
@@ -830,8 +830,8 @@ async function buildWorkQueue(
         if (
           catchUpActive &&
           catchUpAdded < CATCH_UP_INBOX_CAP &&
-          (isCm || isZm || isRw) &&
-          shouldQueueCatchUpReadConversation(conv)
+          (isCm || isZm || isRw || isEg) &&
+          shouldQueueCatchUpConversation(conv)
         ) {
           if (!selected.has(conv.id)) {
             selected.set(conv.id, conv);
@@ -2448,6 +2448,7 @@ async function processEgConversation(
         operatorUserId,
         countryLabel: "EG",
         country: "EG",
+        catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
       },
     ))
   ) {

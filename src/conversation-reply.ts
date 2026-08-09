@@ -52,7 +52,7 @@ export function isNewLeadConversation(conv: PagerConversation): boolean {
 /** Brand-new customer messages (always processed). */
 export const FRESH_CUSTOMER_MESSAGE_MS = 30 * 60 * 1000;
 
-/** «Догнать чаты»: look back at read threads with no bot reply. */
+/** «Догнать чаты»: read + unread threads in the window where the bot has not replied. */
 export const CATCH_UP_READ_WINDOW_MS = 10 * 60 * 60 * 1000;
 
 /** How long the channels-menu catch-up stays active after one click. */
@@ -91,6 +91,31 @@ export function shouldQueueCatchUpReadConversation(conv: PagerConversation): boo
     return false;
   }
   return isIncomingDirection(conv.lastMessageDirection);
+}
+
+/** Unread in the catch-up window — e.g. missed by ghost-unread filter or inbox cap. */
+export function shouldQueueCatchUpUnreadConversation(conv: PagerConversation): boolean {
+  if (!hasUnreadMarkers(conv)) {
+    return false;
+  }
+  if (isOutgoingDirection(conv.lastMessageDirection)) {
+    return false;
+  }
+  const lastAt = resolveLastMessageAt(conv);
+  if (!lastAt || !isWithinCatchUpReadWindow(lastAt)) {
+    return false;
+  }
+  return (
+    isIncomingDirection(conv.lastMessageDirection) ||
+    isNewLeadConversation(conv) ||
+    isConversationUnread(conv)
+  );
+}
+
+export function shouldQueueCatchUpConversation(conv: PagerConversation): boolean {
+  return (
+    shouldQueueCatchUpReadConversation(conv) || shouldQueueCatchUpUnreadConversation(conv)
+  );
 }
 
 export type ReplyEligibility =
