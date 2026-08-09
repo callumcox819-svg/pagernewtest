@@ -83,6 +83,7 @@ import {
   egFunnelNeedsContinuation,
   egFullRegistrationInstructionsSentInHistory,
   egIntroSentInHistory,
+  egScriptSentInHistory,
   isEgScriptTextAcceptable,
   explainScriptsSentInHistory,
   funnelStepFromScriptGaps as egFunnelStepFromScriptGaps,
@@ -204,6 +205,9 @@ const INBOX_PAGES_DEEP = 25;
 /** Max read threads per channel per cycle during «догнать чаты». */
 const CATCH_UP_INBOX_CAP = 50;
 
+const operatorCyclesInFlight = new Set<number>();
+const conversationsInFlight = new Set<string>();
+
 export async function runPagerWorkerOnceForChat(deps: WorkerDeps, chatId: number): Promise<void> {
   const state = await deps.stateStore.get(chatId);
   if (!state) {
@@ -294,6 +298,12 @@ function resolveEnabledFolderIds(
 }
 
 async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promise<void> {
+  if (operatorCyclesInFlight.has(state.chatId)) {
+    console.log(`Pager worker: chat ${state.chatId} — cycle already in flight, skip`);
+    return;
+  }
+  operatorCyclesInFlight.add(state.chatId);
+  try {
   let freshState = hydrateOperatorState((await deps.stateStore.get(state.chatId)) ?? state);
 
   if (freshState.paused) {
@@ -628,6 +638,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     } catch (error) {
       console.warn(`Catch-up notify failed chat ${freshState.chatId}:`, formatError(error));
     }
+  }
+  } finally {
+    operatorCyclesInFlight.delete(state.chatId);
   }
 }
 
@@ -998,6 +1011,12 @@ async function processConversation(
   hasCmChannel: boolean,
   hasEgChannel: boolean,
 ): Promise<boolean> {
+  if (conversationsInFlight.has(conv.id)) {
+    console.log(`Pager worker: skip ${conv.id.slice(0, 8)} — already processing`);
+    return false;
+  }
+  conversationsInFlight.add(conv.id);
+  try {
   const channelFolderIds = resolveChannelEnabledFolderIds(
     enabledFolderIds,
     runtime.runtime.country,
@@ -1029,6 +1048,9 @@ async function processConversation(
     return processEgConversation(deps, state, client, conv, runtime, channel);
   }
   return processGenericConversation(deps, state, client, conv, runtime, channel);
+  } finally {
+    conversationsInFlight.delete(conv.id);
+  }
 }
 
 /** RW: авто-воронка (встроенные скрипты, как ZM). */
@@ -1163,6 +1185,13 @@ async function processRwFunnelConversation(
   const skipEarlySupportAi = supportAgentSkipsEarlyAi(RW_AI_COUNTRY, scriptKeys, support);
 
   if (scriptKeys.length) {
+    scriptKeys = (await dropScriptKeysAlreadyInThread(client, convId, "RW", scriptKeys, drafts)).filter(
+      (key): key is RwScriptKey => RW_SCRIPT_KEYS.includes(key as RwScriptKey),
+    );
+    if (!scriptKeys.length) {
+      console.log(`Pager worker: RW ${convId.slice(0, 8)} — scripts already in thread`);
+      return false;
+    }
     await tryTakeConversationForProcessing(client, convId, "RW");
 
     console.log(
@@ -1541,6 +1570,12 @@ async function processCmConversation(
     return false;
   }
 
+  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "CM", scriptKeys);
+  if (!scriptKeys.length) {
+    console.log(`Pager worker: CM ${convId.slice(0, 8)} — scripts already in thread`);
+    return false;
+  }
+
   await tryTakeConversationForProcessing(client, convId);
 
   console.log(
@@ -1843,6 +1878,10 @@ async function processZmConversation(
   const skipEarlySupportAi = supportAgentSkipsEarlyAi("ZM", scriptKeys, support);
 
   if (scriptKeys.length) {
+  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "ZM", scriptKeys);
+  if (!scriptKeys.length) {
+    console.log(`Pager worker: ZM ${convId.slice(0, 8)} — scripts already in thread`);
+  } else {
   await tryTakeConversationForProcessing(client, convId);
 
   console.log(
@@ -2001,6 +2040,7 @@ async function processZmConversation(
   }
 
   return true;
+  }
   }
 
   if (!skipEarlySupportAi) {
@@ -2432,6 +2472,11 @@ async function processEgConversation(
   }
 
   // Take/read only when we actually have something to send — prevents overnight silence.
+  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "EG", scriptKeys);
+  if (!scriptKeys.length) {
+    console.log(`Pager worker: EG ${convId.slice(0, 8)} — scripts already in thread`);
+    return false;
+  }
   await tryTakeConversationForProcessing(client, convId, "EG");
 
   console.log(
@@ -2999,6 +3044,39 @@ async function refreshLiveChannelsFromApi(
     );
     return state;
   }
+}
+
+type FunnelSendCountry = "CM" | "ZM" | "EG" | "RW";
+
+/** Re-read thread before send — avoids duplicate scripts when two cycles race (e.g. catch-up kick). */
+async function dropScriptKeysAlreadyInThread(
+  client: PagerClient,
+  convId: string,
+  country: FunnelSendCountry,
+  scriptKeys: string[],
+  rwDrafts?: ReturnType<typeof rwActiveScriptDrafts>,
+): Promise<string[]> {
+  const unique = [...new Set(scriptKeys)];
+  if (!unique.length) {
+    return unique;
+  }
+  const messages = await client.listMessages(convId, 1, 80);
+  if (country === "CM") {
+    const out = collectCmOutgoingTexts(messages);
+    return unique.filter((key) => !cmScriptSentInHistory(out, key));
+  }
+  if (country === "ZM") {
+    const out = collectZmOutgoingTexts(messages);
+    return unique.filter((key) => !zmScriptSentInHistory(out, key));
+  }
+  if (country === "RW") {
+    const out = collectRwOutgoingTexts(messages);
+    return unique.filter(
+      (key) => !rwScriptSentInHistory(out, key as RwScriptKey, rwDrafts),
+    );
+  }
+  const out = collectEgOutgoingTexts(messages);
+  return unique.filter((key) => !egScriptSentInHistory(out, key));
 }
 
 async function tryTakeConversationForProcessing(
