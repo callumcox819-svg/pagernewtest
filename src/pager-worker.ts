@@ -3611,6 +3611,7 @@ function pickLiveTemplateBank(
     EG: ["егип", "egypt", "hapka"],
     CM: ["камер", "cameroon", "cameroun"],
     RW: ["ruand", "rwand", "rw"],
+    CL: ["chile", "chili", "чили", "cl"],
   };
   const matched = banks.find((bank) => {
     const normalized = bank.name.toLowerCase();
@@ -3673,7 +3674,7 @@ function buildRuntimeChannelConfig(
   const mapped = getChannelConfig(config, runtime.channelId);
   const country = runtime.runtime.country;
   const templateBank = resolveYamlTemplateBankName(config, country, runtime.channelId);
-  const yamlCountry = (country === "RW" ? "CM" : country) as CountryCode;
+  const yamlCountry = (country === "RW" || country === "CL" ? "CM" : country) as CountryCode;
 
   return {
     id: runtime.channelId,

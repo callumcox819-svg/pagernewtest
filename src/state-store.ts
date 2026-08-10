@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import pg from "pg";
 import type { Stage } from "./config.js";
 import type { AppEnv } from "./env.js";
-import type { RwLearningState } from "./rw-learn.js";
+import type { RwLearningState, WorkerCountry } from "./rw-learn.js";
 import type { StatusFolderState } from "./status-folders.js";
 
 export type PendingAction =
@@ -35,7 +35,7 @@ export type PagerAccountState = {
 
 export type ChannelRuntimeState = {
   enabled: boolean;
-  country: "ZM" | "CM" | "EG" | "RW";
+  country: WorkerCountry;
   templateBank?: string;
   templateBankId?: string;
 };

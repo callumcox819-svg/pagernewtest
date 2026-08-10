@@ -66,14 +66,22 @@ import {
   type StatsRefreshHours,
 } from "./xpartners-stats-ui.js";
 
-import { defaultCountryForChannelName, formatRwLearningSummary } from "./rw-learn.js";
+import { defaultCountryForChannelName, formatRwLearningSummary, type WorkerCountry } from "./rw-learn.js";
 
-const COUNTRY_FOLDER_HINTS: Record<"ZM" | "CM" | "EG" | "RW", string[]> = {
+const COUNTRY_FOLDER_HINTS: Record<WorkerCountry, string[]> = {
   ZM: ["замб", "zamb", "zambia"],
   EG: ["егип", "egypt", "hapka"],
   CM: ["камер", "cameroon"],
   RW: ["ruand", "rwand", "rw"],
+  CL: ["chile", "chili", "чили", "cl"],
 };
+
+const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>(["ZM", "CM", "EG", "RW", "CL"]);
+
+function parseOperatorCountry(value: string): WorkerCountry | undefined {
+  const code = value.trim().toUpperCase();
+  return OPERATOR_COUNTRY_CODES.has(code as WorkerCountry) ? (code as WorkerCountry) : undefined;
+}
 
 const env = loadEnv();
 const config = loadConfig(resolve(process.cwd(), env.BOT_CONFIG_PATH));
@@ -284,7 +292,11 @@ async function handleCallback(
       return;
     }
 
-    const country = extra as "ZM" | "CM" | "EG" | "RW";
+    const country = parseOperatorCountry(extra);
+    if (!country) {
+      await telegram.answerCallbackQuery(callbackId, "Неизвестная страна");
+      return;
+    }
     const runtime = getChannelRuntime(state, channel.id, country);
     const bank = pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), country);
     await stateStore.patch(chatId, {
@@ -301,7 +313,11 @@ async function handleCallback(
     const nextState = await stateStore.get(chatId) ?? state;
     await telegram.answerCallbackQuery(
       callbackId,
-      country === "RW" ? "Руанда · авто-воронка" : `Страна: ${country}`,
+      country === "RW"
+        ? "Руанда · авто-воронка"
+        : country === "CL"
+          ? "Чили · шаблоны подключим дальше"
+          : `Страна: ${country}`,
     );
     await showChannelsMenu(chatId, nextState, messageId);
     return;
@@ -597,14 +613,15 @@ async function handleMessage(message: TelegramMessage) {
 
   const effectiveChannel = getEffectiveChannel(state);
   const playbookCountry =
-    effectiveChannel.country === "RW" ? "CM" : effectiveChannel.country;
+    effectiveChannel.country === "RW" || effectiveChannel.country === "CL"
+      ? "CM"
+      : effectiveChannel.country;
   const playbook = getPlaybook(config, playbookCountry);
   const channelForDecision = {
     ...effectiveChannel,
-    country: (effectiveChannel.country === "RW" ? "CM" : effectiveChannel.country) as
-      | "ZM"
-      | "CM"
-      | "EG",
+    country: (effectiveChannel.country === "RW" || effectiveChannel.country === "CL"
+      ? "CM"
+      : effectiveChannel.country) as "ZM" | "CM" | "EG",
   };
 
   if (message.photo?.length) {
@@ -1035,7 +1052,7 @@ function getLiveTemplateBanks(state: ChatState) {
 function getChannelRuntime(
   state: ChatState,
   channelId: string,
-  fallbackCountry: "ZM" | "CM" | "EG" | "RW",
+  fallbackCountry: WorkerCountry,
 ) {
   const existing = state.channels?.[channelId];
   if (existing) {
@@ -1053,7 +1070,7 @@ function getChannelRuntime(
 
 function pickTemplateBankFromLiveBanks(
   banks: Array<{ id: string; name: string }>,
-  country: "ZM" | "CM" | "EG" | "RW",
+  country: WorkerCountry,
 ) {
   if (!banks.length) {
     return undefined;
@@ -1319,12 +1336,12 @@ function getChannelEnabled(state: ChatState, channelId: string): boolean {
 function getChannelCountry(
   state: ChatState,
   channelId: string,
-  fallback: "ZM" | "CM" | "EG" | "RW",
-): "ZM" | "CM" | "EG" | "RW" {
+  fallback: WorkerCountry,
+): WorkerCountry {
   return state.channels?.[channelId]?.country ?? fallback;
 }
 
-function inferCountryFromName(name: string): "ZM" | "CM" | "EG" | "RW" {
+function inferCountryFromName(name: string): WorkerCountry {
   return defaultCountryForChannelName(name);
 }
 

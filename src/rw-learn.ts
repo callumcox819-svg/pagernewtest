@@ -19,7 +19,7 @@ export const RW_LEARN_CHANNEL_HINTS = [
   "patrick uwimana",
 ] as const;
 
-export type WorkerCountry = "ZM" | "CM" | "EG" | "RW";
+export type WorkerCountry = "ZM" | "CM" | "EG" | "RW" | "CL";
 
 export type RwLearningEventKind =
   | "no_status_lead"
@@ -85,6 +85,9 @@ export function defaultCountryForChannelName(name: string): WorkerCountry {
     return "RW";
   }
   const normalized = name.toLowerCase();
+  if (/\bchile\b|\bchili\b|\bcl\b/.test(normalized)) {
+    return "CL";
+  }
   if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {
     return "EG";
   }
