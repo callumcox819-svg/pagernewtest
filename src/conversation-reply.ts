@@ -283,6 +283,10 @@ export function shouldQueueZmConversation(conv: PagerConversation): boolean {
   return shouldQueueCmConversation(conv);
 }
 
+export function shouldQueueClConversation(conv: PagerConversation): boolean {
+  return shouldQueueCmConversation(conv);
+}
+
 /**
  * Thread already ends with our reply — do not run scripts/AI again until the customer writes.
  * With a stale unread badge, also skip when we already delivered after the last customer line.

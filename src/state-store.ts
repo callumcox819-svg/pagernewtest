@@ -55,6 +55,8 @@ export type ConversationRuntimeState = {
   inProgressFollowUpDueAt?: string;
   inProgressFollowUpVariant?: 0 | 1;
   inProgressFollowUpSentAt?: string;
+  /** Chile funnel reply language (es/en/fr). */
+  clReplyLanguage?: "es" | "en" | "fr";
 };
 
 export type ChatState = {

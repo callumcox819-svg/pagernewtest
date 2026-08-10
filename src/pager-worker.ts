@@ -57,6 +57,7 @@ import {
   zmFunnelNeedsContinuation,
   isActionableCustomerMessage,
   shouldQueueCmConversation,
+  shouldQueueClConversation,
   shouldQueueZmConversation,
   shouldSkipConversationBotSpokeLast,
   isCatchUpReadActive,
@@ -175,6 +176,28 @@ import type {
   StateStore,
 } from "./state-store.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
+import { loadLocalClScript } from "./cl-local-scripts.js";
+import { resolveClReplyLanguage } from "./cl-language.js";
+import { clFunnelNeedsContinuation } from "./cl-funnel-continuation.js";
+import {
+  classifyClMessage,
+  clScriptSentInHistory,
+  collectOutgoingTexts as collectClOutgoingTexts,
+  funnelStepFromScriptGaps as clFunnelStepFromScriptGaps,
+  inferStepFromThread as clInferStepFromThread,
+  regLinkSentInHistory as clRegLinkSentInHistory,
+  clStatusMoveAfterSend,
+  resolveClFunnelScripts,
+  limitClScriptsForCustomerTurn,
+  clAllowsMultiSend,
+  CL_REG_SEND_KEYS,
+  tierSentInHistory as clTierSentInHistory,
+} from "./cl-script-engine.js";
+import {
+  isDepositTierChoice as isClDepositTierChoice,
+  isClRegistrationHelpRequest,
+  isRegistrationAccountQuestion as isClRegistrationAccountQuestion,
+} from "./cl-intent.js";
 import { buildEgLinkOnlyMessage, buildEgRegistrationOnlyMessage, loadLocalEgScript, shouldBlockEgBareLinkSend } from "./eg-local-scripts.js";
 import { getDeployLabel } from "./telegram-api.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
@@ -451,7 +474,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
     const country = runtime?.runtime.country;
     const folderIds =
-      country === "EG" || country === "CM" || country === "ZM" || country === "RW"
+      country === "EG" || country === "CM" || country === "ZM" || country === "RW" || country === "CL"
         ? resolveChannelEnabledFolderIds(
             enabledFolderIds,
             country,
@@ -825,12 +848,14 @@ async function buildWorkQueue(
       channel.runtime.country !== "CM" &&
       channel.runtime.country !== "EG" &&
       channel.runtime.country !== "ZM" &&
-      channel.runtime.country !== "RW"
+      channel.runtime.country !== "RW" &&
+      channel.runtime.country !== "CL"
     ) {
       continue;
     }
     const isEg = channel.runtime.country === "EG";
     const isCm = channel.runtime.country === "CM";
+    const isCl = channel.runtime.country === "CL";
     const isZm = channel.runtime.country === "ZM";
     const isRw = channel.runtime.country === "RW";
     const channelFolderIds = resolveChannelEnabledFolderIds(
@@ -870,7 +895,7 @@ async function buildWorkQueue(
         }
 
         if (
-          (isCm || isZm || isRw || isEg) &&
+          (isCm || isCl || isZm || isRw || isEg) &&
           isInProgressStatusConversation(conv)
         ) {
           const followUpState = chatState.conversations?.[conv.id];
@@ -886,7 +911,7 @@ async function buildWorkQueue(
         if (
           catchUpActive &&
           catchUpAdded < CATCH_UP_INBOX_CAP &&
-          (isCm || isZm || isRw || isEg) &&
+          (isCm || isCl || isZm || isRw || isEg) &&
           shouldQueueCatchUpConversation(conv)
         ) {
           if (!selected.has(conv.id)) {
@@ -902,6 +927,9 @@ async function buildWorkQueue(
         if (isEg && !shouldQueueEgConversation(conv)) {
           continue;
         }
+        if (isCl && !shouldQueueClConversation(conv)) {
+          continue;
+        }
         if (isCm && !shouldQueueCmConversation(conv)) {
           continue;
         }
@@ -912,7 +940,7 @@ async function buildWorkQueue(
           continue;
         }
         if (
-          (isCm || isZm || isEg || isRw) &&
+          (isCm || isCl || isZm || isEg || isRw) &&
           isOutgoingDirection(conv.lastMessageDirection) &&
           !hasUnreadMarkers(conv)
         ) {
@@ -925,6 +953,8 @@ async function buildWorkQueue(
 
         const needsReply = isEg
           ? shouldQueueEgConversation(conv)
+          : isCl
+            ? shouldQueueClConversation(conv)
           : isCm
             ? shouldQueueCmConversation(conv)
             : isZm
@@ -945,7 +975,7 @@ async function buildWorkQueue(
           continue;
         }
 
-        if ((isCm || isZm || isRw) && followUpAdded < followUpCap) {
+        if ((isCm || isCl || isZm || isRw) && followUpAdded < followUpCap) {
           const lastAt = resolveLastMessageAt(conv);
           if (
             !isInProgressStatusConversation(conv) ||
@@ -983,6 +1013,10 @@ async function buildWorkQueue(
       shouldQueueCatchUpConversation(conv);
     if (runtime?.runtime.country === "EG") {
       if (!shouldQueueEgConversation(conv) && !catchUpEligible) {
+        continue;
+      }
+    } else if (runtime?.runtime.country === "CL") {
+      if (!shouldQueueClConversation(conv) && !catchUpEligible) {
         continue;
       }
     } else if (runtime?.runtime.country === "CM") {
@@ -1208,6 +1242,9 @@ async function processConversation(
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
   if (runtime.runtime.country === "RW") {
     return processRwConversation(deps, state, client, conv, runtime, channel);
+  }
+  if (runtime.runtime.country === "CL") {
+    return processClConversation(deps, state, client, conv, runtime, channel);
   }
   if (channel.country === "CM") {
     return processCmConversation(deps, state, client, conv, runtime, channel);
@@ -1917,6 +1954,243 @@ async function processCmConversation(
   ) {
     return true;
   }
+
+  return true;
+}
+
+async function processClConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
+  const convId = conv.id;
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  if (!messages.length) {
+    return false;
+  }
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, "CM");
+  if (!lastIncoming) {
+    return false;
+  }
+
+  const operatorUserIdEarly = await client.probeOperatorUserId();
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId: operatorUserIdEarly,
+      country: "CM",
+      catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
+    })
+  ) {
+    console.log(`Pager worker: skip ${convId.slice(0, 8)} CL — bot_spoke_last`);
+    return false;
+  }
+
+  const outgoingTexts = collectClOutgoingTexts(messages);
+  const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const tierChosenRecently = recentCustomerTexts.some((line) => isClDepositTierChoice(line));
+  const awaitingRegAfterTierChoice =
+    clTierSentInHistory(outgoingTexts) &&
+    !clRegLinkSentInHistory(outgoingTexts) &&
+    (isClDepositTierChoice(latestCustomerText) ||
+      tierChosenRecently ||
+      isClRegistrationAccountQuestion(latestCustomerText) ||
+      isClRegistrationHelpRequest(latestCustomerText));
+  const clNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !clScriptSentInHistory(outgoingTexts, "01_intro") &&
+    Boolean(latestCustomerText);
+
+  const folderEnabled = isConversationInOperatorEnabledFolders(conv, currentState);
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: folderEnabled,
+  });
+  const clInProgressFollowUp =
+    inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
+    isCustomerClarificationMessage(latestCustomerText);
+
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      client,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      {
+        bypass: awaitingRegAfterTierChoice || clNewLeadBypass || clInProgressFollowUp,
+        operatorUserId: operatorUserIdEarly,
+        countryLabel: "CL",
+        country: "CL",
+        catchUpRead: isCatchUpReadActive(state.catchUpRead),
+      },
+    ))
+  ) {
+    return false;
+  }
+
+  const replyLang = resolveClReplyLanguage(
+    latestCustomerText,
+    recentCustomerTexts,
+    convState.clReplyLanguage,
+  );
+
+  const playbook = getPlaybook(deps.config, channel.country);
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
+  const threadStep = clInferStepFromThread(messages);
+  const gapStep = clFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
+  const messageReaction = resolveMessageReaction(lastIncoming);
+  const intent = classifyClMessage(latestCustomerText, {
+    hasImage: Boolean(imageUrl),
+    funnelStep: effectiveStep,
+    messageReaction,
+  });
+
+  let scriptKeys = resolveClFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
+  );
+  if (
+    clTierSentInHistory(outgoingTexts) &&
+    !clRegLinkSentInHistory(outgoingTexts) &&
+    isClDepositTierChoice(latestCustomerText) &&
+    !scriptKeys.some((key) => CL_REG_SEND_KEYS.has(key))
+  ) {
+    scriptKeys = ["05_registration", "06_link", "07_chrome"];
+  }
+  scriptKeys = limitClScriptsForCustomerTurn(scriptKeys, outgoingTexts);
+  scriptKeys = filterDisabledScriptKeys(scriptKeys);
+  scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support);
+
+  if (!scriptKeys.length) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} CL — no script (lang=${replyLang}, step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+    );
+    return false;
+  }
+
+  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "CL", scriptKeys);
+  if (!scriptKeys.length) {
+    console.log(`Pager worker: CL ${convId.slice(0, 8)} — scripts already in thread`);
+    return false;
+  }
+
+  await tryTakeConversationForProcessing(client, convId, "CL");
+
+  console.log(
+    `Pager worker: CL ${convId.slice(0, 8)} lang=${replyLang} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+  );
+
+  const allowMultiSend = clAllowsMultiSend(scriptKeys);
+  let sentAny = false;
+  const sentScriptKeys: string[] = [];
+
+  for (const scriptKey of scriptKeys) {
+    const replyText = loadLocalClScript(scriptKey, replyLang)?.trim();
+    if (!replyText) {
+      if (scriptKey === "01_intro_2") {
+        continue;
+      }
+      console.warn(`Pager worker: CL missing ${replyLang}/${scriptKey} ${convId.slice(0, 8)}`);
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: (convState.sendFailures ?? 0) + 1,
+      });
+      return sentAny;
+    }
+    sentAny = true;
+    sentScriptKeys.push(scriptKey);
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      clReplyLanguage: replyLang,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
+    await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  if (clStatusMoveAfterSend(sentScriptKeys)) {
+    const statusId = findFunnelFollowUpStatusId(currentState);
+    const operatorId = await client.probeOperatorUserId();
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+    if (statusId && operatorId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(`Pager worker: CL ${convId.slice(0, 8)} status -> in progress`);
+        if (currentStatusId !== statusId) {
+          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
+        }
+      } catch (error) {
+        console.warn(`Pager worker: CL status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    clReplyLanguage: replyLang,
+    currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
+    funnelStep: Math.max(effectiveStep, sentScriptKeys.includes("09_deposit") ? 6 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1] ?? scriptKeys[scriptKeys.length - 1],
+    sendFailures: 0,
+  });
 
   return true;
 }
@@ -3279,7 +3553,7 @@ async function refreshLiveChannelsFromApi(
   }
 }
 
-type FunnelSendCountry = "CM" | "ZM" | "EG" | "RW";
+type FunnelSendCountry = "CM" | "ZM" | "EG" | "RW" | "CL";
 
 /** Re-read thread before send — avoids duplicate scripts when two cycles race (e.g. catch-up kick). */
 async function dropScriptKeysAlreadyInThread(
@@ -3297,6 +3571,10 @@ async function dropScriptKeysAlreadyInThread(
   if (country === "CM") {
     const out = collectCmOutgoingTexts(messages);
     return unique.filter((key) => !cmScriptSentInHistory(out, key));
+  }
+  if (country === "CL") {
+    const out = collectClOutgoingTexts(messages);
+    return unique.filter((key) => !clScriptSentInHistory(out, key));
   }
   if (country === "ZM") {
     const out = collectZmOutgoingTexts(messages);
@@ -3458,12 +3736,14 @@ async function ensureCustomerMessageEligible(
     bypass?: boolean;
     operatorUserId?: string;
     countryLabel?: string;
-    country?: "ZM" | "CM" | "EG";
+    country?: "ZM" | "CM" | "EG" | "CL";
     catchUpRead?: boolean;
   },
 ): Promise<boolean> {
-  const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | undefined);
+  const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | "CL" | undefined);
   const catchUpRead = Boolean(options?.catchUpRead);
+  const threadCountry: CountryCode | undefined =
+    country === "CL" ? "CM" : (country as CountryCode | undefined);
   const customerText = (lastIncoming.text || "").trim();
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
   const alreadyRepliedInState =
@@ -3475,7 +3755,7 @@ async function ensureCustomerMessageEligible(
     lastIncoming,
     conv,
     options?.operatorUserId,
-    country,
+    threadCountry,
   );
   const unreadOrIncoming =
     hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection);
@@ -3485,7 +3765,7 @@ async function ensureCustomerMessageEligible(
     conv,
     convState,
     sorted,
-    { country, operatorUserId: options?.operatorUserId, catchUpRead },
+    { country: threadCountry, operatorUserId: options?.operatorUserId, catchUpRead },
   );
   // Unread / customer-last must reach the script engine — never bury a backlog behind state locks.
   const unreadNeedsScriptPass =
@@ -3497,6 +3777,10 @@ async function ensureCustomerMessageEligible(
       egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))) ||
       (country === "CM" &&
         cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted), {
+          hasImage: Boolean(extractProofImageUrl(lastIncoming)),
+        })) ||
+      (country === "CL" &&
+        clFunnelNeedsContinuation(customerText, collectClOutgoingTexts(sorted), {
           hasImage: Boolean(extractProofImageUrl(lastIncoming)),
         })) ||
       (country === "ZM" &&
@@ -3572,7 +3856,7 @@ async function ensureCustomerMessageEligible(
   }
 
   const eligibility = assessReplyEligibility(conv, convState, lastIncoming, sorted, {
-    country,
+    country: threadCountry,
     operatorUserId: options?.operatorUserId,
   });
   if (eligibility.eligible) {
