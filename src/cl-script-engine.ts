@@ -175,18 +175,13 @@ export function tierSentInHistory(outgoingTexts: string[]): boolean {
 }
 
 export function stepsSentInHistory(outgoingTexts: string[]): boolean {
-  const blob = outgoingTexts.join("\n").toLowerCase();
-  return (
-    blob.includes("voici comment ça fonctionne") ||
-    blob.includes("voici comment ca fonctionne") ||
-    blob.includes("d'accord, voici comment") ||
-    blob.includes("d accord, voici comment") ||
-    ((blob.includes("crée ton compte casino") || blob.includes("cree ton compte casino")) &&
-      blob.includes("dépôt minimum"))
-  );
+  return clScriptSentInHistory(outgoingTexts, "03_steps");
 }
 
 function ageQuestionSentInHistory(outgoingTexts: string[]): boolean {
+  if (clScriptSentInHistory(outgoingTexts, "02_age")) {
+    return true;
+  }
   const blob = outgoingTexts.join("\n").toLowerCase();
   return (
     blob.includes("quel âge") ||
@@ -345,12 +340,24 @@ function stepForOutgoingText(text: string): number {
   if (
     t.includes("voici comment ça fonctionne") ||
     t.includes("voici comment ca fonctionne") ||
+    t.includes("así funciona") ||
+    t.includes("asi funciona") ||
+    t.includes("here's how it works") ||
+    t.includes("heres how it works") ||
     t.includes("crée ton compte casino") ||
-    t.includes("cree ton compte casino")
+    t.includes("cree ton compte casino") ||
+    t.includes("crea tu cuenta") ||
+    t.includes("create your casino account")
   ) {
     return 3;
   }
-  if (t.includes("quel âge") || t.includes("quel age") || t.includes("age avez-vous")) {
+  if (
+    t.includes("quel âge") ||
+    t.includes("quel age") ||
+    t.includes("cuántos años") ||
+    t.includes("cuantos anos") ||
+    t.includes("how old are you")
+  ) {
     return 2;
   }
   if (t.includes("mon équipe cumule") || t.includes("mon equipe cumule") || t.includes("mi equipo suma")) {
@@ -702,7 +709,9 @@ export function resolveClFunnelScripts(
         signal ||
         isReadyForRegistration(t) ||
         wantsDetailsAfterIntro(t) ||
-        wantsRegistrationLink(t)
+        wantsRegistrationLink(t) ||
+        isClientReadyPhrase(t) ||
+        t.length > 0
       ) {
         return ["04_tier"];
       }

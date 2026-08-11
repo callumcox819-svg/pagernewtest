@@ -114,6 +114,9 @@ export function classifyClIntent(
   if (FR_POSITIVE.test(t) && t.split(/\s+/).length <= 8) {
     return "positive";
   }
+  if (/\b(ok|okay|vale|listo|de acuerdo|entendido)\b/i.test(t) && t.split(/\s+/).length <= 16) {
+    return "positive";
+  }
   if (/\?/.test(t) || /\b(comment|pourquoi|combien|quoi|what|how)\b/i.test(t)) {
     return "question";
   }
@@ -228,9 +231,9 @@ export function isClientReadyPhrase(text: string): boolean {
       t,
     ) ||
     /\b(je suis partant|je suis partante)\b/i.test(t) ||
-    /\b(d'accord compris|d accord compris|compris|bien compris|ok compris)\b/i.test(t) ||
+    /\b(d'accord compris|d accord compris|compris|bien compris|ok compris|de acuerdo|entendido|me la juego)\b/i.test(t) ||
     /\bje veux commencer|je veux continuer\b/i.test(t) ||
-    /^(pret|prete|ok|oui|d'accord|d accord)\.?$/i.test(t)
+    /^(pret|prete|ok|oui|d'accord|d accord|vale|listo)\.?$/i.test(t)
   );
 }
 
@@ -532,10 +535,10 @@ export function isFunnelPositiveReaction(text: string, funnelStep: number): bool
   if (POSITIVE_EMOJI.test(t)) {
     return true;
   }
-  if (/^(oui|ok|yes|d'accord)\.?$/i.test(t)) {
+  if (/^(oui|ok|yes|d'accord|vale|listo)\.?$/i.test(t)) {
     return true;
   }
-  if (/\boui\b/i.test(t) && t.split(/\s+/).length <= 12) {
+  if (/\b(oui|ok|yes|vale|listo|de acuerdo)\b/i.test(t) && t.split(/\s+/).length <= 16) {
     return true;
   }
   return false;
