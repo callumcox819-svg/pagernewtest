@@ -353,10 +353,10 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("quel âge") || t.includes("quel age") || t.includes("age avez-vous")) {
     return 2;
   }
-  if (t.includes("mon équipe cumule") || t.includes("mon equipe cumule")) {
+  if (t.includes("mon équipe cumule") || t.includes("mon equipe cumule") || t.includes("mi equipo suma")) {
     return 1;
   }
-  if (t.includes("tu es du cameroun") || t.includes("cameroun")) {
+  if (t.includes("eres de chile") || t.includes("are you from chile") || t.includes("tu es du chili")) {
     return 1;
   }
   return 0;

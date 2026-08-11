@@ -66,7 +66,12 @@ import {
   type StatsRefreshHours,
 } from "./xpartners-stats-ui.js";
 
-import { defaultCountryForChannelName, formatRwLearningSummary, type WorkerCountry } from "./rw-learn.js";
+import {
+  defaultCountryForChannelName,
+  formatRwLearningSummary,
+  resolveWorkerCountryForChannel,
+  type WorkerCountry,
+} from "./rw-learn.js";
 
 const COUNTRY_FOLDER_HINTS: Record<WorkerCountry, string[]> = {
   ZM: ["замб", "zamb", "zambia"],
@@ -316,7 +321,7 @@ async function handleCallback(
       country === "RW"
         ? "Руанда · авто-воронка"
         : country === "CL"
-          ? "Чили · шаблоны подключим дальше"
+          ? "Чили · локальные скрипты ES/EN/FR"
           : `Страна: ${country}`,
     );
     await showChannelsMenu(chatId, nextState, messageId);
@@ -1313,7 +1318,11 @@ function resolveChannelForState(state: ChatState, channelId: string) {
   }
 
   const country = inferCountryFromName(live.name);
-  const resolvedCountry = getChannelCountry(state, live.id, country);
+  const resolvedCountry = resolveWorkerCountryForChannel(
+    live.name,
+    state.channels?.[live.id]?.country,
+    country,
+  );
   return {
     id: live.id,
     name: live.name,

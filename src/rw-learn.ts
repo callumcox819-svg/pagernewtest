@@ -80,14 +80,42 @@ export function isRwLearnChannelName(name: string): boolean {
   });
 }
 
+/** Live Pager channels that run the Chile funnel (local scripts/cl, not CM Pager bank). */
+const CL_CHANNEL_HINTS = ["javier soto"];
+
+export function isClChannelName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  if (/\bchile\b|\bchili\b|\bcl\b/.test(normalized)) {
+    return true;
+  }
+  if (normalized.includes("javier") && normalized.includes("soto")) {
+    return true;
+  }
+  return CL_CHANNEL_HINTS.some((hint) => {
+    const parts = hint.split(/\s+/).filter(Boolean);
+    return parts.every((part) => normalized.includes(part));
+  });
+}
+
+export function resolveWorkerCountryForChannel(
+  channelName: string,
+  savedCountry?: WorkerCountry,
+  yamlCountry?: WorkerCountry,
+): WorkerCountry {
+  if (isClChannelName(channelName)) {
+    return "CL";
+  }
+  return savedCountry ?? yamlCountry ?? defaultCountryForChannelName(channelName);
+}
+
 export function defaultCountryForChannelName(name: string): WorkerCountry {
   if (isRwLearnChannelName(name)) {
     return "RW";
   }
-  const normalized = name.toLowerCase();
-  if (/\bchile\b|\bchili\b|\bcl\b/.test(normalized)) {
+  if (isClChannelName(name)) {
     return "CL";
   }
+  const normalized = name.toLowerCase();
   if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {
     return "EG";
   }

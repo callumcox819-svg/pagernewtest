@@ -2,7 +2,7 @@ import type { WorkerCountry } from "./rw-learn.js";
 import type { ConversationRuntimeState } from "./state-store.js";
 
 /** Markets that get delayed «в процессе» check-ins (each in its own language). */
-export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW";
+export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW" | "CL";
 
 export const IN_PROGRESS_FOLLOWUP_MIN_MS = 10 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_MAX_MS = 15 * 60 * 1000;
@@ -12,6 +12,7 @@ const FOLLOWUP_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   ZM: ["have you already registered", "what stage are you at"],
   RW: ["have you already registered", "what stage are you at"],
   CM: ["déjà inscrit", "quelle étape"],
+  CL: ["ya te registraste", "en qué etapa"],
   EG: ["هل قمت بالتسجيل", "في أي مرحلة"],
 };
 
@@ -19,6 +20,7 @@ const FOLLOWUP_MESSAGES: Record<InProgressFollowUpCountry, [string, string]> = {
   ZM: ["Have you already registered?", "What stage are you at now?"],
   RW: ["Have you already registered?", "What stage are you at now?"],
   CM: ["Vous êtes déjà inscrit(e) ?", "À quelle étape en êtes-vous ?"],
+  CL: ["¿Ya te registraste?", "¿En qué etapa estás ahora?"],
   EG: ["هل قمت بالتسجيل بالفعل؟", "في أي مرحلة أنت الآن؟"],
 };
 
@@ -98,5 +100,5 @@ export function buildInProgressFollowUpStatePatch(
 export function isInProgressFollowUpCountry(
   country: WorkerCountry,
 ): country is InProgressFollowUpCountry {
-  return country === "ZM" || country === "CM" || country === "EG" || country === "RW";
+  return country === "ZM" || country === "CM" || country === "EG" || country === "RW" || country === "CL";
 }

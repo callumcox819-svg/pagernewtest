@@ -23,6 +23,8 @@ import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import { isLinkAccessProblemMessage, isCustomerClarificationMessage } from "./customer-clarity.js";
 import {
   defaultCountryForChannelName,
+  isClChannelName,
+  resolveWorkerCountryForChannel,
   type WorkerCountry,
 } from "./rw-learn.js";
 import {
@@ -505,7 +507,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       item.runtime.country === "EG" ||
       item.runtime.country === "CM" ||
       item.runtime.country === "ZM" ||
-      item.runtime.country === "RW",
+      item.runtime.country === "RW" ||
+      item.runtime.country === "CL",
   )
     ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_UNREAD + INBOX_TOP_CM_FOLLOWUP)
     : 150;
@@ -825,7 +828,8 @@ async function buildWorkQueue(
         (runtime.runtime.country !== "CM" &&
           runtime.runtime.country !== "EG" &&
           runtime.runtime.country !== "ZM" &&
-          runtime.runtime.country !== "RW")
+          runtime.runtime.country !== "RW" &&
+          runtime.runtime.country !== "CL")
       ) {
         continue;
       }
@@ -1164,11 +1168,13 @@ async function trySendInProgressRegistrationFollowUp(
   const outgoingTexts =
     country === "CM"
       ? collectCmOutgoingTexts(messages)
-      : country === "ZM"
-        ? collectZmOutgoingTexts(messages)
-        : country === "EG"
-          ? collectEgOutgoingTexts(messages)
-          : collectRwOutgoingTexts(messages);
+      : country === "CL"
+        ? collectClOutgoingTexts(messages)
+        : country === "ZM"
+          ? collectZmOutgoingTexts(messages)
+          : country === "EG"
+            ? collectEgOutgoingTexts(messages)
+            : collectRwOutgoingTexts(messages);
 
   if (inProgressFollowUpAlreadySent(country, outgoingTexts)) {
     await patchConversationState(deps.stateStore, state.chatId, convId, {
@@ -1240,10 +1246,17 @@ async function processConversation(
   }
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
-  if (runtime.runtime.country === "RW") {
+  const workerCountry = runtime.runtime.country;
+  if (workerCountry === "RW") {
     return processRwConversation(deps, state, client, conv, runtime, channel);
   }
-  if (runtime.runtime.country === "CL") {
+  if (workerCountry === "CL") {
+    return processClConversation(deps, state, client, conv, runtime, channel);
+  }
+  if (isClChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: ${runtime.channelName} is a Chile channel but country=${workerCountry} — routing CL`,
+    );
     return processClConversation(deps, state, client, conv, runtime, channel);
   }
   if (channel.country === "CM") {
@@ -1552,6 +1565,12 @@ async function processCmConversation(
   runtime: EnabledChannel,
   channel: ReturnType<typeof buildRuntimeChannelConfig>,
 ): Promise<boolean> {
+  if (isClChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: CM handler blocked for Chile channel ${runtime.channelName} — routing CL`,
+    );
+    return processClConversation(deps, state, client, conv, runtime, channel);
+  }
   const convId = conv.id;
 
   const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
@@ -2085,6 +2104,13 @@ async function processClConversation(
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
+  if (
+    !clScriptSentInHistory(outgoingTexts, "01_intro") &&
+    latestCustomerText.trim().length > 0 &&
+    !scriptKeys.includes("01_intro")
+  ) {
+    scriptKeys = ["01_intro", "01_intro_2"];
+  }
   if (
     clTierSentInHistory(outgoingTexts) &&
     !clRegLinkSentInHistory(outgoingTexts) &&
@@ -3393,19 +3419,21 @@ function getEnabledChannels(config: BotConfig, state: ChatState): EnabledChannel
         continue;
       }
       const yamlChannel = getChannelConfig(config, channel.id);
-      const country =
-        state.channels?.[channel.id]?.country ??
-        yamlChannel?.country ??
-        inferCountryFromChannelName(channel.name);
+      const country = resolveWorkerCountryForChannel(
+        channel.name,
+        state.channels?.[channel.id]?.country,
+        yamlChannel?.country,
+      );
       const bank = pickLiveTemplateBank(state, country);
-      const runtime =
-        state.channels?.[channel.id] ??
-        ({
-          enabled: true,
-          country,
-          templateBank: yamlChannel?.templateBank ?? bank?.name,
-          templateBankId: bank?.id,
-        } satisfies ChannelRuntimeState);
+      const saved = state.channels?.[channel.id];
+      const runtime: ChannelRuntimeState = saved
+        ? { ...saved, country }
+        : {
+            enabled: true,
+            country,
+            templateBank: yamlChannel?.templateBank ?? bank?.name,
+            templateBankId: bank?.id,
+          };
       enabled.push({
         channelId: channel.id,
         channelName: channel.name,
@@ -3419,19 +3447,21 @@ function getEnabledChannels(config: BotConfig, state: ChatState): EnabledChannel
       }
       const yamlChannel = getChannelConfig(config, channelId);
       const liveChannel = liveChannels.find((channel) => channel.id === channelId);
-      const country =
-        state.channels?.[channelId]?.country ??
-        yamlChannel?.country ??
-        inferCountryFromChannelName(liveChannel?.name ?? yamlChannel?.name ?? "");
+      const country = resolveWorkerCountryForChannel(
+        liveChannel?.name ?? yamlChannel?.name ?? "",
+        state.channels?.[channelId]?.country,
+        yamlChannel?.country,
+      );
       const bank = pickLiveTemplateBank(state, country);
-      const runtime =
-        state.channels?.[channelId] ??
-        ({
-          enabled: true,
-          country,
-          templateBank: yamlChannel?.templateBank ?? bank?.name,
-          templateBankId: bank?.id,
-        } satisfies ChannelRuntimeState);
+      const saved = state.channels?.[channelId];
+      const runtime: ChannelRuntimeState = saved
+        ? { ...saved, country }
+        : {
+            enabled: true,
+            country,
+            templateBank: yamlChannel?.templateBank ?? bank?.name,
+            templateBankId: bank?.id,
+          };
       enabled.push({
         channelId,
         channelName: liveChannel?.name ?? yamlChannel?.name ?? channelId.slice(0, 8),
@@ -3443,19 +3473,21 @@ function getEnabledChannels(config: BotConfig, state: ChatState): EnabledChannel
 
   for (const channelId of enabledIds) {
     const yamlChannel = getChannelConfig(config, channelId);
-    const country =
-      state.channels?.[channelId]?.country ??
-      yamlChannel?.country ??
-      inferCountryFromChannelName(yamlChannel?.name ?? "");
+    const country = resolveWorkerCountryForChannel(
+      yamlChannel?.name ?? "",
+      state.channels?.[channelId]?.country,
+      yamlChannel?.country,
+    );
     const bank = pickLiveTemplateBank(state, country);
-    const runtime =
-      state.channels?.[channelId] ??
-      ({
-        enabled: true,
-        country,
-        templateBank: yamlChannel?.templateBank ?? bank?.name,
-        templateBankId: bank?.id,
-      } satisfies ChannelRuntimeState);
+    const saved = state.channels?.[channelId];
+    const runtime: ChannelRuntimeState = saved
+      ? { ...saved, country }
+      : {
+          enabled: true,
+          country,
+          templateBank: yamlChannel?.templateBank ?? bank?.name,
+          templateBankId: bank?.id,
+        };
     enabled.push({
       channelId,
       channelName: yamlChannel?.name ?? channelId.slice(0, 8),
