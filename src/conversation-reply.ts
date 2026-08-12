@@ -276,6 +276,16 @@ export function shouldQueueCmConversation(conv: PagerConversation): boolean {
     return true;
   }
 
+  // Customer spoke last but the thread was marked read — still queue within 24h.
+  // Without this, a missed 30-minute window leaves CM/CL/ZM chats silent overnight.
+  if (
+    isIncomingDirection(conv.lastMessageDirection) &&
+    lastAt &&
+    isWithinCatchUpReadWindow(lastAt)
+  ) {
+    return true;
+  }
+
   return false;
 }
 
@@ -443,11 +453,16 @@ export function conversationPriorityScore(conv: PagerConversation): number {
     !newLead &&
     !isNoStatusConversation(conv);
   const lastAt = Date.parse(resolveLastMessageAt(conv) ?? "");
+  const awaitingReadReply =
+    isIncomingDirection(conv.lastMessageDirection) &&
+    !hasUnreadMarkers(conv) &&
+    isWithinCatchUpReadWindow(resolveLastMessageAt(conv));
   return (
     (noStatus && (unread || incoming || fresh) ? 5_000_000 : 0) +
     (newLead ? 3_000_000 : 0) +
     (unread ? 2_000_000 : 0) +
     (fresh ? 1_000_000 : 0) +
+    (awaitingReadReply ? 900_000 : 0) +
     (incoming ? 100_000 : 0) +
     (noStatus ? 50_000 : 0) +
     (staleInProgress ? -1_000_000 : 0) +
