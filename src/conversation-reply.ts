@@ -258,6 +258,14 @@ export function shouldQueueCmConversation(conv: PagerConversation): boolean {
   const fresh = isFreshCustomerMessage(lastAt);
 
   if (hasUnreadMarkers(conv)) {
+    // Customer spoke last — always queue (mid-funnel folders, overnight unread backlog).
+    if (isIncomingDirection(conv.lastMessageDirection)) {
+      return true;
+    }
+    if (isInProgressStatusConversation(conv)) {
+      return true;
+    }
+    // Ghost badge: bot/operator spoke last, stale unread on old threads — skip.
     if (lastAt && !fresh && !isNewLeadConversation(conv)) {
       return false;
     }

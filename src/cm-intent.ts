@@ -116,8 +116,21 @@ export function classifyCmIntent(
   return "unknown";
 }
 
+/** «Le 2 ème», «1 er» → «2eme», «1er» so tier picks match after normalizeFrText. */
+function collapseFrenchOrdinals(t: string): string {
+  return t
+    .replace(/\b2\s*e?\s*me\b/g, "2eme")
+    .replace(/\b1\s*e?\s*re\b/g, "1ere")
+    .replace(/\b1\s*er\b/g, "1er")
+    .replace(/\bdeux\s*i?\s*eme\b/g, "deuxieme");
+}
+
+function tierChoiceText(text: string): string {
+  return collapseFrenchOrdinals(normalizeFrText(text));
+}
+
 export function isDepositTierChoice(text: string): boolean {
-  const t = normalizeFrText(text);
+  const t = tierChoiceText(text);
   if (!t) {
     return false;
   }
@@ -135,7 +148,10 @@ export function isDepositTierChoice(text: string): boolean {
   if (t.length <= 16 && /\ble\s+1\b/.test(t)) {
     return true;
   }
-  if (t.length <= 16 && /\ble\s+2\b/.test(t)) {
+  if (/\ble\s+2\s*e?me\b/.test(t) || /\ble\s+2\b/.test(t)) {
+    return true;
+  }
+  if (/\ble\s+1\s*(?:er|ere)\b/.test(t) || (t.length <= 16 && /\ble\s+1\b/.test(t))) {
     return true;
   }
   if (/^(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f|fc)?\.?$/i.test(t)) {

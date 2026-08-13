@@ -111,6 +111,21 @@ export function classifyClIntent(
   if (/\boui\b/i.test(t) && step < 4) {
     return "positive";
   }
+  if (/^(si|sí|claro|por supuesto|lista|listo|dale|bueno|genial|perfecto)\.?$/i.test(t)) {
+    return "positive";
+  }
+  if (
+    /\b(si|claro|por supuesto|listo|lista|dale|bueno|genial|perfecto|de acuerdo)\b/i.test(t) &&
+    t.split(/\s+/).length <= 12
+  ) {
+    return "positive";
+  }
+  if (/\b(soy chileno|soy de chile|yo soy chileno)\b/i.test(t)) {
+    return step < 2 ? "interested" : "positive";
+  }
+  if (/\b(no entiendo|explicame|explícame|explicame mas)\b/i.test(t)) {
+    return "question";
+  }
   if (FR_POSITIVE.test(t) && t.split(/\s+/).length <= 8) {
     return "positive";
   }
@@ -233,7 +248,7 @@ export function isClientReadyPhrase(text: string): boolean {
     /\b(je suis partant|je suis partante)\b/i.test(t) ||
     /\b(d'accord compris|d accord compris|compris|bien compris|ok compris|de acuerdo|entendido|me la juego)\b/i.test(t) ||
     /\bje veux commencer|je veux continuer\b/i.test(t) ||
-    /^(pret|prete|ok|oui|d'accord|d accord|vale|listo)\.?$/i.test(t)
+    /^(pret|prete|ok|oui|d'accord|d accord|vale|listo|si|claro|por supuesto|lista)\.?$/i.test(t)
   );
 }
 
@@ -535,10 +550,13 @@ export function isFunnelPositiveReaction(text: string, funnelStep: number): bool
   if (POSITIVE_EMOJI.test(t)) {
     return true;
   }
-  if (/^(oui|ok|yes|d'accord|vale|listo)\.?$/i.test(t)) {
+  if (/^(oui|ok|yes|d'accord|vale|listo|si|claro|por supuesto|lista)\.?$/i.test(t)) {
     return true;
   }
-  if (/\b(oui|ok|yes|vale|listo|de acuerdo)\b/i.test(t) && t.split(/\s+/).length <= 16) {
+  if (
+    /\b(oui|ok|yes|vale|listo|si|claro|por supuesto|de acuerdo|lista)\b/i.test(t) &&
+    t.split(/\s+/).length <= 16
+  ) {
     return true;
   }
   return false;
@@ -549,7 +567,9 @@ export function wantsDetailsAfterIntro(text: string): boolean {
   if (!t) {
     return false;
   }
-  return /\b(detail|détail|explique|etape|étapes|comment ça|comment ca|how)\b/i.test(t);
+  return /\b(detail|détail|explique|explica|explícame|explicame|etape|étapes|comment ça|comment ca|how|cómo|como funciona|cuanto|cuánto)\b/i.test(
+    t,
+  );
 }
 
 export function isReadyForRegistration(text: string): boolean {

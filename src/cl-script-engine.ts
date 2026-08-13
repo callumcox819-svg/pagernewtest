@@ -633,7 +633,8 @@ export function resolveClFunnelScripts(
         ["interested", "positive", "ready", "question"].includes(intent) ||
         signal ||
         wantsDetailsAfterIntro(t) ||
-        isClientReadyPhrase(t)
+        isClientReadyPhrase(t) ||
+        t.length > 0
       ) {
         return ["02_age"];
       }
