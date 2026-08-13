@@ -298,7 +298,7 @@ function mapSignInError(raw: string): string {
     return [
       "Логин и пароль в Railway заданы, но 1xPartners при входе через API всегда требует капчу — только пароль с сервера не проходит.",
       "",
-      "Один раз добавьте XPARTNERS_COOKIE (тот же аккаунт, вход в Chrome → F12 → graphql → Cookie).",
+      "Один раз добавьте XPARTNERS_COOKIE (тот же аккаунт: F12 → Application → Cookies → multi.1xpartners.com или Cookie из graphql).",
       "Дальше бот сам держит сессию (keep-alive + сохранение в БД); логин/пароль в Variables можно оставить.",
       "",
       "Это ограничение партнёрки, не Telegram-бота.",
@@ -310,6 +310,22 @@ function mapSignInError(raw: string): string {
 function cookiesFromEnv(env: AppEnv): string | null {
   const raw = (env.XPARTNERS_COOKIE || "").trim();
   return raw || null;
+}
+
+function xsrfHeaderFromCookieHeader(cookieHeader: string | null | undefined): Record<string, string> {
+  if (!cookieHeader?.trim()) {
+    return {};
+  }
+  const match = cookieHeader.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/i);
+  if (!match?.[1]) {
+    return {};
+  }
+  const raw = match[1].trim();
+  try {
+    return { "X-XSRF-TOKEN": decodeURIComponent(raw) };
+  } catch {
+    return { "X-XSRF-TOKEN": raw };
+  }
 }
 
 const GET_PARTNERS_CAPTCHA_MODE = `
@@ -343,9 +359,17 @@ export class XPartnersClient {
     this.fetchWithCookies = makeFetchCookie(fetch, this.jar) as typeof fetch;
   }
 
-  private requestHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  private async requestHeaders(
+    extra: Record<string, string> = {},
+    cookieSource?: string | null,
+  ): Promise<Record<string, string>> {
+    let xsrfSource = cookieSource?.trim() || extra.Cookie?.trim() || null;
+    if (!xsrfSource) {
+      xsrfSource = (await this.jar.getCookieString(BASE)) || null;
+    }
     return {
       ...BROWSER_HEADERS,
+      ...xsrfHeaderFromCookieHeader(xsrfSource),
       ...extra,
     };
   }
@@ -393,7 +417,7 @@ export class XPartnersClient {
   private async graphql<T>(items: GraphQlBatchItem[]): Promise<T> {
     const response = await this.fetchTimed(GRAPHQL, {
       method: "POST",
-      headers: this.requestHeaders({
+      headers: await this.requestHeaders({
         "Content-Type": "application/json",
         Origin: BASE,
         Referer: `${BASE}/ru/partner`,
@@ -435,12 +459,15 @@ export class XPartnersClient {
     }
     const response = await fetch(GRAPHQL, {
       method: "POST",
-      headers: this.requestHeaders({
-        "Content-Type": "application/json",
-        Origin: BASE,
-        Referer: `${BASE}/ru/partner/reports/players`,
-        Cookie: cookie,
-      }),
+      headers: await this.requestHeaders(
+        {
+          "Content-Type": "application/json",
+          Origin: BASE,
+          Referer: `${BASE}/ru/partner/reports/players`,
+          Cookie: cookie,
+        },
+        cookie,
+      ),
       body: JSON.stringify(items),
       signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS),
     });
@@ -496,7 +523,7 @@ export class XPartnersClient {
         return;
       }
       throw new Error(
-        "XPARTNERS_COOKIE не принят (истёк или обрезан при вставке). Скопируйте Cookie из graphql заново — одной строкой, с connect.sid.",
+        "XPARTNERS_COOKIE не принят (истёк или обрезан при вставке). Скопируйте Cookie из graphql заново — одной строкой, с accessToken, refreshToken и XSRF-TOKEN.",
       );
     }
 
@@ -599,7 +626,7 @@ export class XPartnersClient {
   private async loginWithPassword(login: string, password: string): Promise<void> {
     await this.fetchTimed(`${BASE}/ru/sign-in`, {
       method: "GET",
-      headers: this.requestHeaders({ Accept: "text/html" }),
+      headers: await this.requestHeaders({ Accept: "text/html" }),
     });
     const isOwnCaptcha = await this.fetchUsesOwnCaptcha();
     const batch = await this.graphql<

@@ -1,5 +1,9 @@
 import { isPositiveMessageReaction } from "./message-attachments.js";
 import { isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
+import {
+  customerAgreedAfterOfferTable,
+  customerRequestsRegistrationMaterials,
+} from "./funnel-common.js";
 
 export type CmIntent =
   | "interested"
@@ -378,13 +382,21 @@ export function isCmRegistrationHelpRequest(text: string): boolean {
   if (!t) {
     return false;
   }
-  if (/\b(vous voulez m'aide|veux m'aide|m'aider|aidez[- ]?moi|besoin d'aide)\b/i.test(t)) {
+  if (
+    /\b(vous voulez m'aide|veux m'aide|m'aider|aidez[- ]?moi|besoin d'aide)\b/i.test(t) &&
+    !/\b(lien|link|inscri|register|compte|instruction|étape|etape|code promo|envoy|donn)\b/i.test(t)
+  ) {
     return false;
   }
   return (
+    customerRequestsRegistrationMaterials(text) ||
     /\b(je ne sais pas|je sais pas|sais pas faire|pas faire|comment faire)\b/i.test(t) ||
-    /\b(aide|help).{0,24}(inscri|enregistr|compte|plateforme|lien|telecharg)\b/i.test(t) ||
-    /\b(inscri|enregistr|compte|plateforme|lien|telecharg).{0,24}(aide|help)\b/i.test(t) ||
+    /\b(aide|help).{0,40}(inscri|enregistr|compte|plateforme|lien|telecharg|instruction|étape|etape|link)\b/i.test(
+      t,
+    ) ||
+    /\b(inscri|enregistr|compte|plateforme|lien|telecharg|instruction|étape|etape|link).{0,40}(aide|help)\b/i.test(
+      t,
+    ) ||
     /\b(je connais pas|connais pas)\b/i.test(t) ||
     /\b(je ne vois pas|je vois pas|pas de plate ?forme|plateforme|telecharg|m[' ]inscrit|je fais comment)\b/i.test(
       t,
@@ -420,6 +432,12 @@ export function wantsRegistrationLink(text: string): boolean {
   if (isRegistrationConfirmed(t)) {
     return false;
   }
+  if (isCmRegistrationHelpRequest(t)) {
+    return true;
+  }
+  if (customerRequestsRegistrationMaterials(t)) {
+    return true;
+  }
   if (/^(?:le\s+)?(?:lien|link)(?:\s+please)?\s*[.!?]*$/i.test(t)) {
     return true;
   }
@@ -429,12 +447,12 @@ export function wantsRegistrationLink(text: string): boolean {
   if (/\benvoy\w*.*\blien\b|\blien\b.*\benvoy\w*\b/i.test(t)) {
     return true;
   }
-  if (/\b(envoi|envoyer|envoyez|donne|donner|donnez).{0,24}\b(lien|link|numero|numéro)\b/i.test(normalized)) {
+  if (/\b(envoi|envoyer|envoyez|donne|donner|donnez).{0,24}\b(lien|link|numero|numéro|instruction)\b/i.test(normalized)) {
     return true;
   }
   return (
-    /\b(lien|link|inscri|register|compte|account)\b/i.test(t) &&
-    /\b(envoi|envoy|donn|send|veux|besoin|where|faut|donne|donner)\b/i.test(t)
+    /\b(lien|link|inscri|register|compte|account|instruction)\b/i.test(t) &&
+    /\b(envoi|envoy|donn|send|veux|besoin|where|faut|donne|donner|help|aide)\b/i.test(t)
   );
 }
 

@@ -151,9 +151,10 @@ import {
   isCmRegistrationHelpRequest,
   isRegistrationAccountQuestion,
   isRegistrationConfirmed,
+  wantsRegistrationLink as cmWantsRegistrationLink,
 } from "./cm-intent.js";
 import { isEgDepositTierChoice, isEgJoinOrRegistrationQuestion } from "./eg-intent.js";
-import { isZmRegistrationAccountQuestion, isReadyForRegistration as zmIsReadyForRegistration, isRegistrationHelpRequest as zmIsRegistrationHelpRequest } from "./zm-intent.js";
+import { isZmRegistrationAccountQuestion, isReadyForRegistration as zmIsReadyForRegistration, isRegistrationHelpRequest as zmIsRegistrationHelpRequest, wantsRegistrationLink as zmWantsRegistrationLink } from "./zm-intent.js";
 import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
@@ -205,6 +206,7 @@ import { getDeployLabel } from "./telegram-api.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
+import { customerAgreedAfterOfferTable } from "./funnel-common.js";
 import {
   countApiStatusFolders,
   isFunnelFollowUpFolderName,
@@ -1748,6 +1750,16 @@ async function processCmConversation(
   ) {
     scriptKeys = ["05_registration", "06_link", "07_chrome"];
   }
+  if (
+    tierSentInHistory(outgoingTexts) &&
+    !cmRegLinkSentInHistory(outgoingTexts) &&
+    (cmWantsRegistrationLink(latestCustomerText) ||
+      isCmRegistrationHelpRequest(latestCustomerText) ||
+      customerAgreedAfterOfferTable(latestCustomerText)) &&
+    !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
+  ) {
+    scriptKeys = ["05_registration", "06_link", "07_chrome"];
+  }
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
   scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support);
@@ -2390,6 +2402,17 @@ async function processZmConversation(
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
   scriptKeys = filterScriptKeysForSupportAgent("ZM", scriptKeys, latestCustomerText, support);
   const skipEarlySupportAi = supportAgentSkipsEarlyAi("ZM", scriptKeys, support);
+
+  if (
+    !scriptKeys.length &&
+    zmExplainScriptsSentInHistory(outgoingTexts) &&
+    !zmRegLinkSentInHistory(outgoingTexts) &&
+    (zmWantsRegistrationLink(latestCustomerText) ||
+      zmIsRegistrationHelpRequest(latestCustomerText) ||
+      customerAgreedAfterOfferTable(latestCustomerText))
+  ) {
+    scriptKeys = ["04_registration", "05_link"];
+  }
 
   if (scriptKeys.length) {
   scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "ZM", scriptKeys);

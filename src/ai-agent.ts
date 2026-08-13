@@ -6,8 +6,13 @@ import {
   type SupportSnapshot,
 } from "./ai-support-phase.js";
 import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion, isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
-import { isDepositTierChoice } from "./cm-intent.js";
+import { isDepositTierChoice, isCmRegistrationHelpRequest, wantsRegistrationLink as cmWantsRegistrationLink } from "./cm-intent.js";
 import { tierSentInHistory } from "./cm-script-engine.js";
+import {
+  customerAgreedAfterOfferTable,
+  customerRequestsRegistrationMaterials,
+} from "./funnel-common.js";
+import { isRegistrationHelpRequest, wantsRegistrationLink } from "./zm-intent.js";
 import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import {
   type AiAssistContext,
@@ -20,6 +25,21 @@ import {
 export type AiAgentContext = AiAssistContext;
 
 export { detectImageMimeType, maybeAiAssistVision, type AiVisionContext };
+
+/** Pre-support: customer asked for link/instructions — funnel scripts must run, not AI. */
+function customerWantsPreSupportRegistration(country: CountryCode, text: string): boolean {
+  const t = text.trim();
+  if (!t) {
+    return false;
+  }
+  if (customerRequestsRegistrationMaterials(t) || customerAgreedAfterOfferTable(t)) {
+    return true;
+  }
+  if (country === "CM") {
+    return cmWantsRegistrationLink(t) || isCmRegistrationHelpRequest(t);
+  }
+  return wantsRegistrationLink(t) || isRegistrationHelpRequest(t);
+}
 
 /** Short «continue funnel» replies — scripts handle these, not the agent (pre-support only). */
 const FUNNEL_ACK =
@@ -114,6 +134,9 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
     return false;
   }
   if (ctx.intent === "declined") {
+    return false;
+  }
+  if (!ctx.support?.active && customerWantsPreSupportRegistration(ctx.country, text)) {
     return false;
   }
   if (

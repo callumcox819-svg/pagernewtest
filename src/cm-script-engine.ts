@@ -3,7 +3,7 @@ import {
   isCustomerSaysNotRegisteredYet,
   recentTextsIndicateNotRegistered,
 } from "./customer-clarity.js";
-import { registrationResendScriptKeys } from "./funnel-common.js";
+import { registrationResendScriptKeys, customerAgreedAfterOfferTable } from "./funnel-common.js";
 import {
   type CmIntent,
   classifyCmIntent,
@@ -210,6 +210,7 @@ function canSendCmRegistration(
   tierChoice: boolean,
   linkSent: boolean,
   outgoingTexts: string[],
+  customerText = "",
 ): boolean {
   if (linkSent) {
     return false;
@@ -217,7 +218,23 @@ function canSendCmRegistration(
   if (cmRegistrationInstructionsSentInHistory(outgoingTexts) && !regLinkSentInHistory(outgoingTexts)) {
     return true;
   }
-  return tierSent && tierChoice;
+  if (!tierSent) {
+    return false;
+  }
+  if (tierChoice) {
+    return true;
+  }
+  const t = customerText.trim();
+  if (!t) {
+    return false;
+  }
+  return (
+    wantsRegistrationLink(t) ||
+    isCmRegistrationHelpRequest(t) ||
+    isRegistrationAccountQuestion(t) ||
+    isReadyForRegistration(t) ||
+    customerAgreedAfterOfferTable(t)
+  );
 }
 
 /** After tier table: registration only once the client picked 1000 or 1500 CFA. */
@@ -232,7 +249,17 @@ function cmReadyForRegAfterTier(
   if (!tierSent || linkSent) {
     return false;
   }
-  return tierChoice;
+  if (tierChoice) {
+    return true;
+  }
+  const t = text.trim();
+  return (
+    wantsRegistrationLink(t) ||
+    isCmRegistrationHelpRequest(t) ||
+    isRegistrationAccountQuestion(t) ||
+    customerAgreedAfterOfferTable(t) ||
+    intent === "ready"
+  );
 }
 
 function cmRegBundleIfEligible(
@@ -240,8 +267,9 @@ function cmRegBundleIfEligible(
   tierChoice: boolean,
   linkSent: boolean,
   outgoingTexts: string[],
+  customerText = "",
 ): string[] {
-  return canSendCmRegistration(tierSent, tierChoice, linkSent, outgoingTexts)
+  return canSendCmRegistration(tierSent, tierChoice, linkSent, outgoingTexts, customerText)
     ? [...CM_REG_BUNDLE]
     : [];
 }
@@ -447,7 +475,7 @@ export function resolveCmFunnelScripts(
     if (regLinkSentInHistory(out)) {
       return ["07_chrome", "06_link"];
     }
-    const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out);
+    const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out, t);
     if (reg.length) {
       return reg;
     }
@@ -480,7 +508,7 @@ export function resolveCmFunnelScripts(
   }
 
   if (wantsRegistrationLink(t)) {
-    const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out);
+    const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out, t);
     if (reg.length) {
       return reg;
     }
@@ -628,8 +656,13 @@ export function resolveCmFunnelScripts(
     if (tierChoice || isDepositTierChoice(t)) {
       return [...CM_REG_BUNDLE];
     }
-    if (wantsRegistrationLink(t) || registrationHelp || isReadyForRegistration(t)) {
-      return ["04_tier"];
+    if (
+      wantsRegistrationLink(t) ||
+      registrationHelp ||
+      isReadyForRegistration(t) ||
+      customerAgreedAfterOfferTable(t)
+    ) {
+      return [...CM_REG_BUNDLE];
     }
   }
 
@@ -689,7 +722,7 @@ export function resolveCmFunnelScripts(
     if (cmReadyForRegAfterTier(t, intent, tierSent, tierChoice, linkSent, signal)) {
       return [...CM_REG_BUNDLE];
     }
-    if (canSendCmRegistration(tierSent, tierChoice, linkSent, out)) {
+    if (canSendCmRegistration(tierSent, tierChoice, linkSent, out, t)) {
       return [...CM_REG_BUNDLE];
     }
     if (

@@ -4,7 +4,10 @@ import {
   isCustomerSaysNotRegisteredYet,
   recentTextsIndicateNotRegistered,
 } from "./customer-clarity.js";
-import { registrationResendScriptKeys } from "./funnel-common.js";
+import {
+  customerAgreedAfterOfferTable,
+  registrationResendScriptKeys,
+} from "./funnel-common.js";
 import { looksLikeZmDepositBalanceScreenshot } from "./zm-proof.js";
 import {
   type ZmIntent,
@@ -385,6 +388,8 @@ function wantsRegistrationBundle(
   return (
     isReadyForRegistration(text) ||
     wantsRegistrationLink(text) ||
+    isRegistrationHelpRequest(text) ||
+    customerAgreedAfterOfferTable(text) ||
     intent === "ready" ||
     (positiveSignal(text, intent, effectiveStep) && effectiveStep >= 2)
   );

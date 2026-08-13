@@ -1,5 +1,9 @@
 import { isPositiveMessageReaction } from "./message-attachments.js";
 import { isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
+import {
+  customerAgreedAfterOfferTable,
+  customerRequestsRegistrationMaterials,
+} from "./funnel-common.js";
 
 export type ZmIntent =
   | "interested"
@@ -64,7 +68,7 @@ export function classifyZmIntent(
   if (isReadyForRegistration(t)) {
     return "ready";
   }
-  if (wantsRegistrationLink(t)) {
+  if (wantsRegistrationLink(t) || isRegistrationHelpRequest(t) || customerAgreedAfterOfferTable(t)) {
     return "ready";
   }
   if (!t && isPositiveMessageReaction(options?.messageReaction)) {
@@ -144,6 +148,9 @@ export function wantsRegistrationLink(text: string): boolean {
     return false;
   }
   if (isRegistrationHelpRequest(t)) {
+    return true;
+  }
+  if (customerRequestsRegistrationMaterials(t)) {
     return true;
   }
   if (/^(?:the\s+)?(?:link|url)(?:\s+please)?\s*[.!?]*$/i.test(t)) {
@@ -238,7 +245,13 @@ export function isZmRegistrationAccountQuestion(text: string): boolean {
 export function isRegistrationHelpRequest(text: string): boolean {
   const t = (text || "").trim();
   return (
-    /\b(problem|issue|error|help).{0,30}(registration|register|account)\b/i.test(t) ||
+    customerRequestsRegistrationMaterials(t) ||
+    /\b(problem|issue|error|help).{0,40}(registration|register|account|instruction|instructions|link|steps)\b/i.test(
+      t,
+    ) ||
+    /\b(registration|register|account|instruction|instructions|link|steps).{0,40}(problem|issue|error|help)\b/i.test(
+      t,
+    ) ||
     /\bscreenshot.{0,20}problem\b/i.test(t) ||
     REGISTRATION_HELP.test(t) ||
     /\b(it'?s taking me to 1xbet|i already have a 1xbet account|already have a 1xbet account|it refusing|failing to register|couldn'?t manage|with registration)\b/i.test(
