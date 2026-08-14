@@ -192,7 +192,34 @@ export function isDepositTierChoice(text: string): boolean {
   ) {
     return true;
   }
-  return isCmTier1000Choice(t) || isCmTier1500Choice(t);
+  return isCmTier1000Choice(t) || isCmTier1500Choice(t) || isCmCustomDepositAmountChoice(text);
+}
+
+/** Deposit amount not listed in tier table (e.g. «2000») — still proceed to registration. */
+export function isCmCustomDepositAmountChoice(text: string): boolean {
+  const t = tierChoiceText(text);
+  if (!t) {
+    return false;
+  }
+  if (isCmProfitFigure(text)) {
+    return false;
+  }
+  const compact = t.replace(/\s+/g, "");
+  const digitsOnly = compact.replace(/[^\d]/g, "");
+  if (/^\d{3,5}(?:cfa|frs?|f|fc)?\.?$/i.test(compact) && /^\d{3,5}$/.test(digitsOnly)) {
+    const amount = Number(digitsOnly);
+    if (amount >= 200 && amount <= 50_000) {
+      return true;
+    }
+  }
+  if (
+    t.split(/\s+/).length <= 14 &&
+    /\b(je veux|je mets|depot|depot|mettre|investir|avec|pour|mets|met)\b/i.test(t) &&
+    /\b\d{3,5}\s*(?:cfa|frs?|f|fc)?\b/i.test(t)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function isClientReadyPhrase(text: string): boolean {
