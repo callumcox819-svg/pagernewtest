@@ -12,7 +12,7 @@ for (const lang of ["es", "en", "fr"]) {
 
 const readme = `CHILE (CL) — шаблоны бота
 Регистрация: https://tinyurl.com/CLE333
-Промокод: CLE333
+Промокод: CLE577
 
 Папки:
   es/ — испанский (по умолчанию)

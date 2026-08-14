@@ -28,7 +28,7 @@ export const CL_SCRIPT_SNIPPETS: Record<string, string> = {
   "02_age": "Quel âge",
   "03_steps": "voici comment ça fonctionne",
   "04_tier": "825 CLP",
-  "05_registration": "CLE333",
+  "05_registration": "CLE577",
   "06_link": "CLE333",
   "07_chrome": "Google Chrome",
   "08_game_id": "commence par 17",
@@ -96,7 +96,7 @@ export const CL_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
     "télécharger l'application",
     "descargar la aplicación",
     "download the app",
-    "cle333",
+    "cle577",
   ],
   "06_link": ["cle333", "tinyurl.com/cle"],
   "07_chrome": ["google chrome", "copiez ce lien", "copia este enlace", "copy this link"],
@@ -110,8 +110,8 @@ export const CL_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
   "05_registration": ["voici comment ça fonctionne", "así funciona", "here's how it works"],
   "06_link": ["voici comment ça fonctionne", "así funciona"],
   "07_chrome": ["voici comment ça fonctionne", "que vas-tu choisir"],
-  "03_steps": ["cle333", "google chrome"],
-  "04_tier": ["cle333", "google chrome"],
+  "03_steps": ["cle333", "cle577", "google chrome"],
+  "04_tier": ["cle333", "cle577", "google chrome"],
 };
 
 export const CL_FOLDER_NAME_HINTS = ["chile", "chili", "чili", "cl"];
@@ -229,7 +229,7 @@ export function clRegistrationInstructionsSentInHistory(outgoingTexts: string[])
       blob.includes("download the app") ||
       blob.includes("telecharger l'app") ||
       blob.includes("télécharger l'app")) &&
-    blob.includes("cle333")
+    blob.includes("cle577")
   );
 }
 
@@ -323,7 +323,7 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("commence par 17")) {
     return 6;
   }
-  if (t.includes("cle333") || (t.includes("google chrome") && t.includes("colle"))) {
+  if (t.includes("cle577") || t.includes("cle333") || (t.includes("google chrome") && t.includes("colle"))) {
     return 5;
   }
   if (t.includes("cash056")) {

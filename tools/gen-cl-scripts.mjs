@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 const root = join(process.cwd(), "scripts", "cl");
 const link = "https://tinyurl.com/CLE333";
-const promo = "CLE333";
+const promo = "CLE577";
 
 /** CM rows → CLP at ~1.65 CLP/XAF (1000/140k XAF → 1650/16500 CLP). */
 const CLP_PER_XAF = 1.65;
