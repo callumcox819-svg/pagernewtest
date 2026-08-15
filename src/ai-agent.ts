@@ -7,7 +7,9 @@ import {
 } from "./ai-support-phase.js";
 import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion, isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
 import { isDepositTierChoice, isCmRegistrationHelpRequest, wantsRegistrationLink as cmWantsRegistrationLink } from "./cm-intent.js";
-import { tierSentInHistory } from "./cm-script-engine.js";
+import { tierSentInHistory as cmTierSentInHistory } from "./cm-script-engine.js";
+import { explainScriptsSentInHistory as zmExplainScriptsSentInHistory } from "./zm-script-engine.js";
+import { isZmDepositAmountChoice } from "./zm-intent.js";
 import {
   customerAgreedAfterOfferTable,
   customerRequestsRegistrationMaterials,
@@ -149,7 +151,15 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
     ctx.country === "CM" &&
     !ctx.support?.active &&
     isDepositTierChoice(ctx.customerText.trim()) &&
-    tierSentInHistory(ctx.recentOutgoingTexts ?? [])
+    cmTierSentInHistory(ctx.recentOutgoingTexts ?? [])
+  ) {
+    return false;
+  }
+  if (
+    ctx.country === "ZM" &&
+    !ctx.support?.active &&
+    isZmDepositAmountChoice(ctx.customerText.trim()) &&
+    zmExplainScriptsSentInHistory(ctx.recentOutgoingTexts ?? [])
   ) {
     return false;
   }

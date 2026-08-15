@@ -154,7 +154,7 @@ import {
   wantsRegistrationLink as cmWantsRegistrationLink,
 } from "./cm-intent.js";
 import { isEgDepositTierChoice, isEgJoinOrRegistrationQuestion } from "./eg-intent.js";
-import { isZmRegistrationAccountQuestion, isReadyForRegistration as zmIsReadyForRegistration, isRegistrationHelpRequest as zmIsRegistrationHelpRequest, wantsRegistrationLink as zmWantsRegistrationLink } from "./zm-intent.js";
+import { isZmRegistrationAccountQuestion, isReadyForRegistration as zmIsReadyForRegistration, isRegistrationHelpRequest as zmIsRegistrationHelpRequest, wantsRegistrationLink as zmWantsRegistrationLink, isZmDepositAmountChoice } from "./zm-intent.js";
 import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
@@ -2409,7 +2409,8 @@ async function processZmConversation(
     !zmRegLinkSentInHistory(outgoingTexts) &&
     (zmWantsRegistrationLink(latestCustomerText) ||
       zmIsRegistrationHelpRequest(latestCustomerText) ||
-      customerAgreedAfterOfferTable(latestCustomerText))
+      customerAgreedAfterOfferTable(latestCustomerText) ||
+      isZmDepositAmountChoice(latestCustomerText))
   ) {
     scriptKeys = ["04_registration", "05_link"];
   }

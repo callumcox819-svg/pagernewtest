@@ -4,6 +4,11 @@ import {
   customerAgreedAfterOfferTable,
   customerRequestsRegistrationMaterials,
 } from "./funnel-common.js";
+import {
+  isCustomMarketDepositAmount,
+  normalizeDepositText,
+  ZM_CUSTOM_DEPOSIT_RULES,
+} from "./market-deposit-choice.js";
 
 export type ZmIntent =
   | "interested"
@@ -66,6 +71,9 @@ export function classifyZmIntent(
     return "joined";
   }
   if (isReadyForRegistration(t)) {
+    return "ready";
+  }
+  if (isZmDepositAmountChoice(t)) {
     return "ready";
   }
   if (wantsRegistrationLink(t) || isRegistrationHelpRequest(t) || customerAgreedAfterOfferTable(t)) {
@@ -174,6 +182,9 @@ export function isReadyForRegistration(text: string): boolean {
   if (/\bno i am not\b/i.test(t)) {
     return false;
   }
+  if (isZmDepositAmountChoice(t)) {
+    return true;
+  }
   if (/^yes\.?$/i.test(t)) {
     return true;
   }
@@ -269,4 +280,38 @@ export function classifyZmMessage(
   },
 ): ZmIntent {
   return classifyZmIntent(text, options);
+}
+
+/** Tier table pick: 30 / 50 / 100 / 200 ZMW or option 1–4. */
+export function isZmTableDepositChoice(text: string): boolean {
+  const t = normalizeDepositText(text);
+  if (!t) {
+    return false;
+  }
+  if (/^[1-4]\.?$/.test(t)) {
+    return true;
+  }
+  if (/^(?:option|number|numero|n[o°]?)\s*[1-4]\.?$/i.test(t)) {
+    return true;
+  }
+  const compact = t.replace(/\s+/g, "");
+  if (/^(30|50|100|200)(?:zmw|kwacha|k)?\.?$/i.test(compact)) {
+    return true;
+  }
+  if (t.split(/\s+/).length <= 14 && /\b(30|50|100|200)\s*(?:zmw|kwacha|k)\b/i.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+/** Custom deposit (e.g. «15 kwacha», «75») — not necessarily in the tier table. */
+export function isZmCustomDepositAmountChoice(text: string): boolean {
+  if (isZmTableDepositChoice(text)) {
+    return false;
+  }
+  return isCustomMarketDepositAmount(text, ZM_CUSTOM_DEPOSIT_RULES);
+}
+
+export function isZmDepositAmountChoice(text: string): boolean {
+  return isZmTableDepositChoice(text) || isZmCustomDepositAmountChoice(text);
 }

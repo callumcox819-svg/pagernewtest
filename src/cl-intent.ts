@@ -1,5 +1,10 @@
 import { isPositiveMessageReaction } from "./message-attachments.js";
 import { isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
+import {
+  CL_CUSTOM_DEPOSIT_RULES,
+  isCustomMarketDepositAmount,
+  normalizeDepositText,
+} from "./market-deposit-choice.js";
 
 export type ClIntent =
   | "interested"
@@ -227,8 +232,21 @@ export function isDepositTierChoice(text: string): boolean {
     isCmTier1000Choice(t) ||
     isCmTier1500Choice(t) ||
     isClTier1000LineChoice(t) ||
-    isClTierFourthChoice(t)
+    isClTierFourthChoice(t) ||
+    isClCustomDepositAmountChoice(text)
   );
+}
+
+/** Custom CLP deposit not in tier table (e.g. «1200», «2000 CLP»). */
+export function isClCustomDepositAmountChoice(text: string): boolean {
+  const t = normalizeDepositText(text);
+  if (!t) {
+    return false;
+  }
+  if (isClProfitFigure(text)) {
+    return false;
+  }
+  return isCustomMarketDepositAmount(text, CL_CUSTOM_DEPOSIT_RULES);
 }
 
 export function isClientReadyPhrase(text: string): boolean {

@@ -8,6 +8,7 @@ import {
   customerAgreedAfterOfferTable,
   registrationResendScriptKeys,
 } from "./funnel-common.js";
+import { isZmDepositAmountChoice } from "./zm-intent.js";
 import { looksLikeZmDepositBalanceScreenshot } from "./zm-proof.js";
 import {
   type ZmIntent,
@@ -390,6 +391,7 @@ function wantsRegistrationBundle(
     wantsRegistrationLink(text) ||
     isRegistrationHelpRequest(text) ||
     customerAgreedAfterOfferTable(text) ||
+    isZmDepositAmountChoice(text) ||
     intent === "ready" ||
     (positiveSignal(text, intent, effectiveStep) && effectiveStep >= 2)
   );

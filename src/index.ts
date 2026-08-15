@@ -12,7 +12,7 @@ import { decideNextAction } from "./decision-engine.js";
 import { loadEnv } from "./env.js";
 import { PagerClient } from "./pager-client.js";
 import { runPagerWorker, runPagerWorkerOnceForChat } from "./pager-worker.js";
-import { CATCH_UP_READ_ACTIVE_MS } from "./conversation-reply.js";
+import { CATCH_UP_READ_ACTIVE_MS, isIncomingDirection } from "./conversation-reply.js";
 import { classifyProofFromImage } from "./proof-classifier.js";
 import { clearTemplateReplyCache } from "./template-resolver.js";
 import { createStateStore, type ChannelRuntimeState, type ChatState, type StateStore } from "./state-store.js";
@@ -82,6 +82,19 @@ const COUNTRY_FOLDER_HINTS: Record<WorkerCountry, string[]> = {
 };
 
 const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>(["ZM", "CM", "EG", "RW", "CL"]);
+
+const CHANNEL_COUNTRY_DISPLAY: Record<string, string> = {
+  CM: "Камерун",
+  EG: "Египет",
+  ZM: "Замбия",
+  RW: "Руанда",
+  CL: "Чили",
+};
+
+function formatChannelIdSuffix(id: string): string {
+  const compact = id.replace(/-/g, "");
+  return compact.length > 6 ? compact.slice(-6) : compact;
+}
 
 function parseOperatorCountry(value: string): WorkerCountry | undefined {
   const code = value.trim().toUpperCase();
@@ -240,6 +253,72 @@ async function handleCallback(
         messageId,
         buildChannelKeyboard(getSelectableChannels(nextState ?? latestState)),
       );
+    }
+    return;
+  }
+
+  if (kind === "channel_info" && value) {
+    const channel = getChannelByIndex(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+
+    const selectable = getSelectableChannels(state);
+    const row = selectable[Number(value)];
+    const channelNum = Number(value) + 1;
+    await telegram.answerCallbackQuery(callbackId, "Смотрю последний чат…");
+
+    try {
+      const sessionResult = await ensurePagerSession({ env, stateStore }, state);
+      if (!sessionResult) {
+        await telegram.sendMessage(chatId, "Pager не подключён — не могу загрузить чаты.");
+        return;
+      }
+
+      const { client } = sessionResult;
+      const convs = await client.listConversations({ channelId: channel.id, pageSize: 10 });
+      const sorted = [...convs].sort((a, b) => {
+        const ta = Date.parse(a.lastMessageAt ?? "") || 0;
+        const tb = Date.parse(b.lastMessageAt ?? "") || 0;
+        return tb - ta;
+      });
+      const latest = sorted[0];
+      let preview = "Нет чатов на этом канале.";
+      let lastAt = "";
+      if (latest) {
+        const msgs = await client.listMessages(latest.id, 1, 20);
+        const customerMsg = [...msgs].reverse().find((message) =>
+          isIncomingDirection(message.messageDirection),
+        );
+        const fallback = msgs[msgs.length - 1];
+        const snippet = (customerMsg?.text ?? fallback?.text ?? "").trim().slice(0, 160);
+        lastAt = latest.lastMessageAt
+          ? new Date(latest.lastMessageAt).toLocaleString("ru-RU")
+          : "";
+        preview = snippet || "(без текста — возможно фото или стикер)";
+      }
+
+      const suffix = formatChannelIdSuffix(channel.id);
+      const source = row?.channelSource ? `\nFB page: ${row.channelSource}` : "";
+      const countryLabel = CHANNEL_COUNTRY_DISPLAY[row?.country ?? channel.country] ?? row?.country;
+      await telegram.sendMessage(
+        chatId,
+        [
+          `Канал #${channelNum}: ${channel.name}`,
+          `ID …${suffix}${source}`,
+          `Страна в боте: ${countryLabel}`,
+          `Шаблоны: ${row?.templateBank ?? "?"}`,
+          "",
+          `Последний чат${lastAt ? ` (${lastAt})` : ""}:`,
+          preview,
+          "",
+          "Сверь с Pager/Facebook — какая страница даёт такой лид.",
+          "Потом жми кнопку страны (CM/EG) у этого номера и переключи на Египет.",
+        ].join("\n"),
+      );
+    } catch (error) {
+      await telegram.sendMessage(chatId, `Не удалось загрузить чат: ${formatError(error)}`);
     }
     return;
   }
@@ -896,6 +975,7 @@ function getSelectableChannels(state: ChatState) {
       return {
         id: channel.id,
         name: channel.name,
+        channelSource: channel.channelSource ?? undefined,
         country: runtime.country,
         enabled: isChannelEnabled(state, channel.id, runtime.enabled),
         templateBank: runtime.templateBank ?? "Шаблоны",
@@ -908,6 +988,7 @@ function getSelectableChannels(state: ChatState) {
     return {
       id: channel.id,
       name: channel.name,
+      channelSource: undefined,
       country: runtime.country,
       enabled: isChannelEnabled(state, channel.id, runtime.enabled),
       templateBank: runtime.templateBank ?? `${channel.country.toLowerCase()}-default`,
@@ -1613,7 +1694,39 @@ function buildChannelsMenuCaption(state: ChatState): string {
   const enabled = channels.filter((channel) =>
     isChannelEnabled(state, channel.id, getChannelRuntime(state, channel.id, channel.country).enabled),
   ).length;
-  return `Pager: ${org} · каналы ${enabled}/${channels.length}\nСлева вкл/выкл · центр страна · справа шаблоны.`;
+
+  const nameCounts = new Map<string, number>();
+  for (const channel of channels) {
+    nameCounts.set(channel.name, (nameCounts.get(channel.name) ?? 0) + 1);
+  }
+  const hasDuplicateNames = [...nameCounts.values()].some((count) => count > 1);
+
+  const lines = channels.map((channel, index) => {
+    const on = isChannelEnabled(
+      state,
+      channel.id,
+      getChannelRuntime(state, channel.id, channel.country).enabled,
+    );
+    const country = CHANNEL_COUNTRY_DISPLAY[channel.country] ?? channel.country;
+    const suffix = formatChannelIdSuffix(channel.id);
+    const source = channel.channelSource ? `\n   FB: ${channel.channelSource}` : "";
+    return `${index + 1}. ${on ? "🟢" : "⚪"} ${channel.name}\n   ${country} · ${channel.templateBank ?? "Шаблоны"} · …${suffix}${source}`;
+  });
+
+  const duplicateHint = hasDuplicateNames
+    ? "\n\n⚠️ Одинаковые имена — жми ℹ️ у номера, покажу последний лид с этой FB-страницы."
+    : "";
+
+  return [
+    `Pager: ${org} · включено ${enabled}/${channels.length}`,
+    "",
+    ...lines,
+    "",
+    "Кнопки в строке: № вкл · ℹ️ инфо · страна · шаблон",
+    duplicateHint,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function sendPagerAccountMenu(chatId: number, state: ChatState) {
