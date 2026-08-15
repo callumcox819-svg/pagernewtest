@@ -1688,8 +1688,6 @@ function buildMainMenuCaption(state: ChatState): string {
 }
 
 function buildChannelsMenuCaption(state: ChatState): string {
-  const account = state.pagerAccount;
-  const org = account?.organizationName || account?.organizationSlug || "Pager";
   const channels = getSelectableChannels(state);
   const enabled = channels.filter((channel) =>
     isChannelEnabled(state, channel.id, getChannelRuntime(state, channel.id, channel.country).enabled),
@@ -1701,32 +1699,8 @@ function buildChannelsMenuCaption(state: ChatState): string {
   }
   const hasDuplicateNames = [...nameCounts.values()].some((count) => count > 1);
 
-  const lines = channels.map((channel, index) => {
-    const on = isChannelEnabled(
-      state,
-      channel.id,
-      getChannelRuntime(state, channel.id, channel.country).enabled,
-    );
-    const country = CHANNEL_COUNTRY_DISPLAY[channel.country] ?? channel.country;
-    const suffix = formatChannelIdSuffix(channel.id);
-    const source = channel.channelSource ? `\n   FB: ${channel.channelSource}` : "";
-    return `${index + 1}. ${on ? "🟢" : "⚪"} ${channel.name}\n   ${country} · ${channel.templateBank ?? "Шаблоны"} · …${suffix}${source}`;
-  });
-
-  const duplicateHint = hasDuplicateNames
-    ? "\n\n⚠️ Одинаковые имена — жми ℹ️ у номера, покажу последний лид с этой FB-страницы."
-    : "";
-
-  return [
-    `Pager: ${org} · включено ${enabled}/${channels.length}`,
-    "",
-    ...lines,
-    "",
-    "Кнопки: имя (вкл) · ℹ️ · страна · шаблон",
-    duplicateHint,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const base = `Каналы ${enabled}/${channels.length} · build ${getDeployLabel()}`;
+  return hasDuplicateNames ? `${base}\nОдинаковые имена — жми ℹ️.` : base;
 }
 
 async function sendPagerAccountMenu(chatId: number, state: ChatState) {
