@@ -392,7 +392,7 @@ export function buildChannelKeyboard(
       ...channels.map((channel, index) => {
         const activeStyle: ButtonStyle | undefined = channel.enabled ? "success" : undefined;
         return [
-          inlineBtn(String(index + 1), `channel_toggle:${index}`, {
+          inlineBtn(truncateLabel(`${index + 1}. ${channel.name}`, 24), `channel_toggle:${index}`, {
             emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
             style: activeStyle,
           }),
@@ -401,7 +401,7 @@ export function buildChannelKeyboard(
             emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
             style: activeStyle,
           }),
-          inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 12), `channel_bank:${index}`, {
+          inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 10), `channel_bank:${index}`, {
             emojiId: PREMIUM_EMOJI.openFolder,
             style: activeStyle,
           }),

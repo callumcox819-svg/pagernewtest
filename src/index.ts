@@ -1722,7 +1722,7 @@ function buildChannelsMenuCaption(state: ChatState): string {
     "",
     ...lines,
     "",
-    "Кнопки в строке: № вкл · ℹ️ инфо · страна · шаблон",
+    "Кнопки: имя (вкл) · ℹ️ · страна · шаблон",
     duplicateHint,
   ]
     .filter(Boolean)
