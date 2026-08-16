@@ -432,7 +432,7 @@ function mapSignInError(raw: string): string {
 
 function mapCookieRejectedError(detail?: string): string {
     if (detail?.includes("COOKIE_REJECTED") || detail?.includes("TOKEN_ERROR")) {
-      return "1xPartners: cookie не принята. Пока AffiliateInfo = 200 в Network: Headers → cookie → XPARTNERS_COOKIE одной строкой → Save → redeploy.";
+      return "1xPartners: cookie не принята (403). AffiliateInfo → ПКМ → Copy as cURL → весь текст в XPARTNERS_COOKIE → Save → redeploy.";
     }
   if (detail?.trim()) {
     return detail.trim();
@@ -475,12 +475,43 @@ function mapMultiLoginError(status: number, body: string): string {
 
 /** DevTools wraps long cookie — newlines in the middle break accessToken. */
 function normalizeCookieHeader(raw: string): string {
-  return raw
+  let s = raw
     .replace(/^cookie:\s*/i, "")
     .replace(/\r/g, "")
     .replace(/\n/g, "")
     .replace(/\s+/g, " ")
     .trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  return s.replace(/\^/g, "");
+}
+
+function parseDevToolsCurl(raw: string): { cookie: string | null; headers: Record<string, string> } {
+  const headers: Record<string, string> = {};
+  if (!/-H\s/i.test(raw)) {
+    return { cookie: null, headers };
+  }
+  for (const m of raw.matchAll(/-H\s+(?:\^?"([^"]+)"\^?|\^?'([^']+)'\^?|"([^"]+)"|'([^']+)')/gi)) {
+    const line = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? "").replace(/\^/g, "");
+    const idx = line.indexOf(":");
+    if (idx <= 0) {
+      continue;
+    }
+    headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+  }
+  const cookieEntry = Object.entries(headers).find(([k]) => k.toLowerCase() === "cookie");
+  return {
+    cookie: cookieEntry?.[1] ? normalizeCookieHeader(cookieEntry[1]) : null,
+    headers,
+  };
+}
+
+function apiCookieHeader(raw: string): string {
+  return extractAuthCookieHeader(raw) || normalizeCookieHeader(raw);
 }
 
 function extractAuthCookieHeader(raw: string): string {
@@ -517,11 +548,31 @@ export function cookiesFromEnv(env: AppEnv): string | null {
   if (!raw) {
     return null;
   }
-  const normalized = normalizeCookieHeader(raw);
+  const fromCurl = parseDevToolsCurl(raw);
+  const normalized = normalizeCookieHeader(fromCurl.cookie ?? raw);
   if (!/accessToken=/i.test(normalized)) {
     return null;
   }
   return normalized;
+}
+
+export function curlHeadersFromEnv(env: AppEnv): Record<string, string> | null {
+  const raw = (env.XPARTNERS_COOKIE || "").trim();
+  if (!raw || !/-H\s/i.test(raw)) {
+    return null;
+  }
+  const { headers } = parseDevToolsCurl(raw);
+  if (!Object.keys(headers).length) {
+    return null;
+  }
+  const skip = new Set(["host", "connection", "content-length", "accept-encoding"]);
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!skip.has(key.toLowerCase()) && value) {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 function usesCookieAuth(env: AppEnv): boolean {
@@ -870,20 +921,42 @@ export class XPartnersClient {
       }
     }
     const url = `${urlPath}?${qs.toString()}`;
-    const webHeaders =
-      api === "web"
-        ? {
-            ...BROWSER_HEADERS,
-            Accept: "application/json, text/plain, */*",
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-            "X-Requested-With": "XMLHttpRequest",
-            Origin: MULTI_BASE,
-            Referer: `${MULTI_BASE}/ru/partner/reports/quick-report`,
-            Cookie: cookie,
-            ...bearerHeaderFromCookie(cookie),
-            ...xsrfHeaderFromCookieHeader(cookie),
-          }
-        : null;
+    const authCookie = apiCookieHeader(cookie);
+    const curlHeaders = curlHeadersFromEnv(this.env);
+    const webHeaders = (() => {
+      if (api !== "web") {
+        return null;
+      }
+      if (curlHeaders) {
+        const merged: Record<string, string> = {
+          ...BROWSER_HEADERS,
+          Accept: "application/json, text/plain, */*",
+          ...curlHeaders,
+          Cookie:
+            Object.entries(curlHeaders).find(([k]) => k.toLowerCase() === "cookie")?.[1] ??
+            authCookie,
+        };
+        if (!Object.keys(curlHeaders).some((k) => k.toLowerCase() === "authorization")) {
+          Object.assign(merged, bearerHeaderFromCookie(authCookie));
+        }
+        if (!Object.keys(curlHeaders).some((k) => k.toLowerCase() === "x-xsrf-token")) {
+          Object.assign(merged, xsrfHeaderFromCookieHeader(authCookie));
+        }
+        return merged;
+      }
+      return {
+        ...BROWSER_HEADERS,
+        Accept: "application/json, text/plain, */*",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Api-Version": String(MULTI_API_VERSION),
+        "X-Requested-With": "XMLHttpRequest",
+        Origin: MULTI_BASE,
+        Referer: `${MULTI_BASE}/ru/partner/reports/quick-report`,
+        Cookie: authCookie,
+        ...bearerHeaderFromCookie(authCookie),
+        ...xsrfHeaderFromCookieHeader(authCookie),
+      };
+    })();
     const response = await fetch(url, {
       method,
       redirect: "manual",
@@ -895,9 +968,9 @@ export class XPartnersClient {
           "Api-Version": String(MULTI_API_VERSION),
           Origin: MULTI_BASE,
           Referer: `${MULTI_BASE}/`,
-          Cookie: cookie,
-          ...bearerHeaderFromCookie(cookie),
-          ...xsrfHeaderFromCookieHeader(cookie),
+          Cookie: authCookie,
+          ...bearerHeaderFromCookie(authCookie),
+          ...xsrfHeaderFromCookieHeader(authCookie),
           ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         },
       body: body !== undefined ? JSON.stringify(body) : undefined,
