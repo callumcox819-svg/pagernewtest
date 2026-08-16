@@ -432,12 +432,12 @@ function mapSignInError(raw: string): string {
 
 function mapCookieRejectedError(detail?: string): string {
   if (detail?.includes("COOKIE_REJECTED") || detail?.includes("TOKEN_ERROR")) {
-    return "1xPartners: cookie не принята. Network → AffiliateInfo (200) → ПКМ → Copy as cURL → весь текст в XPARTNERS_COOKIE → Save → redeploy → «Обновить все».";
+    return "1xPartners: cookie истекла или не подходит — обнови XPARTNERS_COOKIE (AffiliateInfo → Copy as cURL).";
   }
   if (detail?.trim()) {
     return detail.trim();
   }
-  return "1xPartners: XPARTNERS_COOKIE не принят — скопируй Copy as cURL с AffiliateInfo.";
+  return "1xPartners: XPARTNERS_COOKIE не принят.";
 }
 
 function mapMultiLoginError(status: number, body: string): string {
@@ -713,6 +713,7 @@ export class XPartnersClient {
   private signInBlockedUntilMs = 0;
   private lastSignInError = "";
   private lastPingDetail = "";
+  private multiWebBlocked = false;
   private multiRefreshInFlight: Promise<boolean> | null = null;
   private multiRefreshBlockedUntilMs = 0;
   private envCredentialsSeeded = false;
@@ -848,6 +849,18 @@ export class XPartnersClient {
 
   private usesMultiRestSession(cookie?: string | null): boolean {
     return usesMultiRestAuth(cookie ?? cookiesFromEnv(this.env));
+  }
+
+  /** multi.1xpartners.com web UI — blocked from many cloud IPs (403 FORBIDDEN). */
+  private preferMultiWebApi(): boolean {
+    return !this.multiWebBlocked && this.usesMultiRestSession(null);
+  }
+
+  private markMultiWebBlocked(reason: string): void {
+    if (!this.multiWebBlocked) {
+      this.multiWebBlocked = true;
+      console.warn(`1xPartners: multi web blocked (${reason}), using 1xpartners.com/graphql`);
+    }
   }
 
   private async persistMultiCookieHeader(cookieHeader: string): Promise<void> {
@@ -1003,13 +1016,18 @@ export class XPartnersClient {
     });
 
     if (api === "web" && (response.status === 401 || response.status === 403)) {
-      if (allowRefresh && (await this.refreshMultiSession())) {
-        return this.multiRestRequest(method, urlPath, params, body, false, api);
-      }
       const bodyPreview = (await response.text()).slice(0, 80).replace(/\s+/g, " ");
       console.warn(
         `1xPartners web API ${response.status} ${urlPath.split("/").pop()} cookieLen=${cookie.length} body=${bodyPreview}`,
       );
+      if (response.status === 403 && bodyPreview.includes("FORBIDDEN")) {
+        this.markMultiWebBlocked("403 FORBIDDEN");
+        this.lastPingDetail = "COOKIE_REJECTED";
+        throw new Error("COOKIE_REJECTED");
+      }
+      if (allowRefresh && !this.multiWebBlocked && (await this.refreshMultiSession())) {
+        return this.multiRestRequest(method, urlPath, params, body, false, api);
+      }
       this.lastPingDetail = "COOKIE_REJECTED";
       throw new Error("COOKIE_REJECTED");
     }
@@ -1138,6 +1156,9 @@ export class XPartnersClient {
   }
 
   private graphqlOrigin(): string {
+    if (this.multiWebBlocked) {
+      return BASE;
+    }
     const cookie = cookiesFromEnv(this.env);
     return cookie?.includes("accessToken") ? MULTI_BASE : BASE;
   }
@@ -1148,7 +1169,7 @@ export class XPartnersClient {
   ): Promise<T> {
     const cookie = this.sessionCookieHeader();
     const origin = this.graphqlOrigin();
-    const refererUrl = referer ?? `${origin}/`;
+    const refererUrl = referer ?? `${origin}/ru/partner/reports/quick-report`;
     const init: RequestInit = {
       method: "POST",
       headers: await this.requestHeaders(
@@ -1156,7 +1177,9 @@ export class XPartnersClient {
           "Content-Type": "application/json",
           Origin: origin,
           Referer: refererUrl,
-          ...(cookie ? { Cookie: cookie } : {}),
+          ...(cookie
+            ? { Cookie: cookie, ...bearerHeaderFromCookie(cookie), ...xsrfHeaderFromCookieHeader(cookie) }
+            : {}),
         },
         cookie,
       ),
@@ -1425,7 +1448,7 @@ export class XPartnersClient {
     }
     this.loggedIn = false;
 
-    if (this.usesMultiRestSession(await this.activeSessionCookieHeader()) && !this.cookieRejectedByServer()) {
+    if (this.preferMultiWebApi() && !this.cookieRejectedByServer()) {
       if (await this.refreshMultiSession()) {
         if (await this.pingAuthorized()) {
           this.loggedIn = true;
@@ -1435,7 +1458,7 @@ export class XPartnersClient {
       }
     }
 
-    if (this.cookieRejectedByServer() && cookieAuth) {
+    if (this.cookieRejectedByServer() && cookieAuth && !this.multiWebBlocked) {
       throw new Error(mapCookieRejectedError(this.lastPingDetail));
     }
 
@@ -1492,7 +1515,7 @@ export class XPartnersClient {
       }
       this.loggedIn = false;
       if (
-        this.usesMultiRestSession(await this.activeSessionCookieHeader()) &&
+        this.preferMultiWebApi() &&
         !this.cookieRejectedByServer()
       ) {
         if (await this.refreshMultiSession() && (await this.pingAuthorized())) {
@@ -1540,14 +1563,9 @@ export class XPartnersClient {
     await this.signInInFlight;
   }
 
-  private async pingAuthorized(): Promise<boolean> {
-    this.lastPingDetail = "";
-    const cookie = await this.activeSessionCookieHeader();
-    if (this.usesMultiRestSession(cookie)) {
-      return this.pingMultiAuthorized();
-    }
+  private async pingGraphqlAuthorized(): Promise<boolean> {
     try {
-      const data = await this.graphql<
+      const batch = await this.graphql<
         Array<{
           data?: {
             authorized?: {
@@ -1563,14 +1581,14 @@ export class XPartnersClient {
           query: PARTNER_SITES,
         },
       ]);
-      const first = data?.[0];
+      const first = batch?.[0];
       if (first?.errors?.length) {
         this.lastPingDetail = formatGraphqlErrors(first.errors);
         return false;
       }
       const sites = first?.data?.authorized?.partnerAndManager?.data?.sites;
       if (!Array.isArray(sites)) {
-        this.lastPingDetail = "нет доступа к partner sites (cookie не партнёрский или истёк)";
+        this.lastPingDetail = "graphql: нет partner sites (cookie истёк или не партнёрский)";
         return false;
       }
       return true;
@@ -1578,6 +1596,20 @@ export class XPartnersClient {
       this.lastPingDetail = error instanceof Error ? error.message : String(error);
       return false;
     }
+  }
+
+  private async pingAuthorized(): Promise<boolean> {
+    this.lastPingDetail = "";
+    if (this.preferMultiWebApi()) {
+      if (await this.pingMultiAuthorized()) {
+        return true;
+      }
+      if (this.multiWebBlocked || this.lastPingDetail.includes("COOKIE_REJECTED")) {
+        return this.pingGraphqlAuthorized();
+      }
+      return false;
+    }
+    return this.pingGraphqlAuthorized();
   }
 
   private async loginWithPassword(login: string, password: string): Promise<void> {
@@ -1655,11 +1687,7 @@ export class XPartnersClient {
     }
   }
 
-  private async listSites(): Promise<Array<{ id: number; name: string }>> {
-    await this.ensureSession();
-    if (this.usesMultiRestSession(await this.activeSessionCookieHeader())) {
-      return this.listSitesMulti();
-    }
+  private async listSitesGraphql(): Promise<Array<{ id: number; name: string }>> {
     const run = async (hidden: boolean | undefined) => {
       const filter: { partnerId: null; hidden?: boolean } = { partnerId: null };
       if (hidden !== undefined) {
@@ -1697,6 +1725,23 @@ export class XPartnersClient {
       }
     }
     return [...byId.values()];
+  }
+
+  private async listSites(): Promise<Array<{ id: number; name: string }>> {
+    await this.ensureSession();
+    if (this.preferMultiWebApi()) {
+      try {
+        const sites = await this.listSitesMulti();
+        if (sites.length) {
+          return sites;
+        }
+      } catch (error) {
+        if (!(error instanceof Error && error.message.includes("COOKIE_REJECTED"))) {
+          console.warn("1xPartners listSites multi:", error instanceof Error ? error.message : error);
+        }
+      }
+    }
+    return this.listSitesGraphql();
   }
 
   private async resolveSitesForCountry(
@@ -1750,14 +1795,20 @@ export class XPartnersClient {
     startPeriod: string;
     endPeriod: string;
   }): Promise<{ status?: string; total: QuickReportTotals }> {
-    if (this.usesMultiRestSession(await this.activeSessionCookieHeader())) {
-      const period = multiRestTodayPeriod();
-      return this.fetchQuickReportTotalsMulti({
-        merchantId: filter.currencyId,
-        siteId: filter.siteId,
-        startPeriod: period.startPeriod,
-        endPeriod: period.endPeriod,
-      });
+    if (this.preferMultiWebApi()) {
+      try {
+        const period = multiRestTodayPeriod();
+        return await this.fetchQuickReportTotalsMulti({
+          merchantId: filter.currencyId,
+          siteId: filter.siteId,
+          startPeriod: period.startPeriod,
+          endPeriod: period.endPeriod,
+        });
+      } catch (error) {
+        if (!(error instanceof Error && error.message.includes("COOKIE_REJECTED"))) {
+          throw error;
+        }
+      }
     }
     const deadline = Date.now() + 60_000;
     let lastStatus: string | undefined;
