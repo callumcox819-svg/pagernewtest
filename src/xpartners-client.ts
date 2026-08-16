@@ -315,16 +315,62 @@ function mapSignInError(raw: string): string {
   return raw;
 }
 
-function mapCookieRejectedError(): string {
+function mapCookieRejectedError(detail?: string): string {
+  if (detail?.trim()) {
+    return `XPARTNERS_COOKIE: ${detail.trim()}`;
+  }
   return [
-    "XPARTNERS_COOKIE не принят (обрезан, истёк или скопирован не полностью).",
-    "Network → GetQuickReport → ПКМ → Copy → Copy as cURL → вставь cookie из -H 'cookie: ...' в Railway.",
+    "XPARTNERS_COOKIE не принят.",
+    "Выдели в Headers всю строку Cookie (от _ga до refreshToken) и вставь в Railway одной строкой.",
   ].join(" ");
+}
+
+/** DevTools wraps long cookie — newlines in the middle break accessToken. */
+function normalizeCookieHeader(raw: string): string {
+  return raw
+    .replace(/^cookie:\s*/i, "")
+    .replace(/\r/g, "")
+    .replace(/\n/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractAuthCookieHeader(raw: string): string {
+  const normalized = normalizeCookieHeader(raw);
+  const names = ["accessToken", "refreshToken", "XSRF-TOKEN"] as const;
+  const parts: string[] = [];
+  for (const name of names) {
+    const match = normalized.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`, "i"));
+    if (match?.[1]) {
+      parts.push(`${name}=${match[1].trim()}`);
+    }
+  }
+  if (parts.length >= 2) {
+    return parts.join("; ");
+  }
+  return normalized;
+}
+
+function validateAuthCookieHeader(cookie: string): void {
+  if (!/accessToken=/i.test(cookie)) {
+    throw new Error(
+      "XPARTNERS_COOKIE обрезан: нет accessToken. В Railway cookie должна доходить до accessToken=... и refreshToken=...",
+    );
+  }
+  if (!/refreshToken=/i.test(cookie)) {
+    throw new Error(
+      "XPARTNERS_COOKIE обрезан: нет refreshToken. Скопируй cookie ещё раз — до самого конца строки.",
+    );
+  }
 }
 
 function cookiesFromEnv(env: AppEnv): string | null {
   const raw = (env.XPARTNERS_COOKIE || "").trim();
-  return raw || null;
+  if (!raw) {
+    return null;
+  }
+  const cookie = extractAuthCookieHeader(raw);
+  return cookie || null;
 }
 
 function xsrfHeaderFromCookieHeader(cookieHeader: string | null | undefined): Record<string, string> {
@@ -365,6 +411,7 @@ export class XPartnersClient {
   /** After captcha/login failure, do not hammer SignIn (e.g. «Обновить все» × 3 countries). */
   private signInBlockedUntilMs = 0;
   private lastSignInError = "";
+  private lastPingDetail = "";
 
   constructor(
     private readonly env: AppEnv,
@@ -432,28 +479,33 @@ export class XPartnersClient {
   }
 
   private sessionCookieHeader(): string | null {
-    return cookiesFromEnv(this.env);
+    const cookie = cookiesFromEnv(this.env);
+    if (!cookie) {
+      return null;
+    }
+    validateAuthCookieHeader(cookie);
+    return cookie;
   }
 
-  private async persistCookieString(cookieHeader: string): Promise<void> {
-    if (!cookieHeader.trim() || !this.meta) {
-      return;
-    }
-    await this.meta.set(XPARTNERS_SESSION_META_KEY, cookieHeader.trim());
+  private graphqlOrigin(): string {
+    const cookie = cookiesFromEnv(this.env);
+    return cookie?.includes("accessToken") ? MULTI_BASE : BASE;
   }
 
   private async graphql<T>(
     items: GraphQlBatchItem[],
-    referer = `${BASE}/ru/partner`,
+    referer?: string,
   ): Promise<T> {
     const cookie = this.sessionCookieHeader();
+    const origin = this.graphqlOrigin();
+    const refererUrl = referer ?? `${origin}/`;
     const init: RequestInit = {
       method: "POST",
       headers: await this.requestHeaders(
         {
           "Content-Type": "application/json",
-          Origin: BASE,
-          Referer: referer,
+          Origin: origin,
+          Referer: refererUrl,
           ...(cookie ? { Cookie: cookie } : {}),
         },
         cookie,
@@ -479,6 +531,13 @@ export class XPartnersClient {
       await this.persistSessionCookies();
     }
     return parsed as T;
+  }
+
+  private async persistCookieString(cookieHeader: string): Promise<void> {
+    if (!cookieHeader.trim() || !this.meta) {
+      return;
+    }
+    await this.meta.set(XPARTNERS_SESSION_META_KEY, cookieHeader.trim());
   }
 
   private reportsCookieFromEnv(): string | null {
@@ -580,7 +639,8 @@ export class XPartnersClient {
   }
 
   private async reloadPersistedCookieSession(): Promise<boolean> {
-    const cookieHeader = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
+    const raw = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
+    const cookieHeader = raw ? extractAuthCookieHeader(raw) : "";
     if (!cookieHeader) {
       return false;
     }
@@ -657,20 +717,19 @@ export class XPartnersClient {
   }
 
   async importCookieHeader(cookieHeader: string): Promise<void> {
-    const trimmed = cookieHeader.trim();
+    const trimmed = extractAuthCookieHeader(cookieHeader);
     if (!trimmed) {
       throw new Error("Cookie пустой.");
     }
+    validateAuthCookieHeader(trimmed);
     await this.clearStaleSessionForLogin();
     await this.seedCookies(trimmed);
     this.bootstrapped = true;
     if (!(await this.pingAuthorized())) {
-      throw new Error(
-        mapCookieRejectedError(),
-      );
+      throw new Error(mapCookieRejectedError(this.lastPingDetail));
     }
     this.loggedIn = true;
-    await this.persistSessionCookies();
+    await this.persistCookieString(trimmed);
   }
 
   async persistCredentials(login: string, password: string): Promise<void> {
@@ -717,7 +776,12 @@ export class XPartnersClient {
     }
 
     if (cookiesFromEnv(this.env)) {
-      throw new Error(mapCookieRejectedError());
+      try {
+        validateAuthCookieHeader(cookiesFromEnv(this.env)!);
+      } catch (error) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+      throw new Error(mapCookieRejectedError(this.lastPingDetail));
     }
 
     if (await this.loginWithStoredCredentials()) {
@@ -792,6 +856,7 @@ export class XPartnersClient {
   }
 
   private async pingAuthorized(): Promise<boolean> {
+    this.lastPingDetail = "";
     try {
       const data = await this.graphql<
         Array<{
@@ -811,11 +876,17 @@ export class XPartnersClient {
       ]);
       const first = data?.[0];
       if (first?.errors?.length) {
+        this.lastPingDetail = formatGraphqlErrors(first.errors);
         return false;
       }
       const sites = first?.data?.authorized?.partnerAndManager?.data?.sites;
-      return Array.isArray(sites);
-    } catch {
+      if (!Array.isArray(sites)) {
+        this.lastPingDetail = "нет доступа к partner sites (cookie не партнёрский или истёк)";
+        return false;
+      }
+      return true;
+    } catch (error) {
+      this.lastPingDetail = error instanceof Error ? error.message : String(error);
       return false;
     }
   }
