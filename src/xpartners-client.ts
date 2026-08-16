@@ -423,23 +423,53 @@ function parseCredentials(env: AppEnv): { login: string; password: string } | nu
 }
 
 function mapSignInError(raw: string): string {
-  if (raw.includes("INVALID_CAPTCHA") || raw.includes("CAPTCHA")) {
-    return "1xPartners: нужен XPARTNERS_COOKIE в Railway (логин/пароль через API не проходят из‑за капчи).";
+  if (raw.includes("INVALID_CAPTCHA") || raw.includes("CAPTCHA") || /captcha/i.test(raw)) {
+    return "1xPartners: при входе нужна капча — один раз обнови XPARTNERS_COOKIE, дальше бот сам продлевает сессию через refresh-token.";
   }
-  return raw;
+  return raw.startsWith("1xPartners:") ? raw : `1xPartners: ${raw}`;
 }
 
 function mapCookieRejectedError(detail?: string): string {
   if (detail?.includes("TOKEN_ERROR")) {
-    return "1xPartners: сессия не обновилась — скопируй cookie заново (GetQuickReport → Headers → cookie) в XPARTNERS_COOKIE. После этого бот сам продлевает.";
+    return "1xPartners: refresh-token не прошёл — токены в XPARTNERS_COOKIE устарели. Обнови cookie один раз (GetQuickReport → Headers → cookie).";
   }
   if (detail?.trim()) {
     return detail.trim();
   }
   return [
     "XPARTNERS_COOKIE не принят.",
-    "Выдели в Headers всю строку Cookie (от _ga до refreshToken) и вставь в Railway одной строкой.",
+    "Скопируй cookie из GetQuickReport → Headers (accessToken, refreshToken, XSRF-TOKEN).",
   ].join(" ");
+}
+
+function mapMultiLoginError(status: number, body: string): string {
+  const lower = body.toLowerCase();
+  if (lower.includes("captcha") || lower.includes("recaptcha")) {
+    return mapSignInError("INVALID_CAPTCHA");
+  }
+  try {
+    const parsed = JSON.parse(body) as {
+      message?: string;
+      error?: string;
+      errors?: Array<{ message?: string }>;
+    };
+    const msg =
+      parsed.message ||
+      parsed.error ||
+      parsed.errors
+        ?.map((entry) => entry.message)
+        .filter(Boolean)
+        .join("; ");
+    if (msg) {
+      return mapSignInError(msg);
+    }
+  } catch {
+    // not JSON
+  }
+  if (status === 401 || status === 403) {
+    return "1xPartners: неверный логин или пароль (XPARTNERS_LOGIN/PASSWORD).";
+  }
+  return `1xPartners: вход не удался (HTTP ${status}).`;
 }
 
 /** DevTools wraps long cookie — newlines in the middle break accessToken. */
@@ -584,6 +614,7 @@ export class XPartnersClient {
   private lastPingDetail = "";
   private multiRefreshInFlight: Promise<boolean> | null = null;
   private multiRefreshBlockedUntilMs = 0;
+  private envCredentialsSeeded = false;
 
   constructor(
     private readonly env: AppEnv,
@@ -610,11 +641,13 @@ export class XPartnersClient {
 
   private async bootstrapCookiesIfNeeded(): Promise<void> {
     if (this.bootstrapped) {
+      await this.seedEnvCredentialsIfNeeded();
       return;
     }
     this.bootstrapped = true;
     const existing = await this.jar.getCookieString(BASE);
     if (existing) {
+      await this.seedEnvCredentialsIfNeeded();
       return;
     }
     let raw = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim() || null;
@@ -626,6 +659,23 @@ export class XPartnersClient {
     }
     if (raw) {
       await this.seedCookies(extractAuthCookieHeader(raw));
+    }
+    await this.seedEnvCredentialsIfNeeded();
+  }
+
+  private async seedEnvCredentialsIfNeeded(): Promise<void> {
+    if (this.envCredentialsSeeded || !this.meta) {
+      return;
+    }
+    this.envCredentialsSeeded = true;
+    const creds = parseCredentials(this.env);
+    if (!creds) {
+      return;
+    }
+    const existingLogin = (await this.meta.get(XPARTNERS_LOGIN_META_KEY))?.trim();
+    if (!existingLogin) {
+      await this.meta.set(XPARTNERS_LOGIN_META_KEY, creds.login);
+      await this.meta.set(XPARTNERS_PASSWORD_META_KEY, creds.password);
     }
   }
 
@@ -720,6 +770,9 @@ export class XPartnersClient {
 
   private markMultiRefreshFailure(): void {
     this.multiRefreshBlockedUntilMs = Date.now() + MULTI_REFRESH_BACKOFF_MS;
+    if (this.meta) {
+      void this.meta.set(XPARTNERS_SESSION_META_KEY, "");
+    }
   }
 
   private async refreshMultiSessionOnce(): Promise<boolean> {
@@ -1223,15 +1276,6 @@ export class XPartnersClient {
       return;
     }
 
-    if (cookiesFromEnv(this.env)) {
-      try {
-        validateAuthCookieHeader(cookiesFromEnv(this.env)!);
-      } catch (error) {
-        throw error instanceof Error ? error : new Error(String(error));
-      }
-      throw new Error(mapCookieRejectedError(this.lastPingDetail));
-    }
-
     if (await this.loginWithStoredCredentials()) {
       this.loggedIn = true;
       await this.persistSessionCookies();
@@ -1239,15 +1283,23 @@ export class XPartnersClient {
     }
 
     const creds = await this.getStoredCredentials();
-    if (creds && Date.now() < this.signInBlockedUntilMs) {
-      throw new Error(this.lastSignInError || mapSignInError("INVALID_CAPTCHA"));
+    if (creds) {
+      if (Date.now() < this.signInBlockedUntilMs) {
+        throw new Error(this.lastSignInError || mapSignInError("INVALID_CAPTCHA"));
+      }
+      throw new Error(
+        this.lastSignInError ||
+          "1xPartners: автологин по XPARTNERS_LOGIN/PASSWORD не удался — проверь логин и пароль.",
+      );
     }
 
-    if (hasStoredOrEnvAuth(this.env, await this.readAuthFlags())) {
-      throw new Error(
-        this.lastSignInError
-          || "1xPartners: сессия истекла — бот переподключится сам. Если ошибка повторяется: обнови XPARTNERS_COOKIE в Railway.",
-      );
+    if (cookiesFromEnv(this.env)) {
+      try {
+        validateAuthCookieHeader(cookiesFromEnv(this.env)!);
+      } catch (error) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+      throw new Error(mapCookieRejectedError(this.lastPingDetail));
     }
 
     throw new Error(
@@ -1351,49 +1403,77 @@ export class XPartnersClient {
   }
 
   private async loginWithPassword(login: string, password: string): Promise<void> {
-    await this.fetchTimed(`${BASE}/ru/sign-in`, {
+    await this.loginWithMultiRest(login, password);
+  }
+
+  private async loginWithMultiRest(login: string, password: string): Promise<void> {
+    await this.fetchTimed(`${MULTI_BASE}/sign-in`, {
       method: "GET",
-      headers: await this.requestHeaders({ Accept: "text/html" }),
+      headers: { Accept: "text/html,application/xhtml+xml" },
     });
-    const isOwnCaptcha = await this.fetchUsesOwnCaptcha();
-    const batch = await this.graphql<
-      Array<{
-        data?: {
-          authorization?: {
-            signIn?: { twoFactorAuthNeeded?: boolean; user?: { id?: string } };
-          };
-        };
-        errors?: Array<{ message?: string }>;
-      }>
-    >([
-      {
-        operationName: "SignIn",
-        variables: {
-          login,
-          password,
-          recaptcha: "",
-          likePartner: false,
-          isOwnCaptcha,
+
+    const qs = new URLSearchParams(multiRestDefaultQuery());
+    const postLogin = async (isOwnCaptcha: boolean): Promise<Response> => {
+      const cookieHeader = (await this.jar.getCookieString(MULTI_BASE)) || "";
+      return fetch(`${MULTI_REST}/login?${qs.toString()}`, {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          ...BROWSER_HEADERS,
+          Accept: "application/json, text/plain, */*",
+          "Content-Type": "application/json",
+          "Api-Version": String(MULTI_API_VERSION),
+          Origin: MULTI_BASE,
+          Referer: `${MULTI_BASE}/sign-in`,
+          Cookie: cookieHeader,
+          ...xsrfHeaderFromCookieHeader(cookieHeader),
         },
-        query: SIGN_IN_MUTATION,
-      },
-    ]);
-    const first = batch?.[0];
-    const errors = first?.errors;
-    if (errors?.length) {
-      const msg = errors.map((e) => e.message).filter(Boolean).join("; ") || "SignIn failed";
-      const mapped = mapSignInError(msg);
-      if (msg.includes("INVALID_CAPTCHA") || msg.includes("CAPTCHA")) {
+        body: JSON.stringify({
+          userName: login,
+          password,
+          canPartnerLogin: true,
+          recaptchaToken: "",
+          isOwnCaptcha,
+        }),
+        signal: AbortSignal.timeout(MULTI_REST_TIMEOUT_MS),
+      });
+    };
+
+    let response = await postLogin(true);
+    let body = await response.text();
+    if (!response.ok && /captcha|recaptcha/i.test(body)) {
+      response = await postLogin(false);
+      body = await response.text();
+    }
+
+    const cookieBefore = (await this.jar.getCookieString(MULTI_BASE)) || "";
+    const setCookies = this.responseSetCookies(response);
+    if (setCookies.length) {
+      await this.persistMultiCookieHeader(applySetCookiesToHeader(cookieBefore, setCookies));
+      this.bootstrapped = true;
+    }
+
+    if (!response.ok) {
+      const mapped = mapMultiLoginError(response.status, body);
+      if (/captcha|recaptcha|INVALID_CAPTCHA/i.test(mapped)) {
         this.signInBlockedUntilMs = Date.now() + 30 * 60_000;
         this.lastSignInError = mapped;
       }
       throw new Error(mapped);
     }
-    if (first?.data?.authorization?.signIn?.twoFactorAuthNeeded) {
-      throw new Error("1xPartners: включена 2FA — отключите или задайте cookie через Railway Variables.");
+
+    let parsed: { is2Fa?: boolean } | null = null;
+    try {
+      parsed = JSON.parse(body) as { is2Fa?: boolean };
+    } catch {
+      // empty or non-json success body
     }
-    if (!first?.data?.authorization?.signIn?.user?.id) {
-      throw new Error("1xPartners: вход не удался (проверьте логин/пароль).");
+    if (parsed?.is2Fa) {
+      throw new Error("1xPartners: включена 2FA — отключите или задайте XPARTNERS_COOKIE.");
+    }
+
+    if (!(await this.pingAuthorized())) {
+      throw new Error(this.lastPingDetail || "1xPartners: вход прошёл, но API не отвечает.");
     }
   }
 
