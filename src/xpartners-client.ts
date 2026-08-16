@@ -4,6 +4,20 @@ import type { AppEnv } from "./env.js";
 import type { AppMetaStore } from "./app-meta-store.js";
 
 export const XPARTNERS_SESSION_META_KEY = "xpartners_session_cookie";
+export const XPARTNERS_LOGIN_META_KEY = "xpartners_login";
+export const XPARTNERS_PASSWORD_META_KEY = "xpartners_password";
+
+export type XPartnersSessionStatus = {
+  connected: boolean;
+  source: "cookie" | "credentials" | "env" | "none";
+  loginHint?: string;
+  hasStoredCookie: boolean;
+  hasStoredCredentials: boolean;
+  hasEnvCookie: boolean;
+  hasEnvCredentials: boolean;
+  captchaBlockedUntil?: string;
+  message: string;
+};
 
 export type XPartnersCountry = "CM" | "EG" | "ZM" | "RW";
 
@@ -509,43 +523,188 @@ export class XPartnersClient {
     return this.pingAuthorized();
   }
 
+  private async readAuthFlags(): Promise<{
+    hasStoredCookie: boolean;
+    hasStoredCredentials: boolean;
+    hasEnvCookie: boolean;
+    hasEnvCredentials: boolean;
+  }> {
+    const metaLogin = (await this.meta?.get(XPARTNERS_LOGIN_META_KEY))?.trim();
+    const metaPassword = await this.meta?.get(XPARTNERS_PASSWORD_META_KEY);
+    return {
+      hasStoredCookie: Boolean((await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim()),
+      hasStoredCredentials: Boolean(metaLogin && metaPassword),
+      hasEnvCookie: Boolean(cookiesFromEnv(this.env)),
+      hasEnvCredentials: Boolean(parseCredentials(this.env)),
+    };
+  }
+
+  private async getStoredCredentials(): Promise<{ login: string; password: string } | null> {
+    const metaLogin = (await this.meta?.get(XPARTNERS_LOGIN_META_KEY))?.trim();
+    const metaPassword = await this.meta?.get(XPARTNERS_PASSWORD_META_KEY);
+    if (metaLogin && metaPassword) {
+      return { login: metaLogin, password: metaPassword };
+    }
+    return parseCredentials(this.env);
+  }
+
+  private async reloadPersistedCookieSession(): Promise<boolean> {
+    const cookieHeader = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
+    if (!cookieHeader) {
+      return false;
+    }
+    await this.clearStaleSessionForLogin();
+    await this.seedCookies(cookieHeader);
+    this.bootstrapped = true;
+    return this.pingAuthorized();
+  }
+
+  private async loginWithStoredCredentials(): Promise<boolean> {
+    const creds = await this.getStoredCredentials();
+    if (!creds) {
+      return false;
+    }
+    if (Date.now() < this.signInBlockedUntilMs) {
+      return false;
+    }
+    try {
+      await this.clearStaleSessionForLogin();
+      await this.loginWithPasswordOnce(creds.login, creds.password);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async describeSessionStatus(metaOverride?: AppMetaStore): Promise<XPartnersSessionStatus> {
+    const meta = metaOverride ?? this.meta;
+    const hasStoredCookie = Boolean((await meta?.get(XPARTNERS_SESSION_META_KEY))?.trim());
+    const metaLogin = (await meta?.get(XPARTNERS_LOGIN_META_KEY))?.trim();
+    const metaPassword = await meta?.get(XPARTNERS_PASSWORD_META_KEY);
+    const hasStoredCredentials = Boolean(metaLogin && metaPassword);
+    const hasEnvCookie = Boolean(cookiesFromEnv(this.env));
+    const hasEnvCredentials = Boolean(parseCredentials(this.env));
+
+    await this.bootstrapCookiesIfNeeded();
+    const connected = await this.pingAuthorized();
+    if (connected) {
+      const source = hasStoredCookie || hasEnvCookie ? "cookie" : hasStoredCredentials || hasEnvCredentials ? "credentials" : "env";
+      return {
+        connected: true,
+        source,
+        loginHint: metaLogin || parseCredentials(this.env)?.login,
+        hasStoredCookie,
+        hasStoredCredentials,
+        hasEnvCookie,
+        hasEnvCredentials,
+        captchaBlockedUntil:
+          Date.now() < this.signInBlockedUntilMs
+            ? new Date(this.signInBlockedUntilMs).toISOString()
+            : undefined,
+        message: "Сессия активна.",
+      };
+    }
+
+    const credsHint = metaLogin || parseCredentials(this.env)?.login;
+    return {
+      connected: false,
+      source: "none",
+      loginHint: credsHint,
+      hasStoredCookie,
+      hasStoredCredentials,
+      hasEnvCookie,
+      hasEnvCredentials,
+      captchaBlockedUntil:
+        Date.now() < this.signInBlockedUntilMs
+          ? new Date(this.signInBlockedUntilMs).toISOString()
+          : undefined,
+      message: this.lastSignInError
+        || (hasStoredCookie || hasEnvCookie || hasStoredCredentials || hasEnvCredentials
+          ? "Сессия истекла — бот переподключится сам. Если не помогло: обнови XPARTNERS_COOKIE в Railway."
+          : "Задай XPARTNERS_LOGIN/PASSWORD или XPARTNERS_COOKIE в Railway Variables."),
+    };
+  }
+
+  async importCookieHeader(cookieHeader: string): Promise<void> {
+    const trimmed = cookieHeader.trim();
+    if (!trimmed) {
+      throw new Error("Cookie пустой.");
+    }
+    await this.clearStaleSessionForLogin();
+    await this.seedCookies(trimmed);
+    this.bootstrapped = true;
+    if (!(await this.pingAuthorized())) {
+      throw new Error(
+        "Cookie не принят (истёк или обрезан). Скопируй Cookie из graphql заново — accessToken, refreshToken, XSRF-TOKEN.",
+      );
+    }
+    this.loggedIn = true;
+    await this.persistSessionCookies();
+  }
+
+  async persistCredentials(login: string, password: string): Promise<void> {
+    if (!this.meta) {
+      throw new Error("Хранилище сессии недоступно (нет DATABASE_URL).");
+    }
+    await this.meta.set(XPARTNERS_LOGIN_META_KEY, login.trim());
+    await this.meta.set(XPARTNERS_PASSWORD_META_KEY, password);
+  }
+
+  async clearStoredAuth(): Promise<void> {
+    if (this.meta) {
+      await this.meta.set(XPARTNERS_SESSION_META_KEY, "");
+      await this.meta.set(XPARTNERS_LOGIN_META_KEY, "");
+      await this.meta.set(XPARTNERS_PASSWORD_META_KEY, "");
+    }
+    this.loggedIn = false;
+    this.bootstrapped = false;
+    this.signInBlockedUntilMs = 0;
+    this.lastSignInError = "";
+    this.jar = new CookieJar();
+    this.fetchWithCookies = makeFetchCookie(fetch, this.jar) as typeof fetch;
+  }
+
   async ensureSession(): Promise<void> {
     await this.bootstrapCookiesIfNeeded();
     if (await this.pingAuthorized()) {
       this.loggedIn = true;
+      await this.persistSessionCookies();
       return;
     }
     this.loggedIn = false;
 
-    if (cookiesFromEnv(this.env)) {
-      if (await this.reloadEnvCookieSession()) {
-        this.loggedIn = true;
-        return;
-      }
-      throw new Error(
-        "XPARTNERS_COOKIE не принят (истёк или обрезан при вставке). Скопируйте Cookie из graphql заново — одной строкой, с accessToken, refreshToken и XSRF-TOKEN.",
-      );
-    }
-
-    const cookieHeader = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
-    if (cookieHeader) {
-      await this.seedCookies(cookieHeader);
-      if (await this.pingAuthorized()) {
-        this.loggedIn = true;
-        return;
-      }
-    }
-
-    const creds = parseCredentials(this.env);
-    if (creds) {
-      await this.clearStaleSessionForLogin();
-      await this.loginWithPasswordOnce(creds.login, creds.password);
+    if (await this.reloadPersistedCookieSession()) {
       this.loggedIn = true;
+      await this.persistSessionCookies();
       return;
     }
 
+    if (await this.reloadEnvCookieSession()) {
+      this.loggedIn = true;
+      await this.persistSessionCookies();
+      return;
+    }
+
+    if (await this.loginWithStoredCredentials()) {
+      this.loggedIn = true;
+      await this.persistSessionCookies();
+      return;
+    }
+
+    const creds = await this.getStoredCredentials();
+    if (creds && Date.now() < this.signInBlockedUntilMs) {
+      throw new Error(this.lastSignInError || mapSignInError("INVALID_CAPTCHA"));
+    }
+
+    if (hasStoredOrEnvAuth(this.env, await this.readAuthFlags())) {
+      throw new Error(
+        this.lastSignInError
+          || "1xPartners: сессия истекла — бот переподключится сам. Если ошибка повторяется: обнови XPARTNERS_COOKIE в Railway.",
+      );
+    }
+
     throw new Error(
-      "1xPartners: задайте XPARTNERS_COOKIE или XPARTNERS_CREDENTIALS в Railway.",
+      "1xPartners: задай XPARTNERS_LOGIN/PASSWORD или XPARTNERS_COOKIE в Railway Variables.",
     );
   }
 
@@ -554,10 +713,13 @@ export class XPartnersClient {
       await this.bootstrapCookiesIfNeeded();
       if (await this.pingAuthorized()) {
         this.loggedIn = true;
+        await this.persistSessionCookies();
         return;
       }
       this.loggedIn = false;
+      await this.ensureSession();
     } catch (error) {
+      this.loggedIn = false;
       console.warn("1xPartners keep-alive:", error instanceof Error ? error.message : error);
     }
   }
@@ -1217,6 +1379,25 @@ export class XPartnersClient {
 let sharedClient: XPartnersClient | null = null;
 let sharedMeta: AppMetaStore | undefined;
 
+function hasStoredOrEnvAuth(
+  env: AppEnv,
+  flags: {
+    hasStoredCookie: boolean;
+    hasStoredCredentials: boolean;
+    hasEnvCookie: boolean;
+    hasEnvCredentials: boolean;
+  },
+): boolean {
+  return (
+    flags.hasStoredCookie ||
+    flags.hasStoredCredentials ||
+    flags.hasEnvCookie ||
+    flags.hasEnvCredentials ||
+    Boolean(parseCredentials(env)) ||
+    Boolean(cookiesFromEnv(env))
+  );
+}
+
 export function configureXPartnersSessionStore(meta: AppMetaStore): void {
   sharedMeta = meta;
 }
@@ -1242,5 +1423,5 @@ export function startXPartnersKeepAlive(env: AppEnv): void {
   setInterval(() => {
     void client.keepAlive();
   }, ms);
-  console.log(`1xPartners: session ping every ${minutes} min (no password retries on ping)`);
+  console.log(`1xPartners: session keep-alive every ${minutes} min (ping + auto-refresh on expiry)`);
 }

@@ -16,7 +16,7 @@ import { CATCH_UP_READ_ACTIVE_MS, isIncomingDirection } from "./conversation-rep
 import { classifyProofFromImage } from "./proof-classifier.js";
 import { clearTemplateReplyCache } from "./template-resolver.js";
 import { createStateStore, type ChannelRuntimeState, type ChatState, type StateStore } from "./state-store.js";
-import { createAppMetaStore } from "./app-meta-store.js";
+import { createAppMetaStore, type AppMetaStore } from "./app-meta-store.js";
 import {
   countApiStatusFolders,
   mergeStatusFolderList,
@@ -58,13 +58,23 @@ import {
 } from "./xpartners-client.js";
 import {
   cacheStale,
-  defaultRefreshHours,
   formatStatsMessage,
   formatAllCountriesStats,
   formatPlayersIdsMessageParts,
   parseRefreshHours,
   type StatsRefreshHours,
 } from "./xpartners-stats-ui.js";
+import {
+  describeXPartnersSession,
+  ensureXPartnersSession,
+  maskXPartnersLogin,
+  warmupXPartnersSession,
+} from "./xpartners-session.js";
+import {
+  loadGlobalPartnerStats,
+  saveGlobalPartnerStats,
+  type GlobalPartnerStatsState,
+} from "./xpartners-stats-cache.js";
 
 import {
   defaultCountryForChannelName,
@@ -104,11 +114,13 @@ function parseOperatorCountry(value: string): WorkerCountry | undefined {
 const env = loadEnv();
 const config = loadConfig(resolve(process.cwd(), env.BOT_CONFIG_PATH));
 let stateStore: StateStore;
+let appMetaStore: AppMetaStore;
 const telegram = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
 
 async function main() {
   stateStore = await createStateStore(env);
-  configureXPartnersSessionStore(await createAppMetaStore(env));
+  appMetaStore = await createAppMetaStore(env);
+  configureXPartnersSessionStore(appMetaStore);
   console.log(`Starting ${env.TELEGRAM_BOT_NAME} build=${getDeployLabel()}...`);
   await telegram.setMyCommands([
     { command: "start", description: "Открыть меню" },
@@ -119,6 +131,7 @@ async function main() {
     console.warn("Telegram setMyCommands failed:", formatError(error));
   });
   await warmupConnectedAccounts();
+  await warmupXPartnersSession(env);
   startXPartnersKeepAlive(env);
 
   await Promise.all([
@@ -568,13 +581,14 @@ async function handleCallback(
 
   if (kind === "stats") {
     const latest = (await stateStore.get(chatId)) ?? state;
+    const globalStats = await loadGlobalPartnerStats(appMetaStore);
     if (value === "interval" && extra === "menu") {
       await telegram.answerCallbackQuery(callbackId);
-      const hours = latest.partnerStats?.refreshIntervalHours ?? defaultRefreshHours();
+      const hours = globalStats.refreshIntervalHours;
       await safeEditMenu(
         chatId,
         messageId,
-        `Как часто обновлять кэш 1xPartners при открытии статистики?\n\nСейчас: <b>${hours} ч</b>\n\nKeep-alive сессии на сервере: каждые ${env.XPARTNERS_KEEPALIVE_MINUTES} мин.`,
+        `Как часто обновлять общий кэш 1xPartners?\n\nСейчас: <b>${hours} ч</b>\n\nОдин аккаунт на сервере — все операторы видят одни цифры.`,
         buildStatsIntervalKeyboard(hours),
         callbackId,
       );
@@ -582,16 +596,12 @@ async function handleCallback(
     }
     if (value === "interval" && (extra === "1" || extra === "3" || extra === "5")) {
       const hours = parseRefreshHours(extra);
-      await stateStore.patch(chatId, {
-        partnerStats: {
-          ...(latest.partnerStats ?? {}),
-          refreshIntervalHours: hours,
-          byCountry: latest.partnerStats?.byCountry,
-          cachedAt: latest.partnerStats?.cachedAt,
-        },
+      await saveGlobalPartnerStats(appMetaStore, {
+        ...globalStats,
+        refreshIntervalHours: hours,
       });
       await telegram.answerCallbackQuery(callbackId, `Интервал: ${hours} ч`);
-      await showStatsMenu(chatId, (await stateStore.get(chatId)) ?? latest, messageId);
+      await showStatsMenu(chatId, latest, messageId);
       return;
     }
     if (value === "refresh" && extra === "all") {
@@ -1832,56 +1842,59 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
     await safeEditMenu(
       chatId,
       messageId,
-      "1xPartners статистика выключена.\n\nВключите модуль в <b>Variables</b> сервиса Railway (не в репозитории).",
+      "1xPartners статистика выключена.\n\nВключите модуль в <b>Variables</b> сервиса Railway.",
       buildMainMenuKeyboard(),
     );
     return;
   }
-  const hours = partnerRefreshHours(state);
-  const stale = cacheStale(state.partnerStats?.cachedAt, hours);
+  try {
+    await ensureXPartnersSession(env);
+  } catch {
+    // keep-alive and stat fetches retry too
+  }
+  const globalStats = await loadGlobalPartnerStats(appMetaStore);
+  const hours = globalStats.refreshIntervalHours;
+  const stale = cacheStale(globalStats.cachedAt, hours);
+  const session = await describeXPartnersSession(env, appMetaStore);
+  const sessionLine = session.connected
+    ? `Сервер: 🟢 в сети · ${maskXPartnersLogin(session.loginHint)}`
+    : "Сервер: 🔴 переподключение… (проверь XPARTNERS_* в Railway, если долго)";
   const lines = [
     "<b>1xPartners · Статистика</b>",
-    "Краткий суммарный отчёт за сегодня (USD).",
+    "Общий аккаунт на сервере — все смотрят цифры без входа на сайт.",
+    "Сессия обновляется сама (keep-alive + при запросе статистики).",
     "",
-    `Кэш: ${stale ? "устарел или пуст — нажмите «Обновить все»" : "актуален"} · ваш интервал <b>${hours} ч</b>`,
-    `Аккаунт на сервере: keep-alive каждые ${env.XPARTNERS_KEEPALIVE_MINUTES} мин (сессия в БД, без постоянного копирования cookie).`,
+    sessionLine,
+    `Кэш: ${stale ? "устарел — «Обновить все»" : "актуален"} · интервал <b>${hours} ч</b>`,
     "",
-    "Cameroon · Egypt · Zambia · Rwanda — выберите страну.",
+    "Cameroon · Egypt · Zambia · Rwanda",
   ];
   await safeEditMenu(chatId, messageId, lines.join("\n"), buildStatsCountryKeyboard());
 }
 
-function partnerRefreshHours(state: ChatState): StatsRefreshHours {
-  return state.partnerStats?.refreshIntervalHours ?? defaultRefreshHours();
-}
-
 async function fetchAndCacheCountryStats(
-  chatId: number,
-  state: ChatState,
   country: XPartnersCountry,
   force: boolean,
-): Promise<{ state: ChatState; stats: XPartnersQuickStats }> {
+): Promise<{ globalStats: GlobalPartnerStatsState; stats: XPartnersQuickStats }> {
   const client = getXPartnersClient(env);
   if (!client) {
     throw new Error("1xPartners отключён (XPARTNERS_ENABLED=false).");
   }
-  const hours = partnerRefreshHours(state);
-  const cached = state.partnerStats?.byCountry?.[country];
-  const cachedAt = state.partnerStats?.cachedAt;
+  const globalStats = await loadGlobalPartnerStats(appMetaStore);
+  const hours = globalStats.refreshIntervalHours;
+  const cached = globalStats.byCountry?.[country];
+  const cachedAt = globalStats.cachedAt;
   if (!force && cached && !cacheStale(cachedAt, hours)) {
-    return { state, stats: cached };
+    return { globalStats, stats: cached };
   }
   const stats = await client.fetchQuickStatsToday(country);
-  const byCountry = { ...(state.partnerStats?.byCountry ?? {}), [country]: stats };
-  const next =
-    (await stateStore.patch(chatId, {
-      partnerStats: {
-        refreshIntervalHours: hours,
-        cachedAt: new Date().toISOString(),
-        byCountry,
-      },
-    })) ?? state;
-  return { state: next, stats };
+  const nextStats: GlobalPartnerStatsState = {
+    refreshIntervalHours: hours,
+    cachedAt: new Date().toISOString(),
+    byCountry: { ...(globalStats.byCountry ?? {}), [country]: stats },
+  };
+  await saveGlobalPartnerStats(appMetaStore, nextStats);
+  return { globalStats: nextStats, stats };
 }
 
 async function sendPlayersIdsExport(
@@ -1975,8 +1988,8 @@ async function sendCountryStats(
   }
   await telegram.answerCallbackQuery(callbackId, "Загрузка…");
   try {
-    const { stats } = await fetchAndCacheCountryStats(chatId, state, country, true);
-    const text = formatStatsMessage(country, stats, partnerRefreshHours(state));
+    const { stats, globalStats } = await fetchAndCacheCountryStats(country, true);
+    const text = formatStatsMessage(country, stats, globalStats.refreshIntervalHours);
     await telegram.sendMessage(chatId, text, buildStatsCountryKeyboard());
   } catch (error) {
     await telegram.sendMessage(
@@ -2008,16 +2021,16 @@ async function refreshAllPartnerStats(
       callbackId,
     );
   }
-  let current = state;
-  const hours = partnerRefreshHours(state);
+  let globalStats = await loadGlobalPartnerStats(appMetaStore);
+  const hours = globalStats.refreshIntervalHours;
   const errors: string[] = [];
   const byCountry: Partial<Record<XPartnersCountry, XPartnersQuickStats>> = {
-    ...(current.partnerStats?.byCountry ?? {}),
+    ...(globalStats.byCountry ?? {}),
   };
   for (const country of XP_STATS_COUNTRIES) {
     try {
-      const result = await fetchAndCacheCountryStats(chatId, current, country, true);
-      current = result.state;
+      const result = await fetchAndCacheCountryStats(country, true);
+      globalStats = result.globalStats;
       byCountry[country] = result.stats;
     } catch (error) {
       errors.push(`${country}: ${formatError(error)}`);
