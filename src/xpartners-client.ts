@@ -52,6 +52,7 @@ type GraphQlBatchItem = {
 
 const BASE = "https://1xpartners.com";
 const MULTI_BASE = "https://multi.1xpartners.com";
+const MULTI_REST = `${MULTI_BASE}/rest`;
 const MULTI_REST_LAPI = `${MULTI_BASE}/rest/lapi`;
 const GRAPHQL = `${BASE}/graphql/`;
 const XP_FETCH_TIMEOUT_MS = 90_000;
@@ -426,8 +427,11 @@ function mapSignInError(raw: string): string {
 }
 
 function mapCookieRejectedError(detail?: string): string {
+  if (detail?.includes("TOKEN_ERROR")) {
+    return "сессия не обновилась автоматически — один раз обнови XPARTNERS_COOKIE в Railway (GetQuickReport → Headers → cookie), дальше бот сам продлевает.";
+  }
   if (detail?.trim()) {
-    return `XPARTNERS_COOKIE: ${detail.trim()}`;
+    return detail.trim();
   }
   return [
     "XPARTNERS_COOKIE не принят.",
@@ -499,6 +503,59 @@ function xsrfHeaderFromCookieHeader(cookieHeader: string | null | undefined): Re
   }
 }
 
+function cookieValueFromHeader(cookieHeader: string, name: string): string | null {
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`, "i"));
+  return match?.[1]?.trim() || null;
+}
+
+function bearerHeaderFromCookie(cookieHeader: string): Record<string, string> {
+  const accessToken = cookieValueFromHeader(cookieHeader, "accessToken");
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+}
+
+function applySetCookiesToHeader(baseCookie: string, setCookies: string[]): string {
+  const jar = new Map<string, string>();
+  for (const part of baseCookie.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    jar.set(trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1).trim());
+  }
+  for (const raw of setCookies) {
+    const first = raw.split(";")[0]?.trim();
+    if (!first) {
+      continue;
+    }
+    const eq = first.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    jar.set(first.slice(0, eq).trim(), first.slice(eq + 1).trim());
+  }
+  const names = ["accessToken", "refreshToken", "XSRF-TOKEN"] as const;
+  const parts: string[] = [];
+  for (const name of names) {
+    const value = jar.get(name);
+    if (value) {
+      parts.push(`${name}=${value}`);
+    }
+  }
+  return parts.length ? parts.join("; ") : baseCookie.trim();
+}
+
+function multiRestDefaultQuery(): Record<string, string> {
+  return {
+    apitype: "web",
+    apiVersion: String(MULTI_API_VERSION),
+    v: String(MULTI_API_VERSION),
+  };
+}
+
 const GET_PARTNERS_CAPTCHA_MODE = `
 query PartnersCaptchaMode {
   partnersProgram {
@@ -522,6 +579,7 @@ export class XPartnersClient {
   private signInBlockedUntilMs = 0;
   private lastSignInError = "";
   private lastPingDetail = "";
+  private multiRefreshInFlight: Promise<boolean> | null = null;
 
   constructor(
     private readonly env: AppEnv,
@@ -558,9 +616,12 @@ export class XPartnersClient {
     let raw = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim() || null;
     if (!raw) {
       raw = cookiesFromEnv(this.env);
+      if (raw && this.meta && usesMultiRestAuth(raw)) {
+        await this.persistMultiCookieHeader(extractAuthCookieHeader(raw));
+      }
     }
     if (raw) {
-      await this.seedCookies(raw);
+      await this.seedCookies(extractAuthCookieHeader(raw));
     }
   }
 
@@ -598,42 +659,120 @@ export class XPartnersClient {
   }
 
   private async activeSessionCookieHeader(): Promise<string | null> {
+    const metaRaw = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
+    if (metaRaw) {
+      const metaCookie = extractAuthCookieHeader(metaRaw);
+      if (metaCookie) {
+        try {
+          validateAuthCookieHeader(metaCookie);
+          return metaCookie;
+        } catch {
+          // fall through to env seed
+        }
+      }
+    }
     const envCookie = cookiesFromEnv(this.env);
     if (envCookie) {
       validateAuthCookieHeader(envCookie);
       return envCookie;
     }
-    const raw = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
-    if (!raw) {
-      return null;
-    }
-    const cookie = extractAuthCookieHeader(raw);
-    if (!cookie) {
-      return null;
-    }
-    validateAuthCookieHeader(cookie);
-    return cookie;
+    return null;
   }
 
   private usesMultiRestSession(cookie?: string | null): boolean {
     return usesMultiRestAuth(cookie ?? cookiesFromEnv(this.env));
   }
 
-  private async multiRestGet(endpoint: string, params: Record<string, string | number> = {}): Promise<unknown> {
+  private async persistMultiCookieHeader(cookieHeader: string): Promise<void> {
+    const trimmed = extractAuthCookieHeader(cookieHeader);
+    if (!trimmed) {
+      return;
+    }
+    await this.seedCookies(trimmed);
+    await this.persistCookieString(trimmed);
+  }
+
+  private responseSetCookies(response: Response): string[] {
+    const headers = response.headers as Headers & { getSetCookie?: () => string[] };
+    if (typeof headers.getSetCookie === "function") {
+      return headers.getSetCookie();
+    }
+    const single = response.headers.get("set-cookie");
+    return single ? [single] : [];
+  }
+
+  private async refreshMultiSession(): Promise<boolean> {
+    if (this.multiRefreshInFlight) {
+      return this.multiRefreshInFlight;
+    }
+    this.multiRefreshInFlight = this.refreshMultiSessionOnce().finally(() => {
+      this.multiRefreshInFlight = null;
+    });
+    return this.multiRefreshInFlight;
+  }
+
+  private async refreshMultiSessionOnce(): Promise<boolean> {
+    const cookie = await this.activeSessionCookieHeader();
+    if (!cookie) {
+      return false;
+    }
+    const qs = new URLSearchParams(multiRestDefaultQuery());
+    try {
+      const response = await fetch(`${MULTI_REST}/refresh-token?${qs.toString()}`, {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          ...BROWSER_HEADERS,
+          Accept: "application/json, text/plain, */*",
+          "Content-Type": "application/json",
+          "Api-Version": String(MULTI_API_VERSION),
+          Origin: MULTI_BASE,
+          Referer: `${MULTI_BASE}/`,
+          Cookie: cookie,
+          ...bearerHeaderFromCookie(cookie),
+          ...xsrfHeaderFromCookieHeader(cookie),
+        },
+        body: "{}",
+        signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS),
+      });
+      const setCookies = this.responseSetCookies(response);
+      if (setCookies.length) {
+        await this.persistMultiCookieHeader(applySetCookiesToHeader(cookie, setCookies));
+      }
+      if (response.status === 302 || response.status === 307 || response.status === 308) {
+        return false;
+      }
+      if (!response.ok) {
+        console.warn("1xPartners refresh-token:", response.status, (await response.text()).slice(0, 200));
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.warn("1xPartners refresh-token:", error instanceof Error ? error.message : error);
+      return false;
+    }
+  }
+
+  private async multiRestRequest(
+    method: "GET" | "POST",
+    urlPath: string,
+    params: Record<string, string | number> = {},
+    body?: unknown,
+    allowRefresh = true,
+  ): Promise<unknown> {
     const cookie = await this.activeSessionCookieHeader();
     if (!cookie) {
       throw new Error("1xPartners: нет cookie для multi REST.");
     }
-    const qs = new URLSearchParams();
+    const qs = new URLSearchParams(multiRestDefaultQuery());
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== null && String(value).length > 0) {
         qs.set(key, String(value));
       }
     }
-    qs.set("v", String(MULTI_API_VERSION));
-    const url = `${MULTI_REST_LAPI}/${endpoint}?${qs.toString()}`;
+    const url = `${urlPath}?${qs.toString()}`;
     const response = await fetch(url, {
-      method: "GET",
+      method,
       redirect: "manual",
       headers: {
         ...BROWSER_HEADERS,
@@ -642,32 +781,65 @@ export class XPartnersClient {
         Origin: MULTI_BASE,
         Referer: `${MULTI_BASE}/`,
         Cookie: cookie,
-        ...(await this.requestHeaders({}, cookie)),
+        ...bearerHeaderFromCookie(cookie),
+        ...xsrfHeaderFromCookieHeader(cookie),
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS),
     });
-    if (response.status === 302 || response.status === 307 || response.status === 308) {
-      const location = response.headers.get("location") || "";
-      if (location.includes("sign-in")) {
-        throw new Error("USER_DOES_NOT_EXISTS");
-      }
-      throw new Error(`1xPartners multi REST redirect ${response.status} → ${location}`);
+
+    const setCookies = this.responseSetCookies(response);
+    if (setCookies.length) {
+      await this.persistMultiCookieHeader(applySetCookiesToHeader(cookie, setCookies));
     }
+
+    const needsRefresh =
+      allowRefresh &&
+      (response.status === 401 ||
+        response.status === 302 ||
+        response.status === 307 ||
+        response.status === 308 ||
+        ((response.ok || response.status === 200) &&
+          (response.headers.get("content-type") || "").includes("text/html")));
+
+    if (needsRefresh) {
+      const location = response.headers.get("location") || "";
+      if (location.includes("sign-in") || response.status === 401 || response.status === 308) {
+        if (await this.refreshMultiSession()) {
+          return this.multiRestRequest(method, urlPath, params, body, false);
+        }
+        throw new Error("TOKEN_ERROR");
+      }
+    }
+
+    if (response.status === 302 || response.status === 307 || response.status === 308) {
+      throw new Error("TOKEN_ERROR");
+    }
+
     const text = await response.text();
     if (!response.ok) {
       throw new Error(`1xPartners multi REST HTTP ${response.status}: ${text.slice(0, 300)}`);
     }
     const ct = response.headers.get("content-type") || "";
     if (ct.includes("text/html")) {
-      throw new Error("1xPartners multi REST вернул HTML вместо JSON (cookie истёк).");
+      if (allowRefresh && (await this.refreshMultiSession())) {
+        return this.multiRestRequest(method, urlPath, params, body, false);
+      }
+      throw new Error("TOKEN_ERROR");
     }
     try {
       const parsed = JSON.parse(text) as unknown;
-      await this.persistCookieString(cookie);
+      const latest = (await this.activeSessionCookieHeader()) || cookie;
+      await this.persistMultiCookieHeader(latest);
       return parsed;
     } catch {
       throw new Error(`1xPartners multi REST invalid JSON: ${text.slice(0, 200)}`);
     }
+  }
+
+  private async multiRestGet(endpoint: string, params: Record<string, string | number> = {}): Promise<unknown> {
+    return this.multiRestRequest("GET", `${MULTI_REST_LAPI}/${endpoint}`, params);
   }
 
   private async pingMultiAuthorized(): Promise<boolean> {
@@ -847,6 +1019,15 @@ export class XPartnersClient {
     if (!envCookie) {
       return false;
     }
+    if (this.usesMultiRestSession(envCookie)) {
+      const meta = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
+      if (meta) {
+        return false;
+      }
+      await this.persistMultiCookieHeader(envCookie);
+      this.bootstrapped = true;
+      return this.pingAuthorized();
+    }
     await this.clearStaleSessionForLogin();
     await this.seedCookies(envCookie);
     this.bootstrapped = true;
@@ -884,7 +1065,9 @@ export class XPartnersClient {
     if (!cookieHeader) {
       return false;
     }
-    await this.clearStaleSessionForLogin();
+    this.jar = new CookieJar();
+    this.fetchWithCookies = makeFetchCookie(fetch, this.jar) as typeof fetch;
+    this.bootstrapped = false;
     await this.seedCookies(cookieHeader);
     this.bootstrapped = true;
     return this.pingAuthorized();
@@ -1003,6 +1186,16 @@ export class XPartnersClient {
     }
     this.loggedIn = false;
 
+    if (this.usesMultiRestSession(await this.activeSessionCookieHeader())) {
+      if (await this.refreshMultiSession()) {
+        if (await this.pingAuthorized()) {
+          this.loggedIn = true;
+          await this.persistSessionCookies();
+          return;
+        }
+      }
+    }
+
     if (await this.reloadPersistedCookieSession()) {
       this.loggedIn = true;
       await this.persistSessionCookies();
@@ -1056,6 +1249,13 @@ export class XPartnersClient {
         return;
       }
       this.loggedIn = false;
+      if (this.usesMultiRestSession(await this.activeSessionCookieHeader())) {
+        if (await this.refreshMultiSession() && (await this.pingAuthorized())) {
+          this.loggedIn = true;
+          await this.persistSessionCookies();
+          return;
+        }
+      }
       await this.ensureSession();
     } catch (error) {
       this.loggedIn = false;
