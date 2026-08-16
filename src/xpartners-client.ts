@@ -51,6 +51,7 @@ type GraphQlBatchItem = {
 };
 
 const BASE = "https://1xpartners.com";
+const MULTI_BASE = "https://multi.1xpartners.com";
 const GRAPHQL = `${BASE}/graphql/`;
 const XP_FETCH_TIMEOUT_MS = 90_000;
 
@@ -309,9 +310,16 @@ function parseCredentials(env: AppEnv): { login: string; password: string } | nu
 
 function mapSignInError(raw: string): string {
   if (raw.includes("INVALID_CAPTCHA") || raw.includes("CAPTCHA")) {
-    return "1xPartners требует капчу: добавь XPARTNERS_COOKIE в Railway. F12 → Network → кликни GetQuickReport → Headers → cookie (вся строка).";
+    return "1xPartners: нужен XPARTNERS_COOKIE в Railway (логин/пароль через API не проходят из‑за капчи).";
   }
   return raw;
+}
+
+function mapCookieRejectedError(): string {
+  return [
+    "XPARTNERS_COOKIE не принят (обрезан, истёк или скопирован не полностью).",
+    "Network → GetQuickReport → ПКМ → Copy → Copy as cURL → вставь cookie из -H 'cookie: ...' в Railway.",
+  ].join(" ");
 }
 
 function cookiesFromEnv(env: AppEnv): string | null {
@@ -408,29 +416,53 @@ export class XPartnersClient {
   }
 
   private async seedCookies(cookieHeader: string): Promise<void> {
-    for (const part of cookieHeader.split(";")) {
-      const trimmed = part.trim();
-      if (!trimmed) {
-        continue;
-      }
-      try {
-        await this.jar.setCookie(trimmed, BASE);
-      } catch {
-        // ignore malformed fragments
+    for (const base of [BASE, MULTI_BASE]) {
+      for (const part of cookieHeader.split(";")) {
+        const trimmed = part.trim();
+        if (!trimmed) {
+          continue;
+        }
+        try {
+          await this.jar.setCookie(trimmed, base);
+        } catch {
+          // ignore malformed fragments
+        }
       }
     }
   }
 
-  private async graphql<T>(items: GraphQlBatchItem[]): Promise<T> {
-    const response = await this.fetchTimed(GRAPHQL, {
+  private sessionCookieHeader(): string | null {
+    return cookiesFromEnv(this.env);
+  }
+
+  private async persistCookieString(cookieHeader: string): Promise<void> {
+    if (!cookieHeader.trim() || !this.meta) {
+      return;
+    }
+    await this.meta.set(XPARTNERS_SESSION_META_KEY, cookieHeader.trim());
+  }
+
+  private async graphql<T>(
+    items: GraphQlBatchItem[],
+    referer = `${BASE}/ru/partner`,
+  ): Promise<T> {
+    const cookie = this.sessionCookieHeader();
+    const init: RequestInit = {
       method: "POST",
-      headers: await this.requestHeaders({
-        "Content-Type": "application/json",
-        Origin: BASE,
-        Referer: `${BASE}/ru/partner`,
-      }),
+      headers: await this.requestHeaders(
+        {
+          "Content-Type": "application/json",
+          Origin: BASE,
+          Referer: referer,
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+        cookie,
+      ),
       body: JSON.stringify(items),
-    });
+    };
+    const response = cookie
+      ? await fetch(GRAPHQL, { ...init, signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS) })
+      : await this.fetchTimed(GRAPHQL, init);
     const text = await response.text();
     if (!response.ok) {
       throw new Error(`1xPartners HTTP ${response.status}: ${text.slice(0, 300)}`);
@@ -441,7 +473,11 @@ export class XPartnersClient {
     } catch {
       throw new Error(`1xPartners invalid JSON: ${text.slice(0, 200)}`);
     }
-    await this.persistSessionCookies();
+    if (cookie) {
+      await this.persistCookieString(cookie);
+    } else {
+      await this.persistSessionCookies();
+    }
     return parsed as T;
   }
 
@@ -462,7 +498,7 @@ export class XPartnersClient {
   private async graphqlPlayersReport<T>(items: GraphQlBatchItem[]): Promise<T> {
     const cookie = this.playersReportCookieHeader();
     if (!cookie) {
-      return this.graphql<T>(items);
+      return this.graphql<T>(items, `${BASE}/ru/partner/reports/players`);
     }
     const response = await fetch(GRAPHQL, {
       method: "POST",
@@ -483,7 +519,9 @@ export class XPartnersClient {
       throw new Error(`1xPartners HTTP ${response.status}: ${text.slice(0, 300)}`);
     }
     try {
-      return JSON.parse(text) as T;
+      const parsed = JSON.parse(text) as T;
+      await this.persistCookieString(cookie);
+      return parsed;
     } catch {
       throw new Error(`1xPartners invalid JSON: ${text.slice(0, 200)}`);
     }
@@ -628,7 +666,7 @@ export class XPartnersClient {
     this.bootstrapped = true;
     if (!(await this.pingAuthorized())) {
       throw new Error(
-        "Cookie не принят. F12 → Network → GetQuickReport → Headers → cookie — скопируй всю строку в XPARTNERS_COOKIE.",
+        mapCookieRejectedError(),
       );
     }
     this.loggedIn = true;
@@ -676,6 +714,10 @@ export class XPartnersClient {
       this.loggedIn = true;
       await this.persistSessionCookies();
       return;
+    }
+
+    if (cookiesFromEnv(this.env)) {
+      throw new Error(mapCookieRejectedError());
     }
 
     if (await this.loginWithStoredCredentials()) {
