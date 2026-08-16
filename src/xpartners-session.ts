@@ -2,6 +2,7 @@ import type { AppEnv } from "./env.js";
 import type { AppMetaStore } from "./app-meta-store.js";
 import {
   getXPartnersClient,
+  cookiesFromEnv,
   XPARTNERS_LOGIN_META_KEY,
   XPARTNERS_PASSWORD_META_KEY,
   XPARTNERS_SESSION_META_KEY,
@@ -83,6 +84,14 @@ export function warmupXPartnersSession(env: AppEnv): void {
   const client = getXPartnersClient(env);
   if (!client) {
     return;
+  }
+  const envCookie = cookiesFromEnv(env);
+  if (envCookie) {
+    console.log(
+      `1xPartners: XPARTNERS_COOKIE loaded (len=${envCookie.length}, accessToken=ok, refreshToken=${/refreshToken=/i.test(envCookie) ? "ok" : "MISSING"})`,
+    );
+  } else {
+    console.warn("1xPartners: XPARTNERS_COOKIE missing or invalid (need accessToken= in variable)");
   }
   void client
     .ensureSession()

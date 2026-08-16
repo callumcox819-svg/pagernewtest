@@ -430,8 +430,8 @@ function mapSignInError(raw: string): string {
 }
 
 function mapCookieRejectedError(detail?: string): string {
-  if (detail?.includes("TOKEN_ERROR")) {
-    return "1xPartners: cookie не прошёл refresh-token — обнови XPARTNERS_COOKIE в Railway (GetQuickReport → Headers → cookie).";
+  if (detail?.includes("COOKIE_REJECTED") || detail?.includes("TOKEN_ERROR")) {
+    return "1xPartners: сервер отклонил cookie. На сайте: Network → GetQuickReport (статус 200) → Headers → cookie — целиком в XPARTNERS_COOKIE одной строкой.";
   }
   if (detail?.trim()) {
     return detail.trim();
@@ -501,7 +501,7 @@ function extractAuthCookieHeader(raw: string): string {
 function validateAuthCookieHeader(cookie: string): void {
   if (!/accessToken=/i.test(cookie)) {
     throw new Error(
-      "XPARTNERS_COOKIE обрезан: нет accessToken. В Railway cookie должна доходить до accessToken=... и refreshToken=...",
+      "XPARTNERS_COOKIE: нет accessToken=. Вставь всю строку cookie из Network → GetQuickReport → Headers (не только кусок refreshToken).",
     );
   }
   if (!/refreshToken=/i.test(cookie)) {
@@ -511,13 +511,16 @@ function validateAuthCookieHeader(cookie: string): void {
   }
 }
 
-function cookiesFromEnv(env: AppEnv): string | null {
+export function cookiesFromEnv(env: AppEnv): string | null {
   const raw = (env.XPARTNERS_COOKIE || "").trim();
   if (!raw) {
     return null;
   }
-  const cookie = extractAuthCookieHeader(raw);
-  return cookie || null;
+  const normalized = normalizeCookieHeader(raw);
+  if (!/accessToken=/i.test(normalized)) {
+    return null;
+  }
+  return normalized;
 }
 
 function usesCookieAuth(env: AppEnv): boolean {
@@ -725,6 +728,15 @@ export class XPartnersClient {
   }
 
   private async activeSessionCookieHeader(): Promise<string | null> {
+    const envCookie = cookiesFromEnv(this.env);
+    if (envCookie) {
+      try {
+        validateAuthCookieHeader(envCookie);
+        return envCookie;
+      } catch {
+        // malformed env cookie
+      }
+    }
     const metaRaw = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
     if (metaRaw) {
       const metaCookie = extractAuthCookieHeader(metaRaw);
@@ -733,14 +745,9 @@ export class XPartnersClient {
           validateAuthCookieHeader(metaCookie);
           return metaCookie;
         } catch {
-          // fall through to env seed
+          // fall through
         }
       }
-    }
-    const envCookie = cookiesFromEnv(this.env);
-    if (envCookie) {
-      validateAuthCookieHeader(envCookie);
-      return envCookie;
     }
     return null;
   }
@@ -780,8 +787,14 @@ export class XPartnersClient {
     return this.multiRefreshInFlight;
   }
 
-  private async markMultiRefreshFailure(): Promise<void> {
-    this.multiRefreshBlockedUntilMs = Date.now() + MULTI_REFRESH_BACKOFF_MS;
+  private sessionWasCleared(setCookies: string[]): boolean {
+    return setCookies.some((raw) => /(?:^|;\s*)(accessToken|refreshToken)=null/i.test(raw));
+  }
+
+  private async markMultiRefreshFailure(fastFail = false): Promise<void> {
+    if (!fastFail) {
+      this.multiRefreshBlockedUntilMs = Date.now() + MULTI_REFRESH_BACKOFF_MS;
+    }
     if (this.meta) {
       await this.meta.set(XPARTNERS_SESSION_META_KEY, "");
     }
@@ -816,11 +829,11 @@ export class XPartnersClient {
         await this.persistMultiCookieHeader(applySetCookiesToHeader(cookie, setCookies));
       }
       if (response.status === 302 || response.status === 307 || response.status === 308) {
-        await this.markMultiRefreshFailure();
+        await this.markMultiRefreshFailure(true);
         return false;
       }
       if (!response.ok) {
-        await this.markMultiRefreshFailure();
+        await this.markMultiRefreshFailure(true);
         console.warn("1xPartners refresh-token:", response.status, (await response.text()).slice(0, 200));
         return false;
       }
@@ -871,6 +884,10 @@ export class XPartnersClient {
 
     const setCookies = this.responseSetCookies(response);
     if (setCookies.length) {
+      if (this.sessionWasCleared(setCookies)) {
+        this.lastPingDetail = "COOKIE_REJECTED";
+        throw new Error("COOKIE_REJECTED");
+      }
       await this.persistMultiCookieHeader(applySetCookiesToHeader(cookie, setCookies));
     }
 
@@ -1259,10 +1276,6 @@ export class XPartnersClient {
     await this.bootstrapCookiesIfNeeded();
     const envCookie = cookiesFromEnv(this.env);
     const cookieAuth = Boolean(envCookie);
-
-    if (cookieAuth && Date.now() < this.multiRefreshBlockedUntilMs) {
-      throw new Error(mapCookieRejectedError(this.lastPingDetail || "TOKEN_ERROR"));
-    }
 
     if (await this.pingAuthorized()) {
       this.loggedIn = true;
