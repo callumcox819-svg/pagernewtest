@@ -90,7 +90,7 @@ export function warmupXPartnersSession(env: AppEnv): void {
   if (envCookie) {
     const curlMode = Boolean(curlHeadersFromEnv(env));
     console.log(
-      `1xPartners: XPARTNERS_COOKIE loaded (len=${envCookie.length}, accessToken=ok, refreshToken=${/refreshToken=/i.test(envCookie) ? "ok" : "MISSING"}, curl=${curlMode ? "yes" : "no"})`,
+      `1xPartners: XPARTNERS_COOKIE loaded (len=${envCookie.length}, accessToken=ok, refreshToken=${/refreshToken=/i.test(envCookie) ? "ok" : "MISSING"}, curl=${curlMode ? "yes" : "no"}, stats=${env.XPARTNERS_STATS_SOURCE})`,
     );
   } else {
     console.warn("1xPartners: XPARTNERS_COOKIE missing or invalid (need accessToken= in variable)");

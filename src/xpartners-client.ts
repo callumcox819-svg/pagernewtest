@@ -126,6 +126,33 @@ query GetQuickReport($filter: QuickReportFilter!) {
   }
 }`;
 
+const GET_SUBPARTNER_REPORT = `
+query GetSubpartnerReport($filter: SubpartnerReportFilter!) {
+  authorized {
+    partner {
+      reports {
+        subpartnerReport(filter: $filter) {
+          status
+          hash
+          pagesCount
+          rows {
+            subPartnerId
+            siteName
+            siteId
+            countOfRegistrations
+            countOfNewAccountsWithDeposits
+            registrationDate
+          }
+          total {
+            countOfRegistrations
+            countOfNewAccountsWithDeposits
+          }
+        }
+      }
+    }
+  }
+}`;
+
 const GET_PLAYERS_REPORT = `
 query GetPlayersReport($filter: PlayersReportFilter!) {
   authorized {
@@ -217,6 +244,40 @@ type PlayersReportRow = {
   siteName?: string;
   siteId?: number | string;
 };
+
+type SubpartnerReportRow = {
+  subPartnerId?: string | number;
+  siteName?: string;
+  siteId?: number | string;
+  countOfRegistrations?: number;
+  countOfNewAccountsWithDeposits?: number;
+  registrationDate?: string;
+};
+
+function usesSubpartnerStats(env: AppEnv): boolean {
+  return env.XPARTNERS_STATS_SOURCE === "subpartners";
+}
+
+function subpartnerRowMatchesCountry(
+  row: SubpartnerReportRow,
+  country: XPartnersCountry,
+  env: AppEnv,
+): boolean {
+  const overrideId = siteIdOverride(env, country);
+  const siteId = Number(row.siteId);
+  if (overrideId && siteId === overrideId) {
+    return true;
+  }
+  const wantUrl = siteUrlForCountry(env, country).toLowerCase();
+  const name = (row.siteName || "").trim().toLowerCase();
+  if (!name) {
+    return false;
+  }
+  if (name === wantUrl) {
+    return true;
+  }
+  return SITE_HINTS[country].some((hint) => name.includes(hint));
+}
 
 function resolveCurrencyId(env: AppEnv): number {
   const raw = Number(env.XPARTNERS_CURRENCY_ID || 6);
@@ -853,6 +914,9 @@ export class XPartnersClient {
 
   /** multi.1xpartners.com web UI — blocked from many cloud IPs (403 FORBIDDEN). */
   private preferMultiWebApi(): boolean {
+    if (usesSubpartnerStats(this.env)) {
+      return false;
+    }
     return !this.multiWebBlocked && this.usesMultiRestSession(null);
   }
 
@@ -1901,9 +1965,124 @@ export class XPartnersClient {
     return { status: lastStatus, total: total ?? {} };
   }
 
+  private subpartnerReportFilter(period: { startPeriod: string; endPeriod: string }): Record<string, unknown> {
+    return {
+      currencyId: resolveCurrencyId(this.env),
+      startPeriod: period.startPeriod,
+      endPeriod: period.endPeriod,
+      methood: "get",
+    };
+  }
+
+  private async fetchSubpartnerReportOnce(filter: Record<string, unknown>): Promise<{
+    status?: string;
+    rows: SubpartnerReportRow[];
+  }> {
+    const deadline = Date.now() + 90_000;
+    let lastStatus: string | undefined;
+    let rows: SubpartnerReportRow[] = [];
+
+    for (;;) {
+      const batch = await this.graphql<
+        Array<{
+          data?: {
+            authorized?: {
+              partner?: {
+                reports?: {
+                  subpartnerReport?: {
+                    status?: string;
+                    rows?: SubpartnerReportRow[];
+                  };
+                };
+              } | null;
+            };
+          };
+          errors?: Array<{ message?: string; extensions?: unknown }>;
+        }>
+      >(
+        [
+          {
+            operationName: "GetSubpartnerReport",
+            variables: { filter },
+            query: GET_SUBPARTNER_REPORT,
+          },
+        ],
+        `${BASE}/ru/partner/report-subpartners`,
+      );
+      const first = batch?.[0];
+      if (first?.errors?.length) {
+        throw new Error(formatGraphqlErrors(first.errors));
+      }
+      const partner = first?.data?.authorized?.partner;
+      if (!partner) {
+        throw new Error("1xPartners: нет доступа к отчёту по суб-партнёрам.");
+      }
+      const report = partner.reports?.subpartnerReport;
+      lastStatus = report?.status;
+      rows = report?.rows ?? [];
+      if (lastStatus !== "PENDING") {
+        break;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("1xPartners: отчёт по суб-партнёрам ещё формируется (PENDING).");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+
+    if (lastStatus === "ERROR") {
+      throw new Error("1xPartners: ошибка отчёта по суб-партнёрам (status ERROR).");
+    }
+
+    return { status: lastStatus, rows };
+  }
+
+  private async fetchSubpartnerStatsToday(country: XPartnersCountry): Promise<XPartnersQuickStats> {
+    let matched: SubpartnerReportRow[] = [];
+    let usedPeriod = quickReportTodayPeriod();
+
+    for (const period of todayReportPeriodVariants()) {
+      const { rows } = await this.fetchSubpartnerReportOnce(this.subpartnerReportFilter(period));
+      const hits = rows.filter((row) => subpartnerRowMatchesCountry(row, country, this.env));
+      if (hits.length) {
+        matched = hits;
+        usedPeriod = period;
+        break;
+      }
+      if (rows.length && !matched.length) {
+        matched = hits;
+        usedPeriod = period;
+      }
+    }
+
+    const registrations = matched.reduce((sum, row) => sum + Number(row.countOfRegistrations ?? 0), 0);
+    const ftdN = matched.reduce((sum, row) => sum + Number(row.countOfNewAccountsWithDeposits ?? 0), 0);
+    const siteLabel =
+      matched.length === 1
+        ? (matched[0]?.siteName || DEFAULT_SITE_URL[country]).trim()
+        : matched.length > 1
+          ? `${matched.length} суб · ${country}`
+          : DEFAULT_SITE_URL[country];
+
+    if (registrations === 0 && ftdN === 0) {
+      console.warn(
+        `1xPartners ${country}: subpartners zero · period=${usedPeriod.startPeriod}/${usedPeriod.endPeriod}`,
+      );
+    }
+
+    return {
+      registrations,
+      newAccountsWithDeposits: ftdN,
+      fetchedAt: new Date().toISOString(),
+      siteLabel,
+    };
+  }
+
   async fetchQuickStatsToday(country: XPartnersCountry): Promise<XPartnersQuickStats> {
     if (!this.loggedIn) {
       await this.ensureSession();
+    }
+    if (usesSubpartnerStats(this.env)) {
+      return this.fetchSubpartnerStatsToday(country);
     }
     const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
     const { startPeriod, endPeriod } = quickReportTodayPeriod();

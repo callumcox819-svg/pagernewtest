@@ -67,6 +67,10 @@ const envSchema = z.object({
   XPARTNERS_KEEPALIVE_MINUTES: z.coerce.number().int().positive().default(3),
   /** 1xPartners currency id (6 = USD in partner UI). */
   XPARTNERS_CURRENCY_ID: z.coerce.number().int().positive().default(6),
+  /** quick = быстрый отчёт; subpartners = отчёт по суб-партнёрам (graphql, обходит блок multi на Railway). */
+  XPARTNERS_STATS_SOURCE: z
+    .preprocess((value) => (value === "" || value === undefined ? "quick" : String(value).trim().toLowerCase()), z.enum(["quick", "subpartners"]))
+    .default("quick"),
   XPARTNERS_SITE_CM: z.string().default("http://Camerun.com"),
   XPARTNERS_SITE_EG: z.string().default("http://Egypt.com"),
   XPARTNERS_SITE_ZM: z.string().default("http://Zambia.com"),
