@@ -2021,6 +2021,19 @@ async function refreshAllPartnerStats(
       callbackId,
     );
   }
+  try {
+    await ensureXPartnersSession(env);
+  } catch (error) {
+    const hours = (await loadGlobalPartnerStats(appMetaStore)).refreshIntervalHours;
+    await safeEditMenu(
+      chatId,
+      messageId,
+      `${formatAllCountriesStats({}, hours)}\n\n⚠️ ${escapeHtmlLite(formatError(error))}`,
+      buildStatsCountryKeyboard(),
+      callbackId,
+    );
+    return;
+  }
   let globalStats = await loadGlobalPartnerStats(appMetaStore);
   const hours = globalStats.refreshIntervalHours;
   const errors: string[] = [];
@@ -2038,13 +2051,22 @@ async function refreshAllPartnerStats(
   }
   const blocks: string[] = [formatAllCountriesStats(byCountry, hours)];
   if (errors.length) {
-    blocks.push("", `<b>Ошибки:</b>\n${errors.map((e) => escapeHtmlLite(e)).join("\n")}`);
+    const unique = dedupeStatErrors(errors);
+    blocks.push("", `<b>Ошибка:</b> ${escapeHtmlLite(unique.join(" · "))}`);
   }
   await safeEditMenu(chatId, messageId, blocks.join("\n").trim(), buildStatsCountryKeyboard(), callbackId);
 }
 
 function escapeHtmlLite(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function dedupeStatErrors(errors: string[]): string[] {
+  const messages = errors.map((entry) => {
+    const splitAt = entry.indexOf(": ");
+    return splitAt >= 0 ? entry.slice(splitAt + 2).trim() : entry.trim();
+  });
+  return [...new Set(messages)];
 }
 
 async function sendStatus(chatId: number, state: ChatState) {
