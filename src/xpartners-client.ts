@@ -54,6 +54,7 @@ const BASE = "https://1xpartners.com";
 const MULTI_BASE = "https://multi.1xpartners.com";
 const MULTI_REST = `${MULTI_BASE}/rest`;
 const MULTI_REST_LAPI = `${MULTI_BASE}/rest/lapi`;
+const MULTI_WEB_UI = `${MULTI_BASE}/web/PartnerAccountWeb3Ui`;
 const GRAPHQL = `${BASE}/graphql/`;
 const XP_FETCH_TIMEOUT_MS = 90_000;
 const MULTI_REST_TIMEOUT_MS = 25_000;
@@ -596,6 +597,10 @@ function multiRestDefaultQuery(): Record<string, string> {
   };
 }
 
+function multiWebUiDefaultQuery(): Record<string, string> {
+  return { v: String(MULTI_API_VERSION) };
+}
+
 const GET_PARTNERS_CAPTCHA_MODE = `
 query PartnersCaptchaMode {
   partnersProgram {
@@ -852,12 +857,13 @@ export class XPartnersClient {
     params: Record<string, string | number> = {},
     body?: unknown,
     allowRefresh = true,
+    api: "rest" | "web" = "rest",
   ): Promise<unknown> {
     const cookie = await this.activeSessionCookieHeader();
     if (!cookie) {
       throw new Error("1xPartners: нет cookie для multi REST.");
     }
-    const qs = new URLSearchParams(multiRestDefaultQuery());
+    const qs = new URLSearchParams(api === "web" ? multiWebUiDefaultQuery() : multiRestDefaultQuery());
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== null && String(value).length > 0) {
         qs.set(key, String(value));
@@ -905,7 +911,7 @@ export class XPartnersClient {
       const location = response.headers.get("location") || "";
       if (location.includes("sign-in") || response.status === 401 || response.status === 308) {
         if (await this.refreshMultiSession()) {
-          return this.multiRestRequest(method, urlPath, params, body, false);
+          return this.multiRestRequest(method, urlPath, params, body, false, api);
         }
         throw new Error("TOKEN_ERROR");
       }
