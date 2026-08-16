@@ -1848,7 +1848,7 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
     return;
   }
   try {
-    await ensureXPartnersSession(env);
+    void ensureXPartnersSession(env).catch(() => {});
   } catch {
     // keep-alive and stat fetches retry too
   }
@@ -2033,7 +2033,11 @@ async function refreshAllPartnerStats(
       globalStats = result.globalStats;
       byCountry[country] = result.stats;
     } catch (error) {
-      errors.push(`${country}: ${formatError(error)}`);
+      const msg = formatError(error);
+      errors.push(`${country}: ${msg}`);
+      if (isXPartnersSessionError(msg)) {
+        break;
+      }
     }
   }
   const blocks: string[] = [formatAllCountriesStats(byCountry, hours)];
@@ -2054,6 +2058,16 @@ function dedupeStatErrors(errors: string[]): string[] {
     return splitAt >= 0 ? entry.slice(splitAt + 2).trim() : entry.trim();
   });
   return [...new Set(messages)];
+}
+
+function isXPartnersSessionError(message: string): boolean {
+  return (
+    message.includes("TOKEN_ERROR") ||
+    message.includes("XPARTNERS_COOKIE") ||
+    message.includes("refresh-token") ||
+    message.includes("cookie не прошёл") ||
+    message.includes("автологин")
+  );
 }
 
 async function sendStatus(chatId: number, state: ChatState) {

@@ -431,7 +431,7 @@ function mapSignInError(raw: string): string {
 
 function mapCookieRejectedError(detail?: string): string {
   if (detail?.includes("TOKEN_ERROR")) {
-    return "1xPartners: refresh-token не прошёл — токены в XPARTNERS_COOKIE устарели. Обнови cookie один раз (GetQuickReport → Headers → cookie).";
+    return "1xPartners: cookie не прошёл refresh-token — обнови XPARTNERS_COOKIE в Railway (GetQuickReport → Headers → cookie).";
   }
   if (detail?.trim()) {
     return detail.trim();
@@ -518,6 +518,10 @@ function cookiesFromEnv(env: AppEnv): string | null {
   }
   const cookie = extractAuthCookieHeader(raw);
   return cookie || null;
+}
+
+function usesCookieAuth(env: AppEnv): boolean {
+  return Boolean(cookiesFromEnv(env));
 }
 
 function xsrfHeaderFromCookieHeader(cookieHeader: string | null | undefined): Record<string, string> {
@@ -669,7 +673,7 @@ export class XPartnersClient {
     }
     this.envCredentialsSeeded = true;
     const creds = parseCredentials(this.env);
-    if (!creds) {
+    if (!creds || usesCookieAuth(this.env)) {
       return;
     }
     const existingLogin = (await this.meta.get(XPARTNERS_LOGIN_META_KEY))?.trim();
@@ -680,11 +684,19 @@ export class XPartnersClient {
   }
 
   private async persistSessionCookies(): Promise<void> {
-    const serialized = await this.jar.getCookieString(BASE);
-    if (!serialized?.trim() || !this.meta) {
+    if (!this.meta) {
       return;
     }
-    await this.meta.set(XPARTNERS_SESSION_META_KEY, serialized);
+    const multiJar = (await this.jar.getCookieString(MULTI_BASE)) || "";
+    const cookie = extractAuthCookieHeader(multiJar);
+    if (cookie && /accessToken=/i.test(cookie)) {
+      await this.persistCookieString(cookie);
+      return;
+    }
+    const active = await this.activeSessionCookieHeader();
+    if (active) {
+      await this.persistCookieString(active);
+    }
   }
 
   private async seedCookies(cookieHeader: string): Promise<void> {
@@ -768,10 +780,10 @@ export class XPartnersClient {
     return this.multiRefreshInFlight;
   }
 
-  private markMultiRefreshFailure(): void {
+  private async markMultiRefreshFailure(): Promise<void> {
     this.multiRefreshBlockedUntilMs = Date.now() + MULTI_REFRESH_BACKOFF_MS;
     if (this.meta) {
-      void this.meta.set(XPARTNERS_SESSION_META_KEY, "");
+      await this.meta.set(XPARTNERS_SESSION_META_KEY, "");
     }
   }
 
@@ -804,18 +816,18 @@ export class XPartnersClient {
         await this.persistMultiCookieHeader(applySetCookiesToHeader(cookie, setCookies));
       }
       if (response.status === 302 || response.status === 307 || response.status === 308) {
-        this.markMultiRefreshFailure();
+        await this.markMultiRefreshFailure();
         return false;
       }
       if (!response.ok) {
-        this.markMultiRefreshFailure();
+        await this.markMultiRefreshFailure();
         console.warn("1xPartners refresh-token:", response.status, (await response.text()).slice(0, 200));
         return false;
       }
       this.multiRefreshBlockedUntilMs = 0;
       return true;
     } catch (error) {
-      this.markMultiRefreshFailure();
+      await this.markMultiRefreshFailure();
       console.warn("1xPartners refresh-token:", error instanceof Error ? error.message : error);
       return false;
     }
@@ -1087,17 +1099,15 @@ export class XPartnersClient {
     if (!envCookie) {
       return false;
     }
+    this.jar = new CookieJar();
+    this.fetchWithCookies = makeFetchCookie(fetch, this.jar) as typeof fetch;
+    this.bootstrapped = false;
     if (this.usesMultiRestSession(envCookie)) {
-      const meta = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
-      if (meta) {
-        return false;
-      }
-      await this.persistMultiCookieHeader(envCookie);
-      this.bootstrapped = true;
-      return this.pingAuthorized();
+      await this.seedCookies(envCookie);
+      await this.persistCookieString(envCookie);
+    } else {
+      await this.seedCookies(envCookie);
     }
-    await this.clearStaleSessionForLogin();
-    await this.seedCookies(envCookie);
     this.bootstrapped = true;
     return this.pingAuthorized();
   }
@@ -1247,6 +1257,13 @@ export class XPartnersClient {
 
   async ensureSession(): Promise<void> {
     await this.bootstrapCookiesIfNeeded();
+    const envCookie = cookiesFromEnv(this.env);
+    const cookieAuth = Boolean(envCookie);
+
+    if (cookieAuth && Date.now() < this.multiRefreshBlockedUntilMs) {
+      throw new Error(mapCookieRejectedError(this.lastPingDetail || "TOKEN_ERROR"));
+    }
+
     if (await this.pingAuthorized()) {
       this.loggedIn = true;
       await this.persistSessionCookies();
@@ -1264,16 +1281,25 @@ export class XPartnersClient {
       }
     }
 
+    if (await this.reloadEnvCookieSession()) {
+      this.loggedIn = true;
+      await this.persistSessionCookies();
+      return;
+    }
+
     if (await this.reloadPersistedCookieSession()) {
       this.loggedIn = true;
       await this.persistSessionCookies();
       return;
     }
 
-    if (await this.reloadEnvCookieSession()) {
-      this.loggedIn = true;
-      await this.persistSessionCookies();
-      return;
+    if (cookieAuth) {
+      try {
+        validateAuthCookieHeader(envCookie!);
+      } catch (error) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+      throw new Error(mapCookieRejectedError(this.lastPingDetail));
     }
 
     if (await this.loginWithStoredCredentials()) {
@@ -1293,17 +1319,8 @@ export class XPartnersClient {
       );
     }
 
-    if (cookiesFromEnv(this.env)) {
-      try {
-        validateAuthCookieHeader(cookiesFromEnv(this.env)!);
-      } catch (error) {
-        throw error instanceof Error ? error : new Error(String(error));
-      }
-      throw new Error(mapCookieRejectedError(this.lastPingDetail));
-    }
-
     throw new Error(
-      "1xPartners: задай XPARTNERS_LOGIN/PASSWORD или XPARTNERS_COOKIE в Railway Variables.",
+      "1xPartners: задай XPARTNERS_COOKIE или XPARTNERS_LOGIN/PASSWORD в Railway Variables.",
     );
   }
 
@@ -1673,7 +1690,9 @@ export class XPartnersClient {
   }
 
   async fetchQuickStatsToday(country: XPartnersCountry): Promise<XPartnersQuickStats> {
-    await this.ensureSession();
+    if (!this.loggedIn) {
+      await this.ensureSession();
+    }
     const { sites, label: siteLabel } = await this.resolveSitesForCountry(country);
     const { startPeriod, endPeriod } = quickReportTodayPeriod();
     const currencyId = resolveCurrencyId(this.env);
