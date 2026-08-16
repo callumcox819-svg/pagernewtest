@@ -431,9 +431,9 @@ function mapSignInError(raw: string): string {
 }
 
 function mapCookieRejectedError(detail?: string): string {
-  if (detail?.includes("COOKIE_REJECTED") || detail?.includes("TOKEN_ERROR")) {
-    return "1xPartners: сервер отклонил cookie. На сайте: Network → GetQuickReport (статус 200) → Headers → cookie — целиком в XPARTNERS_COOKIE одной строкой.";
-  }
+    if (detail?.includes("COOKIE_REJECTED") || detail?.includes("TOKEN_ERROR")) {
+      return "1xPartners: cookie не принята. Пока AffiliateInfo = 200 в Network: Headers → cookie → XPARTNERS_COOKIE одной строкой → Save → redeploy.";
+    }
   if (detail?.trim()) {
     return detail.trim();
   }
@@ -870,23 +870,44 @@ export class XPartnersClient {
       }
     }
     const url = `${urlPath}?${qs.toString()}`;
+    const webHeaders =
+      api === "web"
+        ? {
+            ...BROWSER_HEADERS,
+            Accept: "application/json, text/plain, */*",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "X-Requested-With": "XMLHttpRequest",
+            Origin: MULTI_BASE,
+            Referer: `${MULTI_BASE}/ru/partner/reports/quick-report`,
+            Cookie: cookie,
+            ...bearerHeaderFromCookie(cookie),
+            ...xsrfHeaderFromCookieHeader(cookie),
+          }
+        : null;
     const response = await fetch(url, {
       method,
       redirect: "manual",
-      headers: {
-        ...BROWSER_HEADERS,
-        Accept: "application/json, text/plain, */*",
-        "Api-Version": String(MULTI_API_VERSION),
-        Origin: MULTI_BASE,
-        Referer: `${MULTI_BASE}/`,
-        Cookie: cookie,
-        ...bearerHeaderFromCookie(cookie),
-        ...xsrfHeaderFromCookieHeader(cookie),
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      },
+      headers:
+        webHeaders ??
+        {
+          ...BROWSER_HEADERS,
+          Accept: "application/json, text/plain, */*",
+          "Api-Version": String(MULTI_API_VERSION),
+          Origin: MULTI_BASE,
+          Referer: `${MULTI_BASE}/`,
+          Cookie: cookie,
+          ...bearerHeaderFromCookie(cookie),
+          ...xsrfHeaderFromCookieHeader(cookie),
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(MULTI_REST_TIMEOUT_MS),
     });
+
+    if (api === "web" && (response.status === 401 || response.status === 403)) {
+      console.warn(`1xPartners web API ${response.status} ${urlPath.split("/").pop()}`);
+      throw new Error("COOKIE_REJECTED");
+    }
 
     const setCookies = this.responseSetCookies(response);
     if (setCookies.length) {
@@ -928,7 +949,7 @@ export class XPartnersClient {
     const ct = response.headers.get("content-type") || "";
     if (ct.includes("text/html")) {
       if (allowRefresh && (await this.refreshMultiSession())) {
-        return this.multiRestRequest(method, urlPath, params, body, false);
+        return this.multiRestRequest(method, urlPath, params, body, false, api);
       }
       throw new Error("TOKEN_ERROR");
     }
@@ -943,7 +964,7 @@ export class XPartnersClient {
   }
 
   private async multiRestGet(endpoint: string, params: Record<string, string | number> = {}): Promise<unknown> {
-    return this.multiRestRequest("GET", `${MULTI_REST_LAPI}/${endpoint}`, params);
+    return this.multiRestRequest("GET", `${MULTI_WEB_UI}/${endpoint}`, params, undefined, true, "web");
   }
 
   private cookieRejectedByServer(): boolean {
