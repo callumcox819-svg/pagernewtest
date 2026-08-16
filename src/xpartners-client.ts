@@ -56,6 +56,9 @@ const MULTI_REST = `${MULTI_BASE}/rest`;
 const MULTI_REST_LAPI = `${MULTI_BASE}/rest/lapi`;
 const GRAPHQL = `${BASE}/graphql/`;
 const XP_FETCH_TIMEOUT_MS = 90_000;
+const MULTI_REST_TIMEOUT_MS = 25_000;
+const MULTI_REFRESH_TIMEOUT_MS = 12_000;
+const MULTI_REFRESH_BACKOFF_MS = 10 * 60_000;
 const MULTI_API_VERSION = 13;
 
 const BROWSER_HEADERS = {
@@ -428,7 +431,7 @@ function mapSignInError(raw: string): string {
 
 function mapCookieRejectedError(detail?: string): string {
   if (detail?.includes("TOKEN_ERROR")) {
-    return "сессия не обновилась автоматически — один раз обнови XPARTNERS_COOKIE в Railway (GetQuickReport → Headers → cookie), дальше бот сам продлевает.";
+    return "1xPartners: сессия не обновилась — скопируй cookie заново (GetQuickReport → Headers → cookie) в XPARTNERS_COOKIE. После этого бот сам продлевает.";
   }
   if (detail?.trim()) {
     return detail.trim();
@@ -580,6 +583,7 @@ export class XPartnersClient {
   private lastSignInError = "";
   private lastPingDetail = "";
   private multiRefreshInFlight: Promise<boolean> | null = null;
+  private multiRefreshBlockedUntilMs = 0;
 
   constructor(
     private readonly env: AppEnv,
@@ -702,6 +706,9 @@ export class XPartnersClient {
   }
 
   private async refreshMultiSession(): Promise<boolean> {
+    if (Date.now() < this.multiRefreshBlockedUntilMs) {
+      return false;
+    }
     if (this.multiRefreshInFlight) {
       return this.multiRefreshInFlight;
     }
@@ -709,6 +716,10 @@ export class XPartnersClient {
       this.multiRefreshInFlight = null;
     });
     return this.multiRefreshInFlight;
+  }
+
+  private markMultiRefreshFailure(): void {
+    this.multiRefreshBlockedUntilMs = Date.now() + MULTI_REFRESH_BACKOFF_MS;
   }
 
   private async refreshMultiSessionOnce(): Promise<boolean> {
@@ -733,21 +744,25 @@ export class XPartnersClient {
           ...xsrfHeaderFromCookieHeader(cookie),
         },
         body: "{}",
-        signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(MULTI_REFRESH_TIMEOUT_MS),
       });
       const setCookies = this.responseSetCookies(response);
       if (setCookies.length) {
         await this.persistMultiCookieHeader(applySetCookiesToHeader(cookie, setCookies));
       }
       if (response.status === 302 || response.status === 307 || response.status === 308) {
+        this.markMultiRefreshFailure();
         return false;
       }
       if (!response.ok) {
+        this.markMultiRefreshFailure();
         console.warn("1xPartners refresh-token:", response.status, (await response.text()).slice(0, 200));
         return false;
       }
+      this.multiRefreshBlockedUntilMs = 0;
       return true;
     } catch (error) {
+      this.markMultiRefreshFailure();
       console.warn("1xPartners refresh-token:", error instanceof Error ? error.message : error);
       return false;
     }
@@ -786,7 +801,7 @@ export class XPartnersClient {
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(MULTI_REST_TIMEOUT_MS),
     });
 
     const setCookies = this.responseSetCookies(response);

@@ -79,17 +79,17 @@ export function maskXPartnersLogin(login?: string): string {
   return `${value.slice(0, 3)}***`;
 }
 
-export async function warmupXPartnersSession(env: AppEnv): Promise<void> {
+export function warmupXPartnersSession(env: AppEnv): void {
   const client = getXPartnersClient(env);
   if (!client) {
     return;
   }
-  try {
-    await client.ensureSession();
-    console.log("1xPartners: session warmup OK");
-  } catch (error) {
-    console.warn("1xPartners: session warmup failed:", formatError(error));
-  }
+  void client
+    .ensureSession()
+    .then(() => console.log("1xPartners: session warmup OK"))
+    .catch((error) => {
+      console.warn("1xPartners: session warmup failed:", formatError(error));
+    });
 }
 
 function formatError(error: unknown): string {

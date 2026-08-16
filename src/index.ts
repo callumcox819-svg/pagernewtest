@@ -131,7 +131,7 @@ async function main() {
     console.warn("Telegram setMyCommands failed:", formatError(error));
   });
   await warmupConnectedAccounts();
-  await warmupXPartnersSession(env);
+  warmupXPartnersSession(env);
   startXPartnersKeepAlive(env);
 
   await Promise.all([
@@ -2020,19 +2020,6 @@ async function refreshAllPartnerStats(
       buildStatsCountryKeyboard(),
       callbackId,
     );
-  }
-  try {
-    await ensureXPartnersSession(env);
-  } catch (error) {
-    const hours = (await loadGlobalPartnerStats(appMetaStore)).refreshIntervalHours;
-    await safeEditMenu(
-      chatId,
-      messageId,
-      `${formatAllCountriesStats({}, hours)}\n\n⚠️ ${escapeHtmlLite(formatError(error))}`,
-      buildStatsCountryKeyboard(),
-      callbackId,
-    );
-    return;
   }
   let globalStats = await loadGlobalPartnerStats(appMetaStore);
   const hours = globalStats.refreshIntervalHours;
