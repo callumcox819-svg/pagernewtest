@@ -52,8 +52,10 @@ type GraphQlBatchItem = {
 
 const BASE = "https://1xpartners.com";
 const MULTI_BASE = "https://multi.1xpartners.com";
+const MULTI_REST_LAPI = `${MULTI_BASE}/rest/lapi`;
 const GRAPHQL = `${BASE}/graphql/`;
 const XP_FETCH_TIMEOUT_MS = 90_000;
+const MULTI_API_VERSION = 13;
 
 const BROWSER_HEADERS = {
   "User-Agent":
@@ -218,6 +220,114 @@ function resolveCurrencyId(env: AppEnv): number {
     return 6;
   }
   return raw > 0 ? raw : 6;
+}
+
+/** multi.1xpartners.com cabinet uses accessToken cookies + /rest/lapi (not 1xpartners.com/graphql). */
+function usesMultiRestAuth(cookieHeader: string | null | undefined): boolean {
+  return Boolean(cookieHeader?.includes("accessToken="));
+}
+
+function multiRestTodayPeriod(): { startPeriod: string; endPeriod: string } {
+  const dayKey = todayDayKey();
+  return { startPeriod: dayKey, endPeriod: dayKey };
+}
+
+function pickNumericField(obj: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const raw = obj[key];
+    if (raw == null || raw === "") {
+      continue;
+    }
+    const n = Number(raw);
+    if (Number.isFinite(n)) {
+      return n;
+    }
+  }
+  return undefined;
+}
+
+function parseRestQuickReportTotals(data: unknown): QuickReportTotals {
+  let best: QuickReportTotals = {};
+  const walk = (value: unknown, depth = 0): void => {
+    if (depth > 12 || value == null) {
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        walk(item, depth + 1);
+      }
+      return;
+    }
+    if (typeof value !== "object") {
+      return;
+    }
+    const obj = value as Record<string, unknown>;
+    const registrations = pickNumericField(obj, [
+      "countOfRegistrations",
+      "CountOfRegistrations",
+      "registrations",
+      "Registrations",
+    ]);
+    const hasRegistrationField =
+      registrations != null ||
+      "countOfRegistrations" in obj ||
+      "CountOfRegistrations" in obj ||
+      "registrations" in obj ||
+      "Registrations" in obj;
+    if (hasRegistrationField) {
+      const candidate: QuickReportTotals = {
+        countOfRegistrations: registrations ?? 0,
+        newDepositors: pickNumericField(obj, ["newDepositors", "NewDepositors", "newDepositsCount", "NewDepositsCount"]),
+        countOfRegistrationsWithDeposits: pickNumericField(obj, [
+          "countOfRegistrationsWithDeposits",
+          "CountOfRegistrationsWithDeposits",
+        ]),
+        countOfAccountsWithDeposits: pickNumericField(obj, [
+          "countOfAccountsWithDeposits",
+          "CountOfAccountsWithDeposits",
+        ]),
+      };
+      const score = Number(candidate.countOfRegistrations ?? 0) + Number(candidate.newDepositors ?? 0);
+      const bestScore = Number(best.countOfRegistrations ?? 0) + Number(best.newDepositors ?? 0);
+      if (score >= bestScore) {
+        best = candidate;
+      }
+    }
+    for (const nested of Object.values(obj)) {
+      walk(nested, depth + 1);
+    }
+  };
+  walk(data);
+  return best;
+}
+
+function collectSiteLikeObjects(
+  value: unknown,
+  out: Array<{ id: number; name: string }>,
+  depth = 0,
+): void {
+  if (depth > 12 || value == null) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (item && typeof item === "object") {
+        const obj = item as Record<string, unknown>;
+        const id = Number(obj.id ?? obj.siteId ?? obj.SiteId ?? obj.websiteId ?? obj.WebsiteId);
+        const name = String(obj.name ?? obj.siteName ?? obj.SiteName ?? obj.url ?? obj.Url ?? obj.title ?? "").trim();
+        if (id > 0 && name) {
+          out.push({ id, name });
+        }
+      }
+      collectSiteLikeObjects(item, out, depth + 1);
+    }
+    return;
+  }
+  if (typeof value === "object") {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      collectSiteLikeObjects(nested, out, depth + 1);
+    }
+  }
 }
 
 function totalsLookEmpty(total: QuickReportTotals | undefined): boolean {
@@ -485,6 +595,136 @@ export class XPartnersClient {
     }
     validateAuthCookieHeader(cookie);
     return cookie;
+  }
+
+  private async activeSessionCookieHeader(): Promise<string | null> {
+    const envCookie = cookiesFromEnv(this.env);
+    if (envCookie) {
+      validateAuthCookieHeader(envCookie);
+      return envCookie;
+    }
+    const raw = (await this.meta?.get(XPARTNERS_SESSION_META_KEY))?.trim();
+    if (!raw) {
+      return null;
+    }
+    const cookie = extractAuthCookieHeader(raw);
+    if (!cookie) {
+      return null;
+    }
+    validateAuthCookieHeader(cookie);
+    return cookie;
+  }
+
+  private usesMultiRestSession(cookie?: string | null): boolean {
+    return usesMultiRestAuth(cookie ?? cookiesFromEnv(this.env));
+  }
+
+  private async multiRestGet(endpoint: string, params: Record<string, string | number> = {}): Promise<unknown> {
+    const cookie = await this.activeSessionCookieHeader();
+    if (!cookie) {
+      throw new Error("1xPartners: нет cookie для multi REST.");
+    }
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && String(value).length > 0) {
+        qs.set(key, String(value));
+      }
+    }
+    qs.set("v", String(MULTI_API_VERSION));
+    const url = `${MULTI_REST_LAPI}/${endpoint}?${qs.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "manual",
+      headers: {
+        ...BROWSER_HEADERS,
+        Accept: "application/json, text/plain, */*",
+        "Api-Version": String(MULTI_API_VERSION),
+        Origin: MULTI_BASE,
+        Referer: `${MULTI_BASE}/`,
+        Cookie: cookie,
+        ...(await this.requestHeaders({}, cookie)),
+      },
+      signal: AbortSignal.timeout(XP_FETCH_TIMEOUT_MS),
+    });
+    if (response.status === 302 || response.status === 307 || response.status === 308) {
+      const location = response.headers.get("location") || "";
+      if (location.includes("sign-in")) {
+        throw new Error("USER_DOES_NOT_EXISTS");
+      }
+      throw new Error(`1xPartners multi REST redirect ${response.status} → ${location}`);
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`1xPartners multi REST HTTP ${response.status}: ${text.slice(0, 300)}`);
+    }
+    const ct = response.headers.get("content-type") || "";
+    if (ct.includes("text/html")) {
+      throw new Error("1xPartners multi REST вернул HTML вместо JSON (cookie истёк).");
+    }
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      await this.persistCookieString(cookie);
+      return parsed;
+    } catch {
+      throw new Error(`1xPartners multi REST invalid JSON: ${text.slice(0, 200)}`);
+    }
+  }
+
+  private async pingMultiAuthorized(): Promise<boolean> {
+    try {
+      const data = await this.multiRestGet("AffiliateInfo");
+      if (data && typeof data === "object") {
+        const err = (data as Record<string, unknown>).error ?? (data as Record<string, unknown>).Error;
+        if (err != null && String(err).trim()) {
+          this.lastPingDetail = String(err);
+          return false;
+        }
+        return true;
+      }
+      this.lastPingDetail = "AffiliateInfo: пустой ответ";
+      return false;
+    } catch (error) {
+      this.lastPingDetail = error instanceof Error ? error.message : String(error);
+      return false;
+    }
+  }
+
+  private async listSitesMulti(): Promise<Array<{ id: number; name: string }>> {
+    const collected: Array<{ id: number; name: string }> = [];
+    try {
+      collectSiteLikeObjects(await this.multiRestGet("AffiliateInfo"), collected);
+    } catch (error) {
+      console.warn("1xPartners AffiliateInfo:", error instanceof Error ? error.message : error);
+    }
+    try {
+      collectSiteLikeObjects(await this.multiRestGet("GetCountries"), collected);
+    } catch {
+      // optional
+    }
+    const byId = new Map<number, { id: number; name: string }>();
+    for (const site of collected) {
+      byId.set(site.id, site);
+    }
+    return [...byId.values()];
+  }
+
+  private async fetchQuickReportTotalsMulti(filter: {
+    merchantId: number;
+    siteId?: number;
+    startPeriod: string;
+    endPeriod: string;
+  }): Promise<{ status?: string; total: QuickReportTotals }> {
+    const params: Record<string, string | number> = {
+      MerchantId: filter.merchantId,
+      StartPeriod: filter.startPeriod,
+      EndPeriod: filter.endPeriod,
+    };
+    if (filter.siteId && filter.siteId > 0) {
+      params.SiteId = filter.siteId;
+    }
+    const data = await this.multiRestGet("GetQuickReport", params);
+    const total = parseRestQuickReportTotals(data);
+    return { status: "SUCCESS", total };
   }
 
   private graphqlOrigin(): string {
@@ -857,6 +1097,10 @@ export class XPartnersClient {
 
   private async pingAuthorized(): Promise<boolean> {
     this.lastPingDetail = "";
+    const cookie = await this.activeSessionCookieHeader();
+    if (this.usesMultiRestSession(cookie)) {
+      return this.pingMultiAuthorized();
+    }
     try {
       const data = await this.graphql<
         Array<{
@@ -940,6 +1184,9 @@ export class XPartnersClient {
 
   private async listSites(): Promise<Array<{ id: number; name: string }>> {
     await this.ensureSession();
+    if (this.usesMultiRestSession(await this.activeSessionCookieHeader())) {
+      return this.listSitesMulti();
+    }
     const run = async (hidden: boolean | undefined) => {
       const filter: { partnerId: null; hidden?: boolean } = { partnerId: null };
       if (hidden !== undefined) {
@@ -1030,6 +1277,15 @@ export class XPartnersClient {
     startPeriod: string;
     endPeriod: string;
   }): Promise<{ status?: string; total: QuickReportTotals }> {
+    if (this.usesMultiRestSession(await this.activeSessionCookieHeader())) {
+      const period = multiRestTodayPeriod();
+      return this.fetchQuickReportTotalsMulti({
+        merchantId: filter.currencyId,
+        siteId: filter.siteId,
+        startPeriod: period.startPeriod,
+        endPeriod: period.endPeriod,
+      });
+    }
     const deadline = Date.now() + 60_000;
     let lastStatus: string | undefined;
     let total: QuickReportTotals | undefined;
