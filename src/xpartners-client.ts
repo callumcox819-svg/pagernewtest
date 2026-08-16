@@ -431,16 +431,13 @@ function mapSignInError(raw: string): string {
 }
 
 function mapCookieRejectedError(detail?: string): string {
-    if (detail?.includes("COOKIE_REJECTED") || detail?.includes("TOKEN_ERROR")) {
-      return "1xPartners: cookie не принята (403). AffiliateInfo → ПКМ → Copy as cURL → весь текст в XPARTNERS_COOKIE → Save → redeploy.";
-    }
+  if (detail?.includes("COOKIE_REJECTED") || detail?.includes("TOKEN_ERROR")) {
+    return "1xPartners: cookie не принята. Network → AffiliateInfo (200) → ПКМ → Copy as cURL → весь текст в XPARTNERS_COOKIE → Save → redeploy → «Обновить все».";
+  }
   if (detail?.trim()) {
     return detail.trim();
   }
-  return [
-    "XPARTNERS_COOKIE не принят.",
-    "Скопируй cookie из GetQuickReport → Headers (accessToken, refreshToken, XSRF-TOKEN).",
-  ].join(" ");
+  return "1xPartners: XPARTNERS_COOKIE не принят — скопируй Copy as cURL с AffiliateInfo.";
 }
 
 function mapMultiLoginError(status: number, body: string): string {
@@ -588,11 +585,13 @@ function xsrfHeaderFromCookieHeader(cookieHeader: string | null | undefined): Re
     return {};
   }
   const raw = match[1].trim();
+  let token = raw;
   try {
-    return { "X-XSRF-TOKEN": decodeURIComponent(raw) };
+    token = decodeURIComponent(raw);
   } catch {
-    return { "X-XSRF-TOKEN": raw };
+    // keep raw
   }
+  return { "X-XSRF-TOKEN": token, "X-CSRF-TOKEN": token };
 }
 
 function cookieValueFromHeader(cookieHeader: string, name: string): string | null {
@@ -650,6 +649,45 @@ function multiRestDefaultQuery(): Record<string, string> {
 
 function multiWebUiDefaultQuery(): Record<string, string> {
   return { v: String(MULTI_API_VERSION) };
+}
+
+const MULTI_WEB_REFERER = `${MULTI_BASE}/ru/partner/reports/quick-report`;
+
+function multiWebRequestHeaders(cookie: string, curlHeaders: Record<string, string> | null): Record<string, string> {
+  if (curlHeaders) {
+    const merged: Record<string, string> = {
+      ...BROWSER_HEADERS,
+      Accept: "application/json, text/plain, */*",
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "same-origin",
+      ...curlHeaders,
+      Cookie:
+        Object.entries(curlHeaders).find(([k]) => k.toLowerCase() === "cookie")?.[1] ?? cookie,
+    };
+    if (!Object.keys(curlHeaders).some((k) => k.toLowerCase() === "authorization")) {
+      Object.assign(merged, bearerHeaderFromCookie(cookie));
+    }
+    if (!Object.keys(curlHeaders).some((k) => k.toLowerCase() === "x-xsrf-token")) {
+      Object.assign(merged, xsrfHeaderFromCookieHeader(cookie));
+    }
+    return merged;
+  }
+  return {
+    ...BROWSER_HEADERS,
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Api-Version": String(MULTI_API_VERSION),
+    "X-Requested-With": "XMLHttpRequest",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    Origin: MULTI_BASE,
+    Referer: MULTI_WEB_REFERER,
+    Cookie: cookie,
+    ...bearerHeaderFromCookie(cookie),
+    ...xsrfHeaderFromCookieHeader(cookie),
+  };
 }
 
 const GET_PARTNERS_CAPTCHA_MODE = `
@@ -902,6 +940,26 @@ export class XPartnersClient {
     }
   }
 
+  private async warmMultiCabinetPage(cookie: string): Promise<void> {
+    try {
+      await fetch(MULTI_WEB_REFERER, {
+        method: "GET",
+        redirect: "manual",
+        headers: {
+          ...BROWSER_HEADERS,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          Referer: `${MULTI_BASE}/`,
+          Cookie: cookie,
+          ...bearerHeaderFromCookie(cookie),
+          ...xsrfHeaderFromCookieHeader(cookie),
+        },
+        signal: AbortSignal.timeout(12_000),
+      });
+    } catch {
+      // optional warmup
+    }
+  }
+
   private async multiRestRequest(
     method: "GET" | "POST",
     urlPath: string,
@@ -921,42 +979,9 @@ export class XPartnersClient {
       }
     }
     const url = `${urlPath}?${qs.toString()}`;
-    const authCookie = apiCookieHeader(cookie);
     const curlHeaders = curlHeadersFromEnv(this.env);
-    const webHeaders = (() => {
-      if (api !== "web") {
-        return null;
-      }
-      if (curlHeaders) {
-        const merged: Record<string, string> = {
-          ...BROWSER_HEADERS,
-          Accept: "application/json, text/plain, */*",
-          ...curlHeaders,
-          Cookie:
-            Object.entries(curlHeaders).find(([k]) => k.toLowerCase() === "cookie")?.[1] ??
-            authCookie,
-        };
-        if (!Object.keys(curlHeaders).some((k) => k.toLowerCase() === "authorization")) {
-          Object.assign(merged, bearerHeaderFromCookie(authCookie));
-        }
-        if (!Object.keys(curlHeaders).some((k) => k.toLowerCase() === "x-xsrf-token")) {
-          Object.assign(merged, xsrfHeaderFromCookieHeader(authCookie));
-        }
-        return merged;
-      }
-      return {
-        ...BROWSER_HEADERS,
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Api-Version": String(MULTI_API_VERSION),
-        "X-Requested-With": "XMLHttpRequest",
-        Origin: MULTI_BASE,
-        Referer: `${MULTI_BASE}/ru/partner/reports/quick-report`,
-        Cookie: authCookie,
-        ...bearerHeaderFromCookie(authCookie),
-        ...xsrfHeaderFromCookieHeader(authCookie),
-      };
-    })();
+    const webHeaders =
+      api === "web" ? multiWebRequestHeaders(cookie, curlHeaders) : null;
     const response = await fetch(url, {
       method,
       redirect: "manual",
@@ -968,9 +993,9 @@ export class XPartnersClient {
           "Api-Version": String(MULTI_API_VERSION),
           Origin: MULTI_BASE,
           Referer: `${MULTI_BASE}/`,
-          Cookie: authCookie,
-          ...bearerHeaderFromCookie(authCookie),
-          ...xsrfHeaderFromCookieHeader(authCookie),
+          Cookie: cookie,
+          ...bearerHeaderFromCookie(cookie),
+          ...xsrfHeaderFromCookieHeader(cookie),
           ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         },
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -978,7 +1003,14 @@ export class XPartnersClient {
     });
 
     if (api === "web" && (response.status === 401 || response.status === 403)) {
-      console.warn(`1xPartners web API ${response.status} ${urlPath.split("/").pop()}`);
+      if (allowRefresh && (await this.refreshMultiSession())) {
+        return this.multiRestRequest(method, urlPath, params, body, false, api);
+      }
+      const bodyPreview = (await response.text()).slice(0, 80).replace(/\s+/g, " ");
+      console.warn(
+        `1xPartners web API ${response.status} ${urlPath.split("/").pop()} cookieLen=${cookie.length} body=${bodyPreview}`,
+      );
+      this.lastPingDetail = "COOKIE_REJECTED";
       throw new Error("COOKIE_REJECTED");
     }
 
@@ -1046,6 +1078,10 @@ export class XPartnersClient {
 
   private async pingMultiAuthorized(): Promise<boolean> {
     try {
+      const cookie = await this.activeSessionCookieHeader();
+      if (cookie) {
+        await this.warmMultiCabinetPage(cookie);
+      }
       const data = await this.multiRestGet("AffiliateInfo");
       if (data && typeof data === "object") {
         const err = (data as Record<string, unknown>).error ?? (data as Record<string, unknown>).Error;

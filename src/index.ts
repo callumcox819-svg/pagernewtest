@@ -2064,6 +2064,8 @@ function isXPartnersSessionError(message: string): boolean {
   return (
     message.includes("TOKEN_ERROR") ||
     message.includes("XPARTNERS_COOKIE") ||
+    message.includes("cookie не принята") ||
+    message.includes("COOKIE_REJECTED") ||
     message.includes("refresh-token") ||
     message.includes("cookie не прошёл") ||
     message.includes("автологин")
