@@ -309,7 +309,7 @@ function parseCredentials(env: AppEnv): { login: string; password: string } | nu
 
 function mapSignInError(raw: string): string {
   if (raw.includes("INVALID_CAPTCHA") || raw.includes("CAPTCHA")) {
-    return "1xPartners требует капчу: добавь XPARTNERS_COOKIE в Railway (F12 → Cookies → multi.1xpartners.com). Логин/пароль оставь — бот сам продлит сессию.";
+    return "1xPartners требует капчу: добавь XPARTNERS_COOKIE в Railway. F12 → Network → кликни GetQuickReport → Headers → cookie (вся строка).";
   }
   return raw;
 }
@@ -628,7 +628,7 @@ export class XPartnersClient {
     this.bootstrapped = true;
     if (!(await this.pingAuthorized())) {
       throw new Error(
-        "Cookie не принят (истёк или обрезан). Скопируй Cookie из graphql заново — accessToken, refreshToken, XSRF-TOKEN.",
+        "Cookie не принят. F12 → Network → GetQuickReport → Headers → cookie — скопируй всю строку в XPARTNERS_COOKIE.",
       );
     }
     this.loggedIn = true;
