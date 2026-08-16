@@ -886,6 +886,7 @@ export class XPartnersClient {
     if (setCookies.length) {
       if (this.sessionWasCleared(setCookies)) {
         this.lastPingDetail = "COOKIE_REJECTED";
+        console.warn("1xPartners: API rejected cookie (accessToken=null)");
         throw new Error("COOKIE_REJECTED");
       }
       await this.persistMultiCookieHeader(applySetCookiesToHeader(cookie, setCookies));
@@ -937,6 +938,10 @@ export class XPartnersClient {
 
   private async multiRestGet(endpoint: string, params: Record<string, string | number> = {}): Promise<unknown> {
     return this.multiRestRequest("GET", `${MULTI_REST_LAPI}/${endpoint}`, params);
+  }
+
+  private cookieRejectedByServer(): boolean {
+    return this.lastPingDetail.includes("COOKIE_REJECTED");
   }
 
   private async pingMultiAuthorized(): Promise<boolean> {
@@ -1284,7 +1289,7 @@ export class XPartnersClient {
     }
     this.loggedIn = false;
 
-    if (this.usesMultiRestSession(await this.activeSessionCookieHeader())) {
+    if (this.usesMultiRestSession(await this.activeSessionCookieHeader()) && !this.cookieRejectedByServer()) {
       if (await this.refreshMultiSession()) {
         if (await this.pingAuthorized()) {
           this.loggedIn = true;
@@ -1292,6 +1297,10 @@ export class XPartnersClient {
           return;
         }
       }
+    }
+
+    if (this.cookieRejectedByServer() && cookieAuth) {
+      throw new Error(mapCookieRejectedError(this.lastPingDetail));
     }
 
     if (await this.reloadEnvCookieSession()) {
@@ -1346,7 +1355,10 @@ export class XPartnersClient {
         return;
       }
       this.loggedIn = false;
-      if (this.usesMultiRestSession(await this.activeSessionCookieHeader())) {
+      if (
+        this.usesMultiRestSession(await this.activeSessionCookieHeader()) &&
+        !this.cookieRejectedByServer()
+      ) {
         if (await this.refreshMultiSession() && (await this.pingAuthorized())) {
           this.loggedIn = true;
           await this.persistSessionCookies();
