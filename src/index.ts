@@ -75,6 +75,12 @@ import {
   saveGlobalPartnerStats,
   type GlobalPartnerStatsState,
 } from "./xpartners-stats-cache.js";
+import {
+  loadPostbackCountryStats,
+  postbackSetupHint,
+  startXPartnersPostbackServer,
+  usesPostbackStats,
+} from "./xpartners-postback.js";
 
 import {
   defaultCountryForChannelName,
@@ -133,6 +139,7 @@ async function main() {
   await warmupConnectedAccounts();
   warmupXPartnersSession(env);
   startXPartnersKeepAlive(env);
+  startXPartnersPostbackServer(env, appMetaStore);
 
   await Promise.all([
     runTelegramBot(),
@@ -1848,24 +1855,36 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
     return;
   }
   try {
-    void ensureXPartnersSession(env).catch(() => {});
+    if (!usesPostbackStats(env)) {
+      void ensureXPartnersSession(env).catch(() => {});
+    }
   } catch {
     // keep-alive and stat fetches retry too
   }
   const globalStats = await loadGlobalPartnerStats(appMetaStore);
   const hours = globalStats.refreshIntervalHours;
   const stale = cacheStale(globalStats.cachedAt, hours);
-  const session = await describeXPartnersSession(env, appMetaStore);
-  const sessionLine = session.connected
-    ? `Сервер: 🟢 в сети · ${maskXPartnersLogin(session.loginHint)}`
-    : "Сервер: 🔴 переподключение… (проверь XPARTNERS_* в Railway, если долго)";
+  const session = usesPostbackStats(env)
+    ? { connected: true, loginHint: "postback" }
+    : await describeXPartnersSession(env, appMetaStore);
+  const sessionLine = usesPostbackStats(env)
+    ? "Сервер: 🟢 postback · события приходят на Railway URL"
+    : session.connected
+      ? `Сервер: 🟢 в сети · ${maskXPartnersLogin(session.loginHint)}`
+      : "Сервер: 🔴 переподключение… (проверь XPARTNERS_* в Railway, если долго)";
+  const postbackHint = usesPostbackStats(env)
+    ? ["", "<b>Postback (рег CM):</b>", `<code>${escapeHtmlLite(postbackSetupHint(env).split("\n")[0] ?? "")}</code>`]
+    : [];
   const lines = [
     "<b>1xPartners · Статистика</b>",
-    "Общий аккаунт на сервере — все смотрят цифры без входа на сайт.",
-    "Сессия обновляется сама (keep-alive + при запросе статистики).",
+    usesPostbackStats(env)
+      ? "Счётчики с Postback — cookie не нужны. Postback должен быть Active после модерации."
+      : "Общий аккаунт на сервере — все смотрят цифры без входа на сайт.",
+    usesPostbackStats(env) ? "" : "Сессия обновляется сама (keep-alive + при запросе статистики).",
     "",
     sessionLine,
     `Кэш: ${stale ? "устарел — «Обновить все»" : "актуален"} · интервал <b>${hours} ч</b>`,
+    ...postbackHint,
     "",
     "Cameroon · Egypt · Zambia · Rwanda",
   ];
@@ -1876,14 +1895,24 @@ async function fetchAndCacheCountryStats(
   country: XPartnersCountry,
   force: boolean,
 ): Promise<{ globalStats: GlobalPartnerStatsState; stats: XPartnersQuickStats }> {
-  const client = getXPartnersClient(env);
-  if (!client) {
-    throw new Error("1xPartners отключён (XPARTNERS_ENABLED=false).");
-  }
   const globalStats = await loadGlobalPartnerStats(appMetaStore);
   const hours = globalStats.refreshIntervalHours;
   const cached = globalStats.byCountry?.[country];
   const cachedAt = globalStats.cachedAt;
+  if (usesPostbackStats(env)) {
+    const stats = await loadPostbackCountryStats(appMetaStore, env, country);
+    const nextStats: GlobalPartnerStatsState = {
+      refreshIntervalHours: hours,
+      cachedAt: new Date().toISOString(),
+      byCountry: { ...(globalStats.byCountry ?? {}), [country]: stats },
+    };
+    await saveGlobalPartnerStats(appMetaStore, nextStats);
+    return { globalStats: nextStats, stats };
+  }
+  const client = getXPartnersClient(env);
+  if (!client) {
+    throw new Error("1xPartners отключён (XPARTNERS_ENABLED=false).");
+  }
   if (!force && cached && !cacheStale(cachedAt, hours)) {
     return { globalStats, stats: cached };
   }

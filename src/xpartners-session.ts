@@ -86,6 +86,10 @@ export function warmupXPartnersSession(env: AppEnv): void {
   if (!client) {
     return;
   }
+  if (env.XPARTNERS_STATS_SOURCE === "postback") {
+    console.log("1xPartners: postback stats mode — cookie not required");
+    return;
+  }
   const envCookie = cookiesFromEnv(env);
   if (envCookie) {
     const curlMode = Boolean(curlHeadersFromEnv(env));

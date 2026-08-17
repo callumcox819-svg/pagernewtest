@@ -2480,6 +2480,9 @@ export function getXPartnersClient(env: AppEnv): XPartnersClient | null {
 }
 
 export function startXPartnersKeepAlive(env: AppEnv): void {
+  if (env.XPARTNERS_STATS_SOURCE === "postback") {
+    return;
+  }
   const client = getXPartnersClient(env);
   if (!client) {
     return;
