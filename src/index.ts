@@ -76,6 +76,7 @@ import {
   type GlobalPartnerStatsState,
 } from "./xpartners-stats-cache.js";
 import {
+  describePostbackActivity,
   loadPostbackCountryStats,
   postbackSetupHint,
   startXPartnersPostbackServer,
@@ -1873,7 +1874,13 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
       ? `Сервер: 🟢 в сети · ${maskXPartnersLogin(session.loginHint)}`
       : "Сервер: 🔴 переподключение… (проверь XPARTNERS_* в Railway, если долго)";
   const postbackHint = usesPostbackStats(env)
-    ? ["", "<b>Postback (рег CM):</b>", `<code>${escapeHtmlLite(postbackSetupHint(env).split("\n")[0] ?? "")}</code>`]
+    ? [
+        "",
+        "<b>Postback (рег CM):</b>",
+        `<code>${escapeHtmlLite(postbackSetupHint(env).split("\n")[0] ?? "")}</code>`,
+        "",
+        escapeHtmlLite(await describePostbackActivity(appMetaStore)),
+      ]
     : [];
   const lines = [
     "<b>1xPartners · Статистика</b>",
@@ -2070,6 +2077,9 @@ async function refreshAllPartnerStats(
     }
   }
   const blocks: string[] = [formatAllCountriesStats(byCountry, hours)];
+  if (usesPostbackStats(env)) {
+    blocks.push("", escapeHtmlLite(await describePostbackActivity(appMetaStore)));
+  }
   if (errors.length) {
     const unique = dedupeStatErrors(errors);
     blocks.push("", `<b>Ошибка:</b> ${escapeHtmlLite(unique.join(" · "))}`);

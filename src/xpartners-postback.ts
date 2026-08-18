@@ -10,6 +10,7 @@ import {
 } from "./xpartners-stats-cache.js";
 
 export const XPARTNERS_POSTBACK_META_KEY = "xpartners_postback_day";
+export const XPARTNERS_POSTBACK_LOG_META_KEY = "xpartners_postback_log";
 
 const XP_REPORT_TIMEZONE = "Europe/Kyiv";
 const MAX_DEDUPE_IDS = 500;
@@ -28,6 +29,16 @@ type PostbackDayState = {
       }
     >
   >;
+};
+
+type PostbackLogState = {
+  dayKey: string;
+  accepted: number;
+  rejected: number;
+  lastAcceptedAt?: string;
+  lastAccepted?: string;
+  lastRejectedAt?: string;
+  lastRejected?: string;
 };
 
 export function usesPostbackStats(env: AppEnv): boolean {
@@ -77,6 +88,104 @@ function parseEvent(raw: string | null): PostbackEvent | null {
     return "ftd";
   }
   return null;
+}
+
+function parseEventFromParams(params: URLSearchParams): PostbackEvent | null {
+  const explicit = parseEvent(params.get("event") ?? params.get("type") ?? params.get("postback_type"));
+  if (explicit) {
+    return explicit;
+  }
+  const regVal = params.get("reg")?.trim();
+  if (regVal && !/^\{/.test(regVal)) {
+    return "reg";
+  }
+  const ftdVal = params.get("ftd")?.trim();
+  if (ftdVal && !/^\{/.test(ftdVal)) {
+    return "ftd";
+  }
+  return null;
+}
+
+function sanitizeParamsForLog(params: URLSearchParams): string {
+  const parts: string[] = [];
+  for (const [key, value] of params.entries()) {
+    if (key.toLowerCase() === "token") {
+      parts.push("token=***");
+      continue;
+    }
+    parts.push(`${key}=${value.slice(0, 80)}`);
+  }
+  return parts.join("&");
+}
+
+async function loadPostbackLog(meta: AppMetaStore): Promise<PostbackLogState> {
+  const dayKey = todayDayKey();
+  const raw = (await meta.get(XPARTNERS_POSTBACK_LOG_META_KEY))?.trim();
+  if (!raw) {
+    return { dayKey, accepted: 0, rejected: 0 };
+  }
+  try {
+    const parsed = JSON.parse(raw) as PostbackLogState;
+    if (parsed.dayKey !== dayKey) {
+      return { dayKey, accepted: 0, rejected: 0 };
+    }
+    return parsed;
+  } catch {
+    return { dayKey, accepted: 0, rejected: 0 };
+  }
+}
+
+async function savePostbackLog(meta: AppMetaStore, state: PostbackLogState): Promise<void> {
+  await meta.set(XPARTNERS_POSTBACK_LOG_META_KEY, JSON.stringify(state));
+}
+
+async function recordPostbackAccepted(
+  meta: AppMetaStore,
+  country: XPartnersCountry,
+  event: PostbackEvent,
+): Promise<void> {
+  const log = await loadPostbackLog(meta);
+  log.accepted += 1;
+  log.lastAcceptedAt = new Date().toISOString();
+  log.lastAccepted = `${country} ${event}`;
+  await savePostbackLog(meta, log);
+}
+
+async function recordPostbackRejected(meta: AppMetaStore, reason: string, params: URLSearchParams): Promise<void> {
+  const log = await loadPostbackLog(meta);
+  log.rejected += 1;
+  log.lastRejectedAt = new Date().toISOString();
+  log.lastRejected = `${reason} · ${sanitizeParamsForLog(params)}`;
+  await savePostbackLog(meta, log);
+  console.warn(`1xPartners postback rejected: ${reason} · ${sanitizeParamsForLog(params)}`);
+}
+
+export async function describePostbackActivity(meta: AppMetaStore): Promise<string> {
+  const log = await loadPostbackLog(meta);
+  const lines = [`Postback сегодня: принято ${log.accepted}, отклонено ${log.rejected}`];
+  if (log.lastAcceptedAt && log.lastAccepted) {
+    lines.push(`Последний OK: ${log.lastAccepted} · ${formatLogTime(log.lastAcceptedAt)}`);
+  }
+  if (log.rejected > 0 && log.lastRejected) {
+    lines.push(`Последний отказ: ${log.lastRejected.slice(0, 120)}`);
+  }
+  if (log.accepted === 0) {
+    lines.push("1xPartners пока не бил на URL — проверь кампанию postback и логи postback в кабинете.");
+  }
+  return lines.join("\n");
+}
+
+function formatLogTime(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("ru-RU", {
+      timeZone: XP_REPORT_TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
 }
 
 function dedupeKey(params: URLSearchParams): string | null {
@@ -151,22 +260,25 @@ export async function handlePostbackRequest(
   env: AppEnv,
   params: URLSearchParams,
 ): Promise<{ ok: true; country: XPartnersCountry; event: PostbackEvent } | { ok: false; status: number; message: string }> {
+  const event = parseEventFromParams(params);
+  if (!event) {
+    await recordPostbackRejected(meta, "missing event=reg|ftd", params);
+    return { ok: false, status: 400, message: "missing event=reg|ftd" };
+  }
+
   const token = env.XPARTNERS_POSTBACK_TOKEN?.trim();
   if (token) {
     const got = params.get("token")?.trim();
     if (got !== token) {
+      await recordPostbackRejected(meta, "invalid token", params);
       return { ok: false, status: 403, message: "invalid token" };
     }
   }
 
   const country = parseCountry(params.get("country") ?? params.get("geo") ?? params.get("c"));
   if (!country) {
+    await recordPostbackRejected(meta, "missing country", params);
     return { ok: false, status: 400, message: "missing country=CM|EG|ZM|RW" };
-  }
-
-  const event = parseEvent(params.get("event") ?? params.get("type") ?? params.get("postback_type"));
-  if (!event) {
-    return { ok: false, status: 400, message: "missing event=reg|ftd" };
   }
 
   const day = await loadPostbackDay(meta);
@@ -188,7 +300,8 @@ export async function handlePostbackRequest(
   day.byCountry[country] = bucket;
   await savePostbackDay(meta, day);
   await syncGlobalStatsCache(meta, env, day);
-  console.log(`1xPartners postback: ${country} ${event}${idKey ? ` · ${idKey}` : ""}`);
+  await recordPostbackAccepted(meta, country, event);
+  console.log(`1xPartners postback: ${country} ${event}${idKey ? ` · ${idKey}` : ""} · ${sanitizeParamsForLog(params)}`);
   return { ok: true, country, event };
 }
 
@@ -225,6 +338,7 @@ export function startXPartnersPostbackServer(env: AppEnv, meta: AppMetaStore): v
           writeText(res, 404, "not found");
           return;
         }
+        console.log(`1xPartners postback hit: ${req.method} ${sanitizeParamsForLog(url.searchParams)}`);
         const result = await handlePostbackRequest(meta, env, url.searchParams);
         if (!result.ok) {
           writeText(res, result.status, result.message);
