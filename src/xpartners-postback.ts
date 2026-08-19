@@ -41,15 +41,17 @@ type PostbackLogState = {
   lastRejected?: string;
 };
 
-import { usesPostbackStatsOnly } from "./env.js";
+type PostbackRouteHint = {
+  country?: XPartnersCountry;
+  event?: PostbackEvent;
+};
 
 export function usesPostbackStats(env: AppEnv): boolean {
   return env.XPARTNERS_STATS_SOURCE === "postback";
 }
 
-/** True when bot should read counters from postback store (not dashboard API). */
 export function usesPostbackStatsForFetch(env: AppEnv): boolean {
-  return usesPostbackStatsOnly(env);
+  return usesPostbackStats(env);
 }
 
 function todayDayKey(): string {
@@ -69,7 +71,7 @@ function siteLabel(country: XPartnersCountry, env: AppEnv): string {
   return env.XPARTNERS_SITE_RW;
 }
 
-function parseCountry(raw: string | null): XPartnersCountry | null {
+function parseCountry(raw: string | null | undefined): XPartnersCountry | null {
   const code = (raw || "").trim().toUpperCase();
   if (code === "CM" || code === "EG" || code === "ZM" || code === "RW") {
     return code;
@@ -77,7 +79,7 @@ function parseCountry(raw: string | null): XPartnersCountry | null {
   return null;
 }
 
-function parseEvent(raw: string | null): PostbackEvent | null {
+function parseEvent(raw: string | null | undefined): PostbackEvent | null {
   const value = (raw || "").trim().toLowerCase();
   if (!value) {
     return null;
@@ -90,27 +92,83 @@ function parseEvent(raw: string | null): PostbackEvent | null {
     value === "deposit" ||
     value === "first_deposit" ||
     value === "firstdeposit" ||
-    value === "new_deposit"
+    value === "new_deposit" ||
+    value === "dep"
   ) {
     return "ftd";
   }
   return null;
 }
 
-function parseEventFromParams(params: URLSearchParams): PostbackEvent | null {
-  const explicit = parseEvent(params.get("event") ?? params.get("type") ?? params.get("postback_type"));
+function macroFilled(value: string | null | undefined): boolean {
+  const v = (value || "").trim();
+  return Boolean(v && !/^\{/.test(v));
+}
+
+function parseEventFromParams(params: URLSearchParams, route?: PostbackRouteHint): PostbackEvent | null {
+  if (route?.event) {
+    return route.event;
+  }
+  const explicit = parseEvent(
+    params.get("event") ?? params.get("type") ?? params.get("postback_type") ?? params.get("goal"),
+  );
   if (explicit) {
     return explicit;
   }
-  const regVal = params.get("reg")?.trim();
-  if (regVal && !/^\{/.test(regVal)) {
+  if (macroFilled(params.get("reg"))) {
     return "reg";
   }
-  const ftdVal = params.get("ftd")?.trim();
-  if (ftdVal && !/^\{/.test(ftdVal)) {
+  if (macroFilled(params.get("ftd"))) {
+    return "ftd";
+  }
+  if (macroFilled(params.get("deposit")) || macroFilled(params.get("sumdep"))) {
     return "ftd";
   }
   return null;
+}
+
+function parseCountryFromSite(params: URLSearchParams, env: AppEnv): XPartnersCountry | null {
+  const siteRaw = (params.get("site") ?? params.get("site_id") ?? params.get("website") ?? "").trim().toLowerCase();
+  if (!siteRaw) {
+    return null;
+  }
+  const pairs: Array<[XPartnersCountry, string]> = [
+    ["CM", env.XPARTNERS_SITE_CM],
+    ["EG", env.XPARTNERS_SITE_EG],
+    ["ZM", env.XPARTNERS_SITE_ZM],
+    ["RW", env.XPARTNERS_SITE_RW],
+  ];
+  for (const [country, label] of pairs) {
+    const hint = label.replace(/^https?:\/\//i, "").replace(/\/$/, "").toLowerCase();
+    if (siteRaw.includes(hint) || hint.includes(siteRaw)) {
+      return country;
+    }
+  }
+  if (/camer|cameroon|кamer/i.test(siteRaw)) {
+    return "CM";
+  }
+  if (/zamb|zambia/i.test(siteRaw)) {
+    return "ZM";
+  }
+  if (/egypt|egip|егип/i.test(siteRaw)) {
+    return "EG";
+  }
+  if (/rwand|ruand|руанд/i.test(siteRaw)) {
+    return "RW";
+  }
+  return null;
+}
+
+function parseRouteFromPath(pathname: string): PostbackRouteHint {
+  const parts = pathname.split("/").filter(Boolean);
+  // /xpartners/postback/cm/reg
+  if (parts.length >= 4 && parts[0] === "xpartners" && parts[1] === "postback") {
+    return {
+      country: parseCountry(parts[2]) ?? undefined,
+      event: parseEvent(parts[3]) ?? undefined,
+    };
+  }
+  return {};
 }
 
 function sanitizeParamsForLog(params: URLSearchParams): string {
@@ -176,8 +234,9 @@ export async function describePostbackActivity(meta: AppMetaStore): Promise<stri
   if (log.rejected > 0 && log.lastRejected) {
     lines.push(`Последний отказ: ${log.lastRejected.slice(0, 120)}`);
   }
-  if (log.accepted === 0) {
-    lines.push("1xPartners пока не бил на URL — проверь кампанию postback и логи postback в кабинете.");
+  if (log.accepted === 0 && log.rejected === 0) {
+    lines.push("1xPartners ещё не слал postback на Railway URL.");
+    lines.push("Трафик только через «Ссылку для размещения» из postback · статус Active.");
   }
   return lines.join("\n");
 }
@@ -196,9 +255,21 @@ function formatLogTime(iso: string): string {
 }
 
 function dedupeKey(params: URLSearchParams): string | null {
-  for (const key of ["click_id", "clickid", "clickId", "player_id", "playerId", "subid", "sub_id"]) {
+  for (const key of [
+    "click_id",
+    "clickid",
+    "clickId",
+    "player_id",
+    "playerId",
+    "subid",
+    "sub_id",
+    "reg",
+    "ftd",
+    "transaction_id",
+    "tid",
+  ]) {
     const value = params.get(key)?.trim();
-    if (value) {
+    if (value && !/^\{/.test(value)) {
       return `${key}:${value}`;
     }
   }
@@ -266,11 +337,12 @@ export async function handlePostbackRequest(
   meta: AppMetaStore,
   env: AppEnv,
   params: URLSearchParams,
+  route: PostbackRouteHint = {},
 ): Promise<{ ok: true; country: XPartnersCountry; event: PostbackEvent } | { ok: false; status: number; message: string }> {
-  const event = parseEventFromParams(params);
+  const event = parseEventFromParams(params, route);
   if (!event) {
-    await recordPostbackRejected(meta, "missing event=reg|ftd", params);
-    return { ok: false, status: 400, message: "missing event=reg|ftd" };
+    await recordPostbackRejected(meta, "missing event (reg/ftd)", params);
+    return { ok: false, status: 400, message: "missing event (reg/ftd)" };
   }
 
   const token = env.XPARTNERS_POSTBACK_TOKEN?.trim();
@@ -282,7 +354,10 @@ export async function handlePostbackRequest(
     }
   }
 
-  const country = parseCountry(params.get("country") ?? params.get("geo") ?? params.get("c"));
+  const country =
+    route.country ??
+    parseCountry(params.get("country") ?? params.get("geo") ?? params.get("c")) ??
+    parseCountryFromSite(params, env);
   if (!country) {
     await recordPostbackRejected(meta, "missing country", params);
     return { ok: false, status: 400, message: "missing country=CM|EG|ZM|RW" };
@@ -322,6 +397,44 @@ async function readUrl(req: IncomingMessage): Promise<URL> {
   return new URL(req.url || "/", `http://${host}`);
 }
 
+async function readRequestParams(req: IncomingMessage, url: URL): Promise<URLSearchParams> {
+  const params = new URLSearchParams(url.searchParams);
+  if (req.method !== "POST") {
+    return params;
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const body = Buffer.concat(chunks).toString("utf8").trim();
+  if (!body) {
+    return params;
+  }
+  const contentType = (req.headers["content-type"] || "").toLowerCase();
+  if (contentType.includes("application/json")) {
+    try {
+      const json = JSON.parse(body) as Record<string, unknown>;
+      for (const [key, value] of Object.entries(json)) {
+        if (value != null && typeof value !== "object") {
+          params.set(key, String(value));
+        }
+      }
+    } catch {
+      // ignore malformed json
+    }
+    return params;
+  }
+  const extra = new URLSearchParams(body);
+  for (const [key, value] of extra.entries()) {
+    params.set(key, value);
+  }
+  return params;
+}
+
+function isPostbackPath(pathname: string): boolean {
+  return pathname === "/xpartners/postback" || pathname.startsWith("/xpartners/postback/");
+}
+
 export function startXPartnersPostbackServer(env: AppEnv, meta: AppMetaStore): void {
   if (!usesPostbackStats(env)) {
     return;
@@ -332,21 +445,25 @@ export function startXPartnersPostbackServer(env: AppEnv, meta: AppMetaStore): v
   const server = createServer((req, res) => {
     void (async () => {
       try {
-        if (req.method !== "GET" && req.method !== "HEAD") {
-          writeText(res, 405, "method not allowed");
-          return;
-        }
         const url = await readUrl(req);
         if (url.pathname === "/health" || url.pathname === "/") {
           writeText(res, 200, "ok");
           return;
         }
-        if (url.pathname !== "/xpartners/postback") {
+        if (!isPostbackPath(url.pathname)) {
           writeText(res, 404, "not found");
           return;
         }
-        console.log(`1xPartners postback hit: ${req.method} ${sanitizeParamsForLog(url.searchParams)}`);
-        const result = await handlePostbackRequest(meta, env, url.searchParams);
+        if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "POST") {
+          writeText(res, 405, "method not allowed");
+          return;
+        }
+        const route = parseRouteFromPath(url.pathname);
+        const params = await readRequestParams(req, url);
+        console.log(
+          `1xPartners postback hit: ${req.method} ${url.pathname}${url.search ? `?${sanitizeParamsForLog(params)}` : ""}`,
+        );
+        const result = await handlePostbackRequest(meta, env, params, route);
         if (!result.ok) {
           writeText(res, result.status, result.message);
           return;
@@ -365,9 +482,9 @@ export function startXPartnersPostbackServer(env: AppEnv, meta: AppMetaStore): v
   });
 
   server.listen(port, "0.0.0.0", () => {
-    console.log(`1xPartners postback server on :${port} · path /xpartners/postback`);
+    console.log(`1xPartners postback server on :${port} · /xpartners/postback[/cm/reg|/cm/ftd|…]`);
     if (publicBase) {
-      console.log(`1xPartners postback URL example: ${publicBase}/xpartners/postback?token=***&country=CM&event=reg&click_id={click_id}`);
+      console.log(`1xPartners postback reg CM: ${publicBase}/xpartners/postback/cm/reg?token=***&click_id={click_id}&reg={reg}`);
     } else {
       console.warn("1xPartners: set XPARTNERS_POSTBACK_PUBLIC_URL to your Railway public domain for postback setup.");
     }
@@ -379,7 +496,9 @@ export function postbackSetupHint(env: AppEnv): string {
   const token = env.XPARTNERS_POSTBACK_TOKEN?.trim();
   const tokenPart = token ? `token=${encodeURIComponent(token)}&` : "";
   return [
-    `${base}/xpartners/postback?${tokenPart}country=CM&event=reg&click_id={click_id}`,
-    `${base}/xpartners/postback?${tokenPart}country=CM&event=ftd&click_id={click_id}`,
+    `${base}/xpartners/postback/cm/reg?${tokenPart}click_id={click_id}&reg={reg}`,
+    `${base}/xpartners/postback/cm/ftd?${tokenPart}click_id={click_id}&ftd={ftd}`,
+    `${base}/xpartners/postback/zm/reg?${tokenPart}click_id={click_id}&reg={reg}`,
+    `${base}/xpartners/postback/zm/ftd?${tokenPart}click_id={click_id}&ftd={ftd}`,
   ].join("\n");
 }

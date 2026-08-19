@@ -9,7 +9,7 @@ import {
 } from "./config.js";
 import { ClerkPasswordAuthClient, enrichPagerCookies, parseCookieHeader } from "./clerk-auth.js";
 import { decideNextAction } from "./decision-engine.js";
-import { hasXPartnersApiAuth, loadEnv } from "./env.js";
+import { loadEnv } from "./env.js";
 import { PagerClient } from "./pager-client.js";
 import { runPagerWorker, runPagerWorkerOnceForChat } from "./pager-worker.js";
 import { CATCH_UP_READ_ACTIVE_MS, isIncomingDirection } from "./conversation-reply.js";
@@ -81,7 +81,6 @@ import {
   postbackSetupHint,
   startXPartnersPostbackServer,
   usesPostbackStats,
-  usesPostbackStatsForFetch,
 } from "./xpartners-postback.js";
 
 import {
@@ -1857,7 +1856,7 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
     return;
   }
   try {
-    if (!usesPostbackStatsForFetch(env)) {
+    if (!usesPostbackStats(env)) {
       void ensureXPartnersSession(env).catch(() => {});
     }
   } catch {
@@ -1866,37 +1865,32 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
   const globalStats = await loadGlobalPartnerStats(appMetaStore);
   const hours = globalStats.refreshIntervalHours;
   const stale = cacheStale(globalStats.cachedAt, hours);
-  const postbackOnly = usesPostbackStatsForFetch(env);
-  const apiOverride = usesPostbackStats(env) && hasXPartnersApiAuth(env);
-  const session = postbackOnly
+  const postbackMode = usesPostbackStats(env);
+  const session = postbackMode
     ? { connected: true, loginHint: "postback" }
     : await describeXPartnersSession(env, appMetaStore);
-  const sessionLine = postbackOnly
-    ? "Сервер: 🟡 postback · 1xPartners не шлёт события — нужен XPARTNERS_COOKIE или LOGIN/PASSWORD"
-    : apiOverride
-      ? "Сервер: 🟢 API · GetQuickReport (как «Краткий отчёт» в кабинете)"
-      : session.connected
-        ? `Сервер: 🟢 в сети · ${maskXPartnersLogin(session.loginHint)}`
-        : "Сервер: 🔴 переподключение… (проверь XPARTNERS_COOKIE или LOGIN/PASSWORD в Railway)";
-  const postbackHint = postbackOnly
+  const sessionLine = postbackMode
+    ? "Сервер: 🟢 postback · счётчики с входящих {reg}/{ftd}"
+    : session.connected
+      ? `Сервер: 🟢 в сети · ${maskXPartnersLogin(session.loginHint)}`
+      : "Сервер: 🔴 переподключение… (проверь XPARTNERS_* в Railway, если долго)";
+  const postbackHint = postbackMode
     ? [
         "",
-        "<b>Postback (рег CM):</b>",
+        "<b>Postback URL (рег CM):</b>",
         `<code>${escapeHtmlLite(postbackSetupHint(env).split("\n")[0] ?? "")}</code>`,
         "",
         escapeHtmlLite(await describePostbackActivity(appMetaStore)),
         "",
-        "<b>Postback не даёт цифры из отчёта.</b> Добавь XPARTNERS_COOKIE (или LOGIN+PASSWORD) в Railway — бот сам подтянет рег/FTD как в кабинете.",
+        "Трафик только через «Ссылку для размещения» из postback · статус Active.",
       ]
-    : apiOverride
-      ? ["", "<i>STATS_SOURCE=postback, но есть cookie — статистика с API, не postback.</i>"]
-      : [];
+    : [];
   const lines = [
     "<b>1xPartners · Статистика</b>",
-    postbackOnly
-      ? "Режим postback без cookie — считаются только входящие HTTP-запросы от 1xPartners."
-      : "Данные с «Краткого суммарного отчёта» (GetQuickReport) — как в кабинете партнёра.",
-    postbackOnly ? "" : "Сессия обновляется сама (keep-alive + при запросе статистики).",
+    postbackMode
+      ? "Счётчики с postback — каждый {reg} и {ftd} от 1xPartners +1 в бот."
+      : "Общий аккаунт на сервере — все смотрят цифры без входа на сайт.",
+    postbackMode ? "" : "Сессия обновляется сама (keep-alive + при запросе статистики).",
     "",
     sessionLine,
     `Кэш: ${stale ? "устарел — «Обновить все»" : "актуален"} · интервал <b>${hours} ч</b>`,
@@ -1915,7 +1909,7 @@ async function fetchAndCacheCountryStats(
   const hours = globalStats.refreshIntervalHours;
   const cached = globalStats.byCountry?.[country];
   const cachedAt = globalStats.cachedAt;
-  if (usesPostbackStatsForFetch(env)) {
+  if (usesPostbackStats(env)) {
     const stats = await loadPostbackCountryStats(appMetaStore, env, country);
     const nextStats: GlobalPartnerStatsState = {
       refreshIntervalHours: hours,
@@ -2086,7 +2080,7 @@ async function refreshAllPartnerStats(
     }
   }
   const blocks: string[] = [formatAllCountriesStats(byCountry, hours)];
-  if (usesPostbackStatsForFetch(env)) {
+  if (usesPostbackStats(env)) {
     blocks.push("", escapeHtmlLite(await describePostbackActivity(appMetaStore)));
   }
   if (errors.length) {
