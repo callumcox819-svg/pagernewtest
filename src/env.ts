@@ -67,6 +67,11 @@ const envSchema = z.object({
   XPARTNERS_KEEPALIVE_MINUTES: z.coerce.number().int().positive().default(3),
   /** 1xPartners currency id (6 = USD in partner UI). */
   XPARTNERS_CURRENCY_ID: z.coerce.number().int().positive().default(6),
+  /** Skip multi.1xpartners.com web API (403 on Railway) and use 1xpartners.com/graphql directly. Auto on Railway. */
+  XPARTNERS_PREFER_GRAPHQL: z
+    .string()
+    .default("auto")
+    .transform((value) => value.trim().toLowerCase()),
   /** quick = быстрый отчёт; subpartners = отчёт по суб-партнёрам; postback = счётчики с Postback URL (без cookie). */
   XPARTNERS_STATS_SOURCE: z
     .preprocess(
@@ -106,6 +111,33 @@ const envSchema = z.object({
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
+
+export function hasXPartnersApiAuth(env: AppEnv): boolean {
+  if (env.XPARTNERS_COOKIE?.trim()) {
+    return true;
+  }
+  if (env.XPARTNERS_LOGIN?.trim() && env.XPARTNERS_PASSWORD?.trim()) {
+    return true;
+  }
+  const creds = env.XPARTNERS_CREDENTIALS?.trim();
+  return Boolean(creds && creds.includes(":"));
+}
+
+/** Postback counters only when explicitly postback AND no cookie/login to pull dashboard stats. */
+export function usesPostbackStatsOnly(env: AppEnv): boolean {
+  return env.XPARTNERS_STATS_SOURCE === "postback" && !hasXPartnersApiAuth(env);
+}
+
+export function shouldPreferGraphqlApi(env: AppEnv): boolean {
+  const pref = env.XPARTNERS_PREFER_GRAPHQL;
+  if (pref === "true" || pref === "1" || pref === "yes") {
+    return true;
+  }
+  if (pref === "false" || pref === "0" || pref === "no") {
+    return false;
+  }
+  return Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
+}
 
 export function loadEnv(): AppEnv {
   return envSchema.parse(process.env);

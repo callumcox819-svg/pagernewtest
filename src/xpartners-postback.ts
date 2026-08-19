@@ -41,8 +41,15 @@ type PostbackLogState = {
   lastRejected?: string;
 };
 
+import { usesPostbackStatsOnly } from "./env.js";
+
 export function usesPostbackStats(env: AppEnv): boolean {
   return env.XPARTNERS_STATS_SOURCE === "postback";
+}
+
+/** True when bot should read counters from postback store (not dashboard API). */
+export function usesPostbackStatsForFetch(env: AppEnv): boolean {
+  return usesPostbackStatsOnly(env);
 }
 
 function todayDayKey(): string {

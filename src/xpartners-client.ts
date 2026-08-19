@@ -1,6 +1,7 @@
 import makeFetchCookie from "fetch-cookie";
 import { CookieJar } from "tough-cookie";
 import type { AppEnv } from "./env.js";
+import { shouldPreferGraphqlApi } from "./env.js";
 import type { AppMetaStore } from "./app-meta-store.js";
 
 export const XPARTNERS_SESSION_META_KEY = "xpartners_session_cookie";
@@ -915,6 +916,9 @@ export class XPartnersClient {
   /** multi.1xpartners.com web UI — blocked from many cloud IPs (403 FORBIDDEN). */
   private preferMultiWebApi(): boolean {
     if (usesSubpartnerStats(this.env)) {
+      return false;
+    }
+    if (shouldPreferGraphqlApi(this.env)) {
       return false;
     }
     return !this.multiWebBlocked && this.usesMultiRestSession(null);
