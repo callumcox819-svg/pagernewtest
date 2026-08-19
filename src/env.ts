@@ -72,11 +72,11 @@ const envSchema = z.object({
     .string()
     .default("auto")
     .transform((value) => value.trim().toLowerCase()),
-  /** quick = быстрый отчёт; subpartners = отчёт по суб-партнёрам; postback = счётчики с Postback URL (без cookie). */
+  /** quick = отчёт из кабинета; hybrid = отчёт + postback-сервер; postback = только счётчики postback. */
   XPARTNERS_STATS_SOURCE: z
     .preprocess(
       (value) => (value === "" || value === undefined ? "quick" : String(value).trim().toLowerCase()),
-      z.enum(["quick", "subpartners", "postback"]),
+      z.enum(["quick", "subpartners", "postback", "hybrid"]),
     )
     .default("quick"),
   /** Secret token in postback URL (?token=). Strongly recommended on Railway. */
@@ -126,6 +126,25 @@ export function hasXPartnersApiAuth(env: AppEnv): boolean {
 /** Postback counters only when explicitly postback AND no cookie/login to pull dashboard stats. */
 export function usesPostbackStatsOnly(env: AppEnv): boolean {
   return env.XPARTNERS_STATS_SOURCE === "postback" && !hasXPartnersApiAuth(env);
+}
+
+export function usesHybridStats(env: AppEnv): boolean {
+  return env.XPARTNERS_STATS_SOURCE === "hybrid";
+}
+
+export function usesPostbackServer(env: AppEnv): boolean {
+  return env.XPARTNERS_STATS_SOURCE === "postback" || env.XPARTNERS_STATS_SOURCE === "hybrid";
+}
+
+/** Pull GetQuickReport from cabinet (needs cookie/login). */
+export function shouldFetchStatsFromApi(env: AppEnv): boolean {
+  if (env.XPARTNERS_STATS_SOURCE === "quick" || env.XPARTNERS_STATS_SOURCE === "subpartners") {
+    return true;
+  }
+  if (env.XPARTNERS_STATS_SOURCE === "hybrid") {
+    return hasXPartnersApiAuth(env);
+  }
+  return false;
 }
 
 export function shouldPreferGraphqlApi(env: AppEnv): boolean {

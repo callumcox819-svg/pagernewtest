@@ -1,4 +1,5 @@
 import type { AppEnv } from "./env.js";
+import { shouldFetchStatsFromApi } from "./env.js";
 import type { AppMetaStore } from "./app-meta-store.js";
 import {
   getXPartnersClient,
@@ -86,8 +87,8 @@ export function warmupXPartnersSession(env: AppEnv): void {
   if (!client) {
     return;
   }
-  if (env.XPARTNERS_STATS_SOURCE === "postback") {
-    console.log("1xPartners: postback stats mode — cookie not required");
+  if (!shouldFetchStatsFromApi(env)) {
+    console.log(`1xPartners: ${env.XPARTNERS_STATS_SOURCE} stats — cookie not required for display`);
     return;
   }
   const envCookie = cookiesFromEnv(env);

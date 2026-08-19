@@ -1,7 +1,7 @@
 import makeFetchCookie from "fetch-cookie";
 import { CookieJar } from "tough-cookie";
 import type { AppEnv } from "./env.js";
-import { shouldPreferGraphqlApi } from "./env.js";
+import { shouldFetchStatsFromApi, shouldPreferGraphqlApi } from "./env.js";
 import type { AppMetaStore } from "./app-meta-store.js";
 
 export const XPARTNERS_SESSION_META_KEY = "xpartners_session_cookie";
@@ -2484,7 +2484,7 @@ export function getXPartnersClient(env: AppEnv): XPartnersClient | null {
 }
 
 export function startXPartnersKeepAlive(env: AppEnv): void {
-  if (env.XPARTNERS_STATS_SOURCE === "postback") {
+  if (!shouldFetchStatsFromApi(env)) {
     return;
   }
   const client = getXPartnersClient(env);

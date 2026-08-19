@@ -9,7 +9,7 @@ import {
 } from "./config.js";
 import { ClerkPasswordAuthClient, enrichPagerCookies, parseCookieHeader } from "./clerk-auth.js";
 import { decideNextAction } from "./decision-engine.js";
-import { loadEnv } from "./env.js";
+import { loadEnv, shouldFetchStatsFromApi, usesHybridStats } from "./env.js";
 import { PagerClient } from "./pager-client.js";
 import { runPagerWorker, runPagerWorkerOnceForChat } from "./pager-worker.js";
 import { CATCH_UP_READ_ACTIVE_MS, isIncomingDirection } from "./conversation-reply.js";
@@ -81,6 +81,7 @@ import {
   postbackSetupHint,
   startXPartnersPostbackServer,
   usesPostbackStats,
+  usesPostbackStatsForFetch,
 } from "./xpartners-postback.js";
 
 import {
@@ -1856,7 +1857,7 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
     return;
   }
   try {
-    if (!usesPostbackStats(env)) {
+    if (shouldFetchStatsFromApi(env)) {
       void ensureXPartnersSession(env).catch(() => {});
     }
   } catch {
@@ -1866,31 +1867,39 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
   const hours = globalStats.refreshIntervalHours;
   const stale = cacheStale(globalStats.cachedAt, hours);
   const postbackMode = usesPostbackStats(env);
-  const session = postbackMode
+  const hybridMode = usesHybridStats(env);
+  const session = postbackMode && !hybridMode
     ? { connected: true, loginHint: "postback" }
     : await describeXPartnersSession(env, appMetaStore);
-  const sessionLine = postbackMode
-    ? "Сервер: 🟢 postback · счётчики с входящих {reg}/{ftd}"
-    : session.connected
-      ? `Сервер: 🟢 в сети · ${maskXPartnersLogin(session.loginHint)}`
-      : "Сервер: 🔴 переподключение… (проверь XPARTNERS_* в Railway, если долго)";
-  const postbackHint = postbackMode
-    ? [
-        "",
-        "<b>Postback URL (рег CM):</b>",
-        `<code>${escapeHtmlLite(postbackSetupHint(env).split("\n")[0] ?? "")}</code>`,
-        "",
-        escapeHtmlLite(await describePostbackActivity(appMetaStore)),
-        "",
-        "Трафик только через «Ссылку для размещения» из postback · статус Active.",
-      ]
-    : [];
+  const sessionLine = hybridMode
+    ? session.connected
+      ? "Сервер: 🟢 hybrid · отчёт из кабинета + postback live"
+      : "Сервер: 🔴 hybrid · обнови XPARTNERS_COOKIE в Railway"
+    : postbackMode
+      ? "Сервер: 🟢 postback · счётчики с входящих {reg}/{ftd}"
+      : session.connected
+        ? `Сервер: 🟢 в сети · ${maskXPartnersLogin(session.loginHint)}`
+        : "Сервер: 🔴 переподключение… (проверь XPARTNERS_* в Railway, если долго)";
+  const postbackHint =
+    postbackMode || hybridMode
+      ? [
+          "",
+          hybridMode ? "<b>Hybrid:</b> «Обновить все» = цифры как в «Кратком отчёте»." : "",
+          "<b>Postback URL (рег CM):</b>",
+          `<code>${escapeHtmlLite(postbackSetupHint(env).split("\n")[0] ?? "")}</code>`,
+          "",
+          escapeHtmlLite(await describePostbackActivity(appMetaStore)),
+          hybridMode ? "" : "Трафик только через «Ссылку для размещения» · Active.",
+        ].filter(Boolean)
+      : [];
   const lines = [
     "<b>1xPartners · Статистика</b>",
-    postbackMode
-      ? "Счётчики с postback — каждый {reg} и {ftd} от 1xPartners +1 в бот."
-      : "Общий аккаунт на сервере — все смотрят цифры без входа на сайт.",
-    postbackMode ? "" : "Сессия обновляется сама (keep-alive + при запросе статистики).",
+    hybridMode
+      ? "Hybrid: кабинет при «Обновить все» + postback для новых событий."
+      : postbackMode
+        ? "Счётчики с postback — каждый {reg} и {ftd} от 1xPartners +1 в бот."
+        : "Общий аккаунт на сервере — все смотрят цифры без входа на сайт.",
+    hybridMode || !postbackMode ? "Сессия обновляется сама (keep-alive + при запросе статистики)." : "",
     "",
     sessionLine,
     `Кэш: ${stale ? "устарел — «Обновить все»" : "актуален"} · интервал <b>${hours} ч</b>`,
@@ -1909,7 +1918,7 @@ async function fetchAndCacheCountryStats(
   const hours = globalStats.refreshIntervalHours;
   const cached = globalStats.byCountry?.[country];
   const cachedAt = globalStats.cachedAt;
-  if (usesPostbackStats(env)) {
+  if (usesPostbackStatsForFetch(env)) {
     const stats = await loadPostbackCountryStats(appMetaStore, env, country);
     const nextStats: GlobalPartnerStatsState = {
       refreshIntervalHours: hours,
@@ -2080,7 +2089,7 @@ async function refreshAllPartnerStats(
     }
   }
   const blocks: string[] = [formatAllCountriesStats(byCountry, hours)];
-  if (usesPostbackStats(env)) {
+  if (usesPostbackStats(env) || usesHybridStats(env)) {
     blocks.push("", escapeHtmlLite(await describePostbackActivity(appMetaStore)));
   }
   if (errors.length) {

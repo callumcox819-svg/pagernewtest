@@ -46,12 +46,14 @@ type PostbackRouteHint = {
   event?: PostbackEvent;
 };
 
+import { usesHybridStats, usesPostbackServer } from "./env.js";
+
 export function usesPostbackStats(env: AppEnv): boolean {
   return env.XPARTNERS_STATS_SOURCE === "postback";
 }
 
 export function usesPostbackStatsForFetch(env: AppEnv): boolean {
-  return usesPostbackStats(env);
+  return usesPostbackStats(env) && !usesHybridStats(env);
 }
 
 function todayDayKey(): string {
@@ -236,7 +238,9 @@ export async function describePostbackActivity(meta: AppMetaStore): Promise<stri
   }
   if (log.accepted === 0 && log.rejected === 0) {
     lines.push("1xPartners ещё не слал postback на Railway URL.");
-    lines.push("Трафик только через «Ссылку для размещения» из postback · статус Active.");
+    lines.push("Прямые ссылки без кликов часто не триггерят postback — см. «Ссылку для размещения».");
+  } else if (log.accepted <= 1) {
+    lines.push("Если в кабинете рег больше — postback не доходит; включи hybrid + cookie.");
   }
   return lines.join("\n");
 }
@@ -436,7 +440,7 @@ function isPostbackPath(pathname: string): boolean {
 }
 
 export function startXPartnersPostbackServer(env: AppEnv, meta: AppMetaStore): void {
-  if (!usesPostbackStats(env)) {
+  if (!usesPostbackServer(env)) {
     return;
   }
   const port = Number(process.env.PORT || 3000);
