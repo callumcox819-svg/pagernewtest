@@ -77,8 +77,9 @@ import {
 } from "./xpartners-stats-cache.js";
 import {
   describePostbackActivity,
+  formatPostbackCabinetSetupText,
   loadPostbackCountryStats,
-  postbackSetupHint,
+  postbackCabinetSetups,
   startXPartnersPostbackServer,
   usesPostbackStats,
   usesPostbackStatsForFetch,
@@ -1880,17 +1881,31 @@ async function showStatsMenu(chatId: number, state: ChatState, messageId?: numbe
       : session.connected
         ? `Сервер: 🟢 в сети · ${maskXPartnersLogin(session.loginHint)}`
         : "Сервер: 🔴 переподключение… (проверь XPARTNERS_* в Railway, если долго)";
+  const postbackActivityLine =
+    postbackMode || hybridMode ? escapeHtmlLite(await describePostbackActivity(appMetaStore)) : "";
   const postbackHint =
     postbackMode || hybridMode
-      ? [
-          "",
-          hybridMode ? "<b>Hybrid:</b> «Обновить все» = цифры как в «Кратком отчёте»." : "",
-          "<b>Postback URL (рег CM):</b>",
-          `<code>${escapeHtmlLite(postbackSetupHint(env).split("\n")[0] ?? "")}</code>`,
-          "",
-          escapeHtmlLite(await describePostbackActivity(appMetaStore)),
-          hybridMode ? "" : "Трафик только через «Ссылку для размещения» · Active.",
-        ].filter(Boolean)
+      ? (() => {
+          const cmReg = postbackCabinetSetups(env)[0];
+          const cabinetBlock = cmReg
+            ? [
+                "<b>Форма 1xPartners (пример CM reg):</b>",
+                `URL: <code>${escapeHtmlLite(cmReg.url)}</code>`,
+                `Статика: <code>${escapeHtmlLite(cmReg.staticParams)}</code>`,
+                `Динамика: click_id → <code>{click_id}</code>, reg → <code>{reg}</code>`,
+                `Название события: <code>${escapeHtmlLite(cmReg.eventNameInSystem)}</code>`,
+                "Метод: GET · 4 postback: CM/ZM × reg/ftd",
+              ]
+            : [];
+          return [
+            "",
+            hybridMode ? "<b>Hybrid:</b> «Обновить все» = цифры как в «Кратком отчёте»." : "",
+            ...cabinetBlock,
+            "",
+            postbackActivityLine,
+            "Трафик только через «Ссылку для размещения» · статус Active.",
+          ].filter(Boolean);
+        })()
       : [];
   const lines = [
     "<b>1xPartners · Статистика</b>",

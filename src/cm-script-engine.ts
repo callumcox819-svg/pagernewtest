@@ -29,7 +29,7 @@ export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
   "03_steps": "voici comment ça fonctionne",
   "04_tier": "140 000 CFA",
   "05_registration": "CASH056",
-  "06_link": "Camerun01",
+  "06_link": "CMR056",
   "07_chrome": "Google Chrome",
   "08_game_id": "commence par 17",
   "09_deposit": "bouton vert",
@@ -59,6 +59,8 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "04_tier": [
     "140 000 cfa",
     "190 000 cfa",
+    "1000 cfa - 140 000",
+    "1500 cfa - 190 000",
     "1 000 cfa — 140 000",
     "1 000 cfa - 140 000",
     "que vas-tu choisir",
@@ -67,8 +69,8 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
     "investissement → gain",
     "bénéfice",
   ],
-  "05_registration": ["je vous envoie le lien", "télécharger l'application", "cash056"],
-  "06_link": ["camerun01", "tinyurl"],
+  "05_registration": ["je vais vous envoyer", "lien d'inscription spécial", "code promotionnel", "cash056"],
+  "06_link": ["cmr056", "tinyurl.com/cmr056"],
   "07_chrome": ["google chrome", "colle le lien"],
   "08_game_id": ["commence par 17", "numéro de joueur"],
   "09_deposit": ["bouton vert", "déposer", "deposer", "mtn", "orange"],
@@ -80,8 +82,8 @@ export const CM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
   "05_registration": ["voici comment ça fonctionne", "d'accord, voici comment", "crée ton compte casino"],
   "06_link": ["voici comment ça fonctionne", "d'accord, voici comment"],
   "07_chrome": ["voici comment ça fonctionne", "que vas-tu choisir"],
-  "03_steps": ["cash056", "camerun01", "google chrome"],
-  "04_tier": ["cash056", "camerun01", "google chrome"],
+  "03_steps": ["cash056", "cmr056", "camerun01", "google chrome"],
+  "04_tier": ["cash056", "cmr056", "camerun01", "google chrome"],
 };
 
 export const CM_FOLDER_NAME_HINTS = ["камерун", "cameroon", "cameroun", "cm"];
@@ -177,7 +179,12 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("camerun01") || blob.includes("tinyurl.com/camerun");
+  return (
+    blob.includes("cmr056") ||
+    blob.includes("camerun01") ||
+    blob.includes("tinyurl.com/cmr") ||
+    blob.includes("tinyurl.com/camerun")
+  );
 }
 
 export function cmRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
@@ -189,11 +196,11 @@ export function cmRegistrationInstructionsSentInHistory(outgoingTexts: string[])
       blob.includes("télécharger l'application") ||
       blob.includes("telecharger l'app") ||
       blob.includes("télécharger l'app")) &&
-    blob.includes("cash056")
+    (blob.includes("cash056"))
   );
 }
 
-const CM_REGISTRATION_LINK = "https://tinyurl.com/Camerun01";
+const CM_REGISTRATION_LINK = "https://tinyurl.com/CMR056";
 
 export function cmChromeReminderSentInHistory(outgoingTexts: string[]): boolean {
   if (cmScriptSentInHistory(outgoingTexts, "07_chrome")) {
@@ -311,7 +318,11 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("commence par 17")) {
     return 6;
   }
-  if (t.includes("camerun01") || (t.includes("google chrome") && t.includes("colle"))) {
+  if (
+    t.includes("cmr056") ||
+    t.includes("camerun01") ||
+    (t.includes("google chrome") && t.includes("colle"))
+  ) {
     return 5;
   }
   if (t.includes("cash056")) {

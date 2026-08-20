@@ -117,6 +117,24 @@ function parseEventFromParams(params: URLSearchParams, route?: PostbackRouteHint
   if (explicit) {
     return explicit;
   }
+  for (const [key, rawValue] of params.entries()) {
+    const keyLower = key.trim().toLowerCase();
+    const value = rawValue.trim();
+    if (!value || /^\{/.test(value)) {
+      continue;
+    }
+    if (keyLower === "reg" || keyLower === "registration" || keyLower === "signup") {
+      return "reg";
+    }
+    if (
+      keyLower === "ftd" ||
+      keyLower === "deposit" ||
+      keyLower === "first_deposit" ||
+      keyLower === "firstdeposit"
+    ) {
+      return "ftd";
+    }
+  }
   if (macroFilled(params.get("reg"))) {
     return "reg";
   }
@@ -127,6 +145,26 @@ function parseEventFromParams(params: URLSearchParams, route?: PostbackRouteHint
     return "ftd";
   }
   return null;
+}
+
+function inferCountryFromPostbackSite(env: AppEnv, siteHint: string | null | undefined): XPartnersCountry | null {
+  const raw = (siteHint || "").trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  if (/camerun|cameroon|cameroun|\.cm\b|кamer/i.test(raw)) {
+    return "CM";
+  }
+  if (/zambia|\.zm\b|zamb/i.test(raw)) {
+    return "ZM";
+  }
+  if (/egypt|egypt\.com|егип/i.test(raw)) {
+    return "EG";
+  }
+  if (/rwanda|ruand|\.rw\b/i.test(raw)) {
+    return "RW";
+  }
+  return parseCountryFromSite(new URLSearchParams({ site: raw }), env);
 }
 
 function parseCountryFromSite(params: URLSearchParams, env: AppEnv): XPartnersCountry | null {
@@ -238,9 +276,9 @@ export async function describePostbackActivity(meta: AppMetaStore): Promise<stri
   }
   if (log.accepted === 0 && log.rejected === 0) {
     lines.push("1xPartners ещё не слал postback на Railway URL.");
-    lines.push("Прямые ссылки без кликов часто не триггерят postback — см. «Ссылку для размещения».");
-  } else if (log.accepted <= 1) {
-    lines.push("Если в кабинете рег больше — postback не доходит; включи hybrid + cookie.");
+    lines.push("Проверь: статус Active · «Ссылка для размещения» в трекере · не прямые ссылки.");
+  } else if (log.accepted <= 1 && log.rejected === 0) {
+    lines.push("В кабинете рег больше — postback не доходит (трафик мимо цепочки или не Active).");
   }
   return lines.join("\n");
 }
@@ -361,6 +399,14 @@ export async function handlePostbackRequest(
   const country =
     route.country ??
     parseCountry(params.get("country") ?? params.get("geo") ?? params.get("c")) ??
+    inferCountryFromPostbackSite(
+      env,
+      params.get("site") ??
+        params.get("site_id") ??
+        params.get("website") ??
+        params.get("site_name") ??
+        params.get("offer"),
+    ) ??
     parseCountryFromSite(params, env);
   if (!country) {
     await recordPostbackRejected(meta, "missing country", params);
@@ -495,14 +541,70 @@ export function startXPartnersPostbackServer(env: AppEnv, meta: AppMetaStore): v
   });
 }
 
-export function postbackSetupHint(env: AppEnv): string {
-  const base = (env.XPARTNERS_POSTBACK_PUBLIC_URL || "https://YOUR-RAILWAY-DOMAIN").replace(/\/$/, "");
-  const token = env.XPARTNERS_POSTBACK_TOKEN?.trim();
-  const tokenPart = token ? `token=${encodeURIComponent(token)}&` : "";
+export type PostbackCabinetSetup = {
+  title: string;
+  site: string;
+  type: string;
+  eventNameInSystem: string;
+  url: string;
+  staticParams: string;
+  dynamicParams: Array<{ name: string; value: string }>;
+};
+
+export function postbackCabinetSetups(env: AppEnv): PostbackCabinetSetup[] {
+  const base = (env.XPARTNERS_POSTBACK_PUBLIC_URL || "https://pagernewtest-production.up.railway.app").replace(
+    /\/$/,
+    "",
+  );
+  const token = env.XPARTNERS_POSTBACK_TOKEN?.trim() || "pager_cm_2026_x7";
+  const mk = (
+    title: string,
+    site: string,
+    country: string,
+    type: string,
+    eventName: string,
+    eventStatic: string,
+    macro: "reg" | "ftd",
+  ): PostbackCabinetSetup => ({
+    title,
+    site,
+    type,
+    eventNameInSystem: eventName,
+    url: `${base}/xpartners/postback`,
+    staticParams: `token=${token}&country=${country}&event=${eventStatic}`,
+    dynamicParams: [
+      { name: "click_id", value: "{click_id}" },
+      { name: macro, value: `{${macro}}` },
+    ],
+  });
   return [
-    `${base}/xpartners/postback/cm/reg?${tokenPart}click_id={click_id}&reg={reg}`,
-    `${base}/xpartners/postback/cm/ftd?${tokenPart}click_id={click_id}&ftd={ftd}`,
-    `${base}/xpartners/postback/zm/reg?${tokenPart}click_id={click_id}&reg={reg}`,
-    `${base}/xpartners/postback/zm/ftd?${tokenPart}click_id={click_id}&ftd={ftd}`,
-  ].join("\n");
+    mk("Registration · Cameroon", "Camerun.com", "CM", "Registration", "reg", "reg", "reg"),
+    mk("FTD · Cameroon", "Camerun.com", "CM", "First deposit", "ftd", "ftd", "ftd"),
+    mk("Registration · Zambia", "Zambia.com", "ZM", "Registration", "reg", "reg", "reg"),
+    mk("FTD · Zambia", "Zambia.com", "ZM", "First deposit", "ftd", "ftd", "ftd"),
+  ];
+}
+
+export function formatPostbackCabinetSetupText(env: AppEnv): string {
+  return postbackCabinetSetups(env)
+    .map((p) =>
+      [
+        `▸ ${p.title}`,
+        `Сайт: ${p.site} · Тип: ${p.type}`,
+        `Название события: ${p.eventNameInSystem}`,
+        `URL: ${p.url}`,
+        `Статика: ${p.staticParams}`,
+        `Динамика: ${p.dynamicParams.map((d) => `${d.name} → ${d.value}`).join(", ")}`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+}
+
+/** Одна строка для быстрой проверки (альтернатива форме кабинета). */
+export function postbackSetupHint(env: AppEnv): string {
+  const first = postbackCabinetSetups(env)[0];
+  if (!first) {
+    return "";
+  }
+  return `${first.url}?${first.staticParams}&click_id={click_id}&reg={reg}`;
 }

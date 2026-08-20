@@ -204,7 +204,7 @@ import {
 import { buildEgLinkOnlyMessage, buildEgRegistrationOnlyMessage, loadLocalEgScript, shouldBlockEgBareLinkSend } from "./eg-local-scripts.js";
 import { getDeployLabel } from "./telegram-api.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
-import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
+import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveRwTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
 import { customerAgreedAfterOfferTable } from "./funnel-common.js";
 import {
@@ -1422,18 +1422,33 @@ async function processRwFunnelConversation(
       `Pager worker: RW ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
     );
 
+    const folderId = await resolveRwTemplateFolderId(
+      client,
+      runtime.runtime.templateBankId,
+      state.pagerAccount?.liveTemplateBanks,
+    );
+
     const allowMultiSend = rwAllowsMultiSend(scriptKeys);
     let sentAny = false;
     const sentScriptKeys: string[] = [];
 
     for (const scriptKey of scriptKeys) {
-      const replyText = rwScriptText(scriptKey, drafts);
-      if (!replyText) {
-        console.warn(`Pager worker: RW draft missing key=${scriptKey} ${convId.slice(0, 8)}`);
+      const replyText =
+        (await resolveScriptTextByKey(client, {
+          folderId,
+          liveBanks: state.pagerAccount?.liveTemplateBanks,
+          scriptKey,
+          country: "RW",
+          refreshSavedReplies: true,
+        })) ?? rwScriptText(scriptKey, drafts);
+      if (!replyText?.trim()) {
+        console.warn(
+          `Pager worker: RW script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${scriptKey} liveBanks=${state.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
+        );
         continue;
       }
 
-      const sent = await client.sendMessageReliable(convId, replyText, {
+      const sent = await client.sendMessageReliable(convId, replyText.trim(), {
         channelId: runtime.channelId,
         conv,
       });
@@ -1881,7 +1896,7 @@ async function processCmConversation(
       }
       if (scriptKey === "06_link") {
         const fallbackText =
-          loadLocalCmScript("06_link")?.trim() || "https://tinyurl.com/Camerun01";
+          loadLocalCmScript("06_link")?.trim() || "https://tinyurl.com/CMR056";
         const sent = await client.sendMessageReliable(convId, fallbackText, {
           channelId: runtime.channelId,
           conv,
@@ -2441,11 +2456,12 @@ async function processZmConversation(
       liveBanks: currentState.pagerAccount?.liveTemplateBanks,
       scriptKey,
       country: "ZM",
+      refreshSavedReplies: true,
     });
     if (!replyText?.trim()) {
       if (scriptKey === "05_link") {
         const fallbackLink =
-          loadLocalZmScript("05_link")?.trim() || "https://tinyurl.com/ZAM577";
+          loadLocalZmScript("05_link")?.trim() || "https://tinyurl.com/zambia777";
         const sent = await client.sendMessageReliable(convId, fallbackLink, {
           channelId: runtime.channelId,
           conv,

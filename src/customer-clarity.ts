@@ -13,7 +13,7 @@ const CLARITY_PATTERNS = [
 ];
 
 const SHORT_REG_TECH_HELP =
-  /(sms|код|code|otp|chrome|линк|link|url|tinyurl|eg011|cash056|zam577|promo)/i;
+  /(sms|код|code|otp|chrome|линк|link|url|tinyurl|eg011|cash056|zam577|zam777|promo)/i;
 
 /** True when the customer needs reassurance or explanation, not the next funnel preset yet. */
 export function isCustomerClarificationMessage(text: string): boolean {

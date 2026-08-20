@@ -16,6 +16,7 @@ import {
   wantsRegistrationLink,
 } from "./zm-intent.js";
 import { collectOutgoingTexts as zmCollectOutgoingTexts } from "./zm-script-engine.js";
+import { loadLocalRwScript } from "./rw-local-scripts.js";
 
 export const RW_SCRIPT_KEYS = [
   "01_intro",
@@ -39,12 +40,12 @@ export type RwScriptDrafts = Partial<Record<RwScriptKey, RwScriptDraft>>;
 export const RW_EXPLAIN_SEND_KEYS = new Set<RwScriptKey>(["02_how_it_works", "03_deposit_table"]);
 export const RW_REG_SEND_KEYS = new Set<RwScriptKey>(["04_registration", "05_link"]);
 
-/** Эталонная воронка RW (Patrick / ideal «Завершено»). */
+/** Эталонная воронка RW — дублирует scripts/rw/*.txt (fallback). */
 export const RW_BUILTIN_SCRIPTS: Record<RwScriptKey, string> = {
   "01_intro":
-    "Hi! I want to show you how I work with casino platforms. I use analytical systems and artificial intelligence tools to identify the best moments to enter the game. This is not random gambling. It is a method based on data, statistics, discipline and strategy.The AI analyzes many game sessions and statistics to find better opportunities, while my experience helps to understand how the platform works. For me this is like a business: you enter at the right moment, follow the instructions, and exit at the right time.I only work with serious people who are ready to follow instructions and work responsibly.If you are interested, I can explain step by step how it works and how you can start.",
+    "Hi! I want to show you how I work with casino platforms. I use analytical systems and artificial intelligence tools to identify the best moments to enter the game. This is not random gambling. It is a method based on data, statistics, discipline and strategy. The AI analyzes many game sessions and statistics to find better opportunities, while my experience helps to understand how the platform works. For me this is like a business: you enter at the right moment, follow the instructions, and exit at the right time. I only work with serious people who are ready to follow instructions and work responsibly. If you are interested, I can explain step by step how it works and how you can start.",
   "02_how_it_works":
-    "How it works:\n1) You create your own account at the casino using my link and enter my promo code.\n2) You make the first deposit up from 1000 RWF\n3) I will send you clear instructions (screenshots and detailed explanations). Everything has been tested by my team - reliability guaranteed! ✅\n4) Your task is to follow the steps exactly, without personal initiative. You will play only the games that we have carefully tested and that bring profit. 💰",
+    "How it works:\n1. You create an account at the casino using my link and enter my promo code.\n2. You make the first deposit up from 1000 RWF\n3. I will send you clear instructions (screenshots and detailed explanations). Everything has been tested by my team - reliability guaranteed! ✅\n4. Your task is to follow the steps exactly, without personal initiative. You will play only the games that we have carefully tested and that bring profit. 💰",
   "03_deposit_table":
     "Here's what you can get with my help:\nThe first amount is your deposit.\nThe second amount is your profit.\n2000 RWF - 25000 RWF\n5000 RWF - 50000 RWF\n10000 RWF - 100000 RWF\n20000 RWF - 200000 RWF\nAre you ready to start today?",
   "04_registration":
@@ -56,6 +57,10 @@ export function rwScriptText(key: RwScriptKey, drafts?: RwScriptDrafts): string 
   const fromDraft = drafts?.[key]?.text?.trim();
   if (fromDraft) {
     return fromDraft;
+  }
+  const fromLocal = loadLocalRwScript(key);
+  if (fromLocal?.trim()) {
+    return fromLocal;
   }
   return RW_BUILTIN_SCRIPTS[key]?.trim() ?? "";
 }
@@ -76,10 +81,25 @@ export function rwActiveScriptDrafts(drafts?: RwScriptDrafts): RwScriptDrafts {
   return merged;
 }
 
+export const RW_FOLDER_NAME_HINTS = ["ruand", "rwand", "rw", "руанд"];
+
+/** Pager saved-reply names that also map to RW script keys. */
+export const RW_SCRIPT_KEY_ALIASES: Record<string, string[]> = {
+  "03_deposit_table": ["03_zmw_table"],
+};
+
+export function rwScriptSnippet(key: string): string {
+  return RW_GENERIC_NEEDLES[key as RwScriptKey]?.[0] ?? "";
+}
+
+export function rwScriptSearchNeedles(key: string): string[] {
+  return RW_GENERIC_NEEDLES[key as RwScriptKey] ?? [];
+}
+
 const RW_GENERIC_NEEDLES: Record<RwScriptKey, string[]> = {
   "01_intro": ["analytical systems", "artificial intelligence", "hi! i want to show you"],
-  "02_how_it_works": ["how it works:", "1) you create", "create a casino account"],
-  "03_deposit_table": ["rwf", "ready to start today", "here's what you can get", "profit"],
+  "02_how_it_works": ["how it works:", "1000 rwf", "first deposit up from", "1. you create"],
+  "03_deposit_table": ["2000 rwf - 25000 rwf", "ready to start today", "here's what you can get", "profit"],
   "04_registration": [
     "special registration link",
     "paste it into your google chrome",
@@ -407,7 +427,7 @@ export function inferRwScriptKeyFromOperatorText(text: string): RwScriptKey | "o
   if (/ready to start today|\brwf\b|1000.*profit|profit.*1000/i.test(t)) {
     return "03_deposit_table";
   }
-  if (/how it works|step 1|1\)|create a casino account/i.test(t)) {
+  if (/how it works|step 1|1\.|1\)|create a casino account/i.test(t)) {
     return "02_how_it_works";
   }
   if (/analytical|artificial intelligence|casino platforms|hi! i want/i.test(t)) {

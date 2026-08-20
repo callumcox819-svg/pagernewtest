@@ -28,34 +28,44 @@ const ZM_GAME_ID_RE = /\b(17\d{6,}|16\d{6,})\b/;
 export const ZM_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "Hi! I want to show you",
   "02_how_it_works": "How it works:",
-  "03_zmw_table": "30 ZMW - 300 ZMW",
-  "04_registration": "promo code ZAM577",
-  "05_link": "tinyurl.com/ZAM577",
+  "03_zmw_table": "30 ZMW - 200 ZMW",
+  "04_registration": "promo code ZAM777",
+  "05_link": "tinyurl.com/zambia777",
   "06_deposit": 'click "Deposit"',
   "07_game_id": "begins with 17",
-  "08_tg_invite": "Join our private Telegram",
-  "09_tg_link": "t.me/+",
+  "08_tg_invite": "join our private Telegram channel",
+  "09_tg_link": "t.me/+vHFjlofy",
   "10_reg_screenshot": "screenshot",
   "11_fb_link": "facebook",
 };
 
 export const ZM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "01_intro": ["hi! i want to show you", "analytical systems", "artificial intelligence"],
-  "02_how_it_works": ["how it works:", "1) you create"],
-  "03_zmw_table": ["30 zmw - 300 zmw", "are you ready to start today", "here's what you can get"],
-  "04_registration": ["promo code zam577", "special registration link", "paste it into your google chrome"],
-  "05_link": ["tinyurl.com/zam577"],
+  "02_how_it_works": ["how it works:", "minimum deposit", "only 30zmw", "based on analysis and ai"],
+  "03_zmw_table": [
+    "30 zmw - 200 zmw",
+    "which one will you choose",
+    "here's what you can get",
+    "30 zmw - 300 zmw",
+  ],
+  "04_registration": [
+    "promo code zam777",
+    "special registration link",
+    "paste it into your browser",
+    "send me a screenshot so i can check",
+  ],
+  "05_link": ["tinyurl.com/zambia777", "tinyurl.com/zam577"],
   "06_deposit": ['click "deposit"', "minimum deposit amount"],
   "07_game_id": ["begins with 17", "send me your game id", "game id"],
-  "08_tg_invite": ["join our private telegram", "private telegram channel"],
-  "09_tg_link": ["t.me/+", "vhfjiofy"],
+  "08_tg_invite": ["join our private telegram channel", "grow together with us", "new strategies every day"],
+  "09_tg_link": ["t.me/+vhfjlofy", "t.me/+", "vhfjlofy"],
 };
 
 export const ZM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
   "04_registration": ["registration by e-mail", "make registration by e-mail", "by e-mail", "how it works:"],
   "05_link": ["promo code", "special registration", "how it works", "30 zmw"],
-  "02_how_it_works": ["promo code zam577", "tinyurl.com/zam577"],
-  "03_zmw_table": ["promo code zam577", "tinyurl.com/zam577"],
+  "02_how_it_works": ["promo code zam777", "tinyurl.com/zambia777", "promo code zam577", "tinyurl.com/zam577"],
+  "03_zmw_table": ["promo code zam777", "tinyurl.com/zambia777", "promo code zam577", "tinyurl.com/zam577"],
 };
 
 export const ZM_FOLDER_NAME_HINTS = ["замб", "zamb", "zambia"];
@@ -64,7 +74,7 @@ export const ZM_STATUS_MOVE_KEYS = new Set(["04_registration", "05_link"]);
 export const ZM_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works", "03_zmw_table"]);
 
 const ZM_REG_BUNDLE = ["04_registration", "05_link"] as const;
-const ZM_REGISTRATION_LINK = "https://tinyurl.com/ZAM577";
+const ZM_REGISTRATION_LINK = "https://tinyurl.com/zambia777";
 
 export function scriptSnippet(key: string): string {
   return ZM_SCRIPT_SNIPPETS[key] ?? "";
@@ -101,7 +111,10 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("tinyurl.com/zam577");
+  return (
+    blob.includes("tinyurl.com/zambia777") ||
+    blob.includes("tinyurl.com/zam577")
+  );
 }
 
 export function zmRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
@@ -109,8 +122,9 @@ export function zmRegistrationInstructionsSentInHistory(outgoingTexts: string[])
   return (
     (blob.includes("special registration link") ||
       blob.includes("here is the link") ||
+      blob.includes("paste it into your browser") ||
       blob.includes("paste it into your google chrome")) &&
-    blob.includes("zam577")
+    (blob.includes("zam777") || blob.includes("zam577"))
   );
 }
 
@@ -173,25 +187,35 @@ export function depositSentInHistory(outgoingTexts: string[]): boolean {
 
 function stepForOutgoingText(text: string): number {
   const t = text.toLowerCase();
-  if (t.includes("t.me/+") || t.includes("vhfjiofy")) {
+  if (t.includes("t.me/+") || t.includes("vhfjlofy")) {
     return 9;
   }
-  if (t.includes("join our private telegram")) {
+  if (t.includes("join our private telegram") || t.includes("grow together with us")) {
     return 8;
   }
-  if (t.includes('click "deposit"') || t.includes("minimum deposit amount")) {
+  if (t.includes('click "deposit"') || t.includes("minimum deposit")) {
     return 7;
   }
   if (t.includes("begins with 17") || t.includes("game id")) {
     return 6;
   }
-  if (t.includes("tinyurl.com/zam577") || t.includes("promo code zam577")) {
+  if (
+    t.includes("tinyurl.com/zambia777") ||
+    t.includes("promo code zam777") ||
+    t.includes("tinyurl.com/zam577") ||
+    t.includes("promo code zam577")
+  ) {
     return 4;
   }
-  if (t.includes("30 zmw - 300 zmw") || t.includes("are you ready to start today")) {
+  if (
+    t.includes("30 zmw - 200 zmw") ||
+    t.includes("which one will you choose") ||
+    t.includes("30 zmw - 300 zmw") ||
+    t.includes("are you ready to start today")
+  ) {
     return 3;
   }
-  if (t.includes("how it works:") && t.includes("1)")) {
+  if (t.includes("how it works:") && (t.includes("1.") || t.includes("1)"))) {
     return 2;
   }
   if (t.includes("hi! i want to show you") || t.includes("analytical systems")) {

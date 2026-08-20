@@ -2,6 +2,7 @@ import type { BotConfig, CountryCode, TemplateRole } from "./config.js";
 import { getTemplateBank } from "./config.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
 import { loadLocalEgScript } from "./eg-local-scripts.js";
+import { loadLocalRwScript, clearLocalRwScriptCache } from "./rw-local-scripts.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import {
   CM_FOLDER_NAME_HINTS,
@@ -22,19 +23,28 @@ import {
   scriptSearchNeedles as zmScriptSearchNeedles,
   scriptSnippet as zmScriptSnippet,
 } from "./zm-script-engine.js";
+import {
+  RW_FOLDER_NAME_HINTS,
+  RW_SCRIPT_KEY_ALIASES,
+  rwScriptSearchNeedles,
+  rwScriptSnippet,
+} from "./rw-script-engine.js";
 import type { PagerClient, PagerSavedReply } from "./pager-client.js";
 import {
   isDisabledOutboundScriptKey,
   isDisabledOutboundTemplateRole,
 } from "./disabled-outbound-scripts.js";
 
-const replyCache = new Map<string, PagerSavedReply[]>();
+export type ScriptResolveCountry = CountryCode | "RW";
+
+const replyCache = new Map<string, { loadedAt: number; replies: PagerSavedReply[] }>();
+const REPLY_CACHE_TTL_MS = 90_000;
 
 const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>> = {
   CM: {
     intro: ["01_intro", "Tu es du Cameroun", "Mon équipe cumule"],
     details: ["03_steps", "voici comment ça fonctionne", "02_age", "Quel âge"],
-    registration: ["05_registration", "CASH056", "06_link", "Camerun01"],
+    registration: ["05_registration", "CASH056", "06_link", "CMR056"],
     deposit: ["09_deposit", "bouton vert"],
     ask_id: ["08_game_id", "commence par 17"],
     no_money: ["pas d'argent", "plus tard"],
@@ -52,7 +62,7 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
   ZM: {
     intro: ["01_intro", "Hi! I want to show you"],
     details: ["02_how_it_works", "How it works"],
-    registration: ["04_registration", "ZAM577", "05_link"],
+    registration: ["04_registration", "ZAM777", "05_link", "zambia777"],
     deposit: ["06_deposit", "click \"Deposit\""],
     ask_id: ["07_game_id", "begins with 17"],
     no_money: ["No problem", "when you are ready"],
@@ -129,13 +139,22 @@ export async function resolveEgTemplateFolderId(
   return resolveTemplateFolderId(client, EG_FOLDER_NAME_HINTS, preferredId, liveBanks);
 }
 
+export async function resolveRwTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, RW_FOLDER_NAME_HINTS, preferredId, liveBanks);
+}
+
 export async function resolveScriptTextByKey(
   client: PagerClient,
   options: {
     folderId?: string;
     liveBanks?: Array<{ id: string; name: string }>;
     scriptKey: string;
-    country?: CountryCode;
+    country?: ScriptResolveCountry;
+    refreshSavedReplies?: boolean;
   },
 ): Promise<string | undefined> {
   const country = options.country ?? "CM";
@@ -168,20 +187,23 @@ export async function resolveScriptTextByKey(
     }
   }
   const folderId =
-    country === "ZM"
+    country === "RW"
+      ? await resolveRwTemplateFolderId(client, options.folderId, options.liveBanks)
+      : country === "ZM"
       ? await resolveZmTemplateFolderId(client, options.folderId, options.liveBanks)
       : country === "EG"
         ? await resolveEgTemplateFolderId(client, options.folderId, options.liveBanks)
         : await resolveCmTemplateFolderId(client, options.folderId, options.liveBanks);
 
   if (folderId) {
-    const replies = await loadFolderReplies(client, folderId);
+    const replies = await loadFolderReplies(client, folderId, options.refreshSavedReplies);
+    const exactName = findReplyByExactScriptName(replies, options.scriptKey, country);
+    if (exactName?.text?.trim()) {
+      return finalizeScriptText(exactName.text, options.scriptKey, country);
+    }
     const fromPager = matchReplyByScriptKey(replies, options.scriptKey, country);
     if (fromPager?.text?.trim() && isScriptReplyAcceptable(fromPager.text, options.scriptKey, country)) {
-      if (country === "CM" && options.scriptKey === "05_registration") {
-        return stripCmRegistrationEmbeddedLink(fromPager.text);
-      }
-      return fromPager.text;
+      return finalizeScriptText(fromPager.text, options.scriptKey, country);
     }
     if (
       country === "EG" &&
@@ -207,7 +229,9 @@ export async function resolveScriptTextByKey(
   }
 
   const local =
-    country === "ZM"
+    country === "RW"
+      ? loadLocalRwScript(options.scriptKey)
+      : country === "ZM"
       ? loadLocalZmScript(options.scriptKey)
       : country === "EG"
         ? loadLocalEgScript(options.scriptKey)
@@ -260,23 +284,72 @@ export async function resolveTemplateText(
   return yamlBank.roles[options.role];
 }
 
-async function loadFolderReplies(client: PagerClient, folderId: string): Promise<PagerSavedReply[]> {
+async function loadFolderReplies(
+  client: PagerClient,
+  folderId: string,
+  forceRefresh = false,
+): Promise<PagerSavedReply[]> {
   const cached = replyCache.get(folderId);
-  if (cached?.length) {
-    return cached;
+  if (!forceRefresh && cached && Date.now() - cached.loadedAt < REPLY_CACHE_TTL_MS) {
+    return cached.replies;
   }
 
   const replies = await client.getSavedReplies(folderId);
   if (replies.length) {
-    replyCache.set(folderId, replies);
+    replyCache.set(folderId, { loadedAt: Date.now(), replies });
   }
   return replies;
+}
+
+function finalizeScriptText(text: string, scriptKey: string, country: ScriptResolveCountry): string {
+  if (country === "CM" && scriptKey === "05_registration") {
+    return stripCmRegistrationEmbeddedLink(text);
+  }
+  return text;
+}
+
+function findReplyByExactScriptName(
+  replies: PagerSavedReply[],
+  scriptKey: string,
+  country: ScriptResolveCountry,
+): PagerSavedReply | undefined {
+  const keys = scriptKeysForLookup(scriptKey, country);
+  for (const key of keys) {
+    const matched = replies.find(
+      (reply) => scriptNameMatchesKey(reply.name, key) && (reply.text || "").trim(),
+    );
+    if (matched) {
+      return matched;
+    }
+  }
+  return undefined;
+}
+
+function scriptKeysForLookup(scriptKey: string, country: ScriptResolveCountry): string[] {
+  if (country === "RW") {
+    return [scriptKey, ...(RW_SCRIPT_KEY_ALIASES[scriptKey] ?? [])];
+  }
+  return [scriptKey];
 }
 
 function matchReplyByScriptKey(
   replies: PagerSavedReply[],
   scriptKey: string,
-  country: CountryCode,
+  country: ScriptResolveCountry,
+): PagerSavedReply | undefined {
+  for (const key of scriptKeysForLookup(scriptKey, country)) {
+    const matched = matchReplyByScriptKeyOnce(replies, key, country);
+    if (matched) {
+      return matched;
+    }
+  }
+  return undefined;
+}
+
+function matchReplyByScriptKeyOnce(
+  replies: PagerSavedReply[],
+  scriptKey: string,
+  country: ScriptResolveCountry,
 ): PagerSavedReply | undefined {
   const snippetForCountry = scriptSnippetForCountry(country);
   const needlesForCountry = scriptSearchNeedlesForCountry(country);
@@ -343,7 +416,10 @@ function pickBestScriptReply(replies: PagerSavedReply[], scriptKey: string): Pag
   return [...replies].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0];
 }
 
-function scriptSnippetForCountry(country: CountryCode): (key: string) => string {
+function scriptSnippetForCountry(country: ScriptResolveCountry): (key: string) => string {
+  if (country === "RW") {
+    return rwScriptSnippet;
+  }
   if (country === "ZM") {
     return zmScriptSnippet;
   }
@@ -353,7 +429,10 @@ function scriptSnippetForCountry(country: CountryCode): (key: string) => string 
   return cmScriptSnippet;
 }
 
-function scriptSearchNeedlesForCountry(country: CountryCode): (key: string) => string[] {
+function scriptSearchNeedlesForCountry(country: ScriptResolveCountry): (key: string) => string[] {
+  if (country === "RW") {
+    return rwScriptSearchNeedles;
+  }
   if (country === "ZM") {
     return zmScriptSearchNeedles;
   }
@@ -363,7 +442,10 @@ function scriptSearchNeedlesForCountry(country: CountryCode): (key: string) => s
   return cmScriptSearchNeedles;
 }
 
-function scriptExcludesForCountry(country: CountryCode, scriptKey: string): string[] {
+function scriptExcludesForCountry(country: ScriptResolveCountry, scriptKey: string): string[] {
+  if (country === "RW") {
+    return [];
+  }
   if (country === "ZM") {
     return ZM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [];
   }
@@ -373,7 +455,7 @@ function scriptExcludesForCountry(country: CountryCode, scriptKey: string): stri
   return CM_SCRIPT_EXCLUDE_SNIPPETS[scriptKey] ?? [];
 }
 
-function isScriptReplyAcceptable(text: string, scriptKey: string, country: CountryCode): boolean {
+function isScriptReplyAcceptable(text: string, scriptKey: string, country: ScriptResolveCountry): boolean {
   const snippetForCountry = scriptSnippetForCountry(country);
   const excludes = scriptExcludesForCountry(country, scriptKey);
   const body = text.trim().toLowerCase();
@@ -403,10 +485,24 @@ function isScriptReplyAcceptable(text: string, scriptKey: string, country: Count
 
   if (scriptKey === "04_registration" && country === "ZM") {
     return (
-      body.includes("promo code zam577") ||
+      body.includes("promo code") ||
       body.includes("special registration link") ||
-      body.includes("paste it into your google chrome")
+      body.includes("paste it into your google chrome") ||
+      body.includes("google chrome")
     );
+  }
+
+  if (scriptKey === "04_registration" && country === "RW") {
+    return (
+      body.includes("registration link") ||
+      body.includes("google chrome") ||
+      body.includes("promo code") ||
+      body.includes("here is the link")
+    );
+  }
+
+  if (scriptKey === "03_deposit_table" && country === "RW") {
+    return body.includes("rwf") || body.includes("profit") || body.includes("ready to start");
   }
 
   if (scriptKey === "04_registration" && country === "EG") {
@@ -426,10 +522,17 @@ function isScriptReplyAcceptable(text: string, scriptKey: string, country: Count
 
   if (scriptKey === "05_link") {
     return (
-      body.includes("tinyurl.com/zam577") ||
-      body.includes("tinyurl.com/camerun01") ||
-      body.includes("tinyurl.com/egypt0011")
+      body.includes("tinyurl.com/") ||
+      body.includes("http://") ||
+      body.includes("https://")
     );
+  }
+
+  if (country === "RW") {
+    const needles = scriptSearchNeedlesForCountry(country)(scriptKey);
+    if (needles.some((needle) => body.includes(needle.trim().toLowerCase()))) {
+      return true;
+    }
   }
 
   return body.length >= 40;
@@ -464,4 +567,5 @@ function normalizeNeedle(value: string): string {
 
 export function clearTemplateReplyCache(): void {
   replyCache.clear();
+  clearLocalRwScriptCache();
 }
