@@ -219,6 +219,7 @@ import {
   isNoStatusConversation,
   isZmInProgressRegistrationStatusName,
   isZmRegistrationCompleteStatusName,
+  type StatusFolderState,
 } from "./status-folders.js";
 import type { TemplateRole } from "./config.js";
 import type { TelegramApi } from "./telegram-api.js";
@@ -1646,6 +1647,17 @@ async function processCmConversation(
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
     operatorFolderEnabled: folderEnabled,
   });
+  await maybeEnsureInProgressAfterRegLink(
+    deps,
+    currentState,
+    client,
+    conv,
+    convId,
+    runtime.channelId,
+    "CM",
+    outgoingTexts,
+    cmRegLinkSentInHistory,
+  );
   const cmInProgressFollowUp =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
     isCustomerClarificationMessage(latestCustomerText);
@@ -1837,6 +1849,17 @@ async function processCmConversation(
 
   scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "CM", scriptKeys);
   if (!scriptKeys.length) {
+    await maybeEnsureInProgressAfterRegLink(
+      deps,
+      currentState,
+      client,
+      conv,
+      convId,
+      runtime.channelId,
+      "CM",
+      outgoingTexts,
+      cmRegLinkSentInHistory,
+    );
     console.log(`Pager worker: CM ${convId.slice(0, 8)} — scripts already in thread`);
     return false;
   }
@@ -1952,25 +1975,25 @@ async function processCmConversation(
     }
   }
 
-  if (!sentAny) {
-    return false;
+  if (sentAny) {
+    const outAfterSend = collectCmOutgoingTexts(await client.listMessages(convId, 1, 80));
+    if (cmStatusMoveAfterSend(sentScriptKeys) || cmRegLinkSentInHistory(outAfterSend)) {
+      await maybeEnsureInProgressAfterRegLink(
+        deps,
+        currentState,
+        client,
+        conv,
+        convId,
+        runtime.channelId,
+        "CM",
+        outAfterSend,
+        cmRegLinkSentInHistory,
+      );
+    }
   }
 
-  if (cmStatusMoveAfterSend(sentScriptKeys)) {
-    const statusId = findFunnelFollowUpStatusId(currentState);
-    const operatorId = await client.probeOperatorUserId();
-    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
-    if (statusId && operatorId) {
-      try {
-        await client.patchConversationStatus(convId, statusId, operatorId);
-        console.log(`Pager worker: CM ${convId.slice(0, 8)} status -> in progress`);
-        if (currentStatusId !== statusId) {
-          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
-        }
-      } catch (error) {
-        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
-      }
-    }
+  if (!sentAny) {
+    return false;
   }
 
   await patchConversationState(deps.stateStore, state.chatId, convId, {
@@ -2065,6 +2088,17 @@ async function processClConversation(
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
     operatorFolderEnabled: folderEnabled,
   });
+  await maybeEnsureInProgressAfterRegLink(
+    deps,
+    currentState,
+    client,
+    conv,
+    convId,
+    runtime.channelId,
+    "CL",
+    outgoingTexts,
+    clRegLinkSentInHistory,
+  );
   const clInProgressFollowUp =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
     isCustomerClarificationMessage(latestCustomerText);
@@ -2159,6 +2193,17 @@ async function processClConversation(
 
   scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "CL", scriptKeys);
   if (!scriptKeys.length) {
+    await maybeEnsureInProgressAfterRegLink(
+      deps,
+      currentState,
+      client,
+      conv,
+      convId,
+      runtime.channelId,
+      "CL",
+      outgoingTexts,
+      clRegLinkSentInHistory,
+    );
     console.log(`Pager worker: CL ${convId.slice(0, 8)} — scripts already in thread`);
     return false;
   }
@@ -2211,25 +2256,25 @@ async function processClConversation(
     }
   }
 
-  if (!sentAny) {
-    return false;
+  if (sentAny) {
+    const outAfterSend = collectClOutgoingTexts(await client.listMessages(convId, 1, 80));
+    if (clStatusMoveAfterSend(sentScriptKeys) || clRegLinkSentInHistory(outAfterSend)) {
+      await maybeEnsureInProgressAfterRegLink(
+        deps,
+        currentState,
+        client,
+        conv,
+        convId,
+        runtime.channelId,
+        "CL",
+        outAfterSend,
+        clRegLinkSentInHistory,
+      );
+    }
   }
 
-  if (clStatusMoveAfterSend(sentScriptKeys)) {
-    const statusId = findFunnelFollowUpStatusId(currentState);
-    const operatorId = await client.probeOperatorUserId();
-    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
-    if (statusId && operatorId) {
-      try {
-        await client.patchConversationStatus(convId, statusId, operatorId);
-        console.log(`Pager worker: CL ${convId.slice(0, 8)} status -> in progress`);
-        if (currentStatusId !== statusId) {
-          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
-        }
-      } catch (error) {
-        console.warn(`Pager worker: CL status patch failed ${convId.slice(0, 8)}:`, formatError(error));
-      }
-    }
+  if (!sentAny) {
+    return false;
   }
 
   await patchConversationState(deps.stateStore, state.chatId, convId, {
@@ -3391,8 +3436,12 @@ async function processGenericConversation(
   return true;
 }
 
+function listStatusFolders(state: ChatState): StatusFolderState[] {
+  return state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+}
+
 function findZmWaitingIdStatusId(state: ChatState): string | undefined {
-  for (const folder of state.statusFolders ?? []) {
+  for (const folder of listStatusFolders(state)) {
     const name = folder.name.trim().toLowerCase();
     if (/чекаю\s*id|waiting.*id|жду\s*айди|attente.*id/i.test(name)) {
       return folder.id;
@@ -3402,21 +3451,98 @@ function findZmWaitingIdStatusId(state: ChatState): string | undefined {
 }
 
 function findFunnelFollowUpStatusId(state: ChatState): string | undefined {
-  // Prefer «В процесі» / registration-in-progress — never park CM chats in «чекаю ID».
-  for (const folder of state.statusFolders ?? []) {
+  const folders = listStatusFolders(state);
+  // Prefer exact «в процессе регистрации» over generic funnel folders.
+  for (const folder of folders) {
     const name = folder.name.trim().toLowerCase();
     if (/чекаю\s*id|waiting.*id|attente.*id/i.test(name)) {
       continue;
     }
-    if (isFunnelFollowUpFolderName(folder.name)) {
+    if (isZmInProgressRegistrationStatusName(name)) {
+      return folder.id;
+    }
+  }
+  for (const folder of folders) {
+    const name = folder.name.trim().toLowerCase();
+    if (/чекаю\s*id|waiting.*id|attente.*id/i.test(name)) {
+      continue;
+    }
+    if (/в процес|процес|process|рега|реєстраці|не заверш|en cours/i.test(name)) {
       return folder.id;
     }
   }
   return undefined;
 }
 
+async function tryMoveConversationToInProgressRegistration(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  convId: string,
+  channelId: string,
+  countryLabel: string,
+): Promise<boolean> {
+  if (isInProgressStatusConversation(conv)) {
+    return false;
+  }
+  const statusId = findFunnelFollowUpStatusId(state);
+  const operatorId = await client.probeOperatorUserId();
+  const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+  if (!statusId) {
+    console.warn(
+      `Pager worker: ${countryLabel} ${convId.slice(0, 8)} status move skipped — in-progress folder not found`,
+    );
+    return false;
+  }
+  if (!operatorId) {
+    console.warn(
+      `Pager worker: ${countryLabel} ${convId.slice(0, 8)} status move skipped — no operator user id`,
+    );
+    return false;
+  }
+  if (currentStatusId === statusId) {
+    return false;
+  }
+  try {
+    await tryTakeConversationForProcessing(client, convId, countryLabel);
+    await client.patchConversationStatus(convId, statusId, operatorId);
+    console.log(`Pager worker: ${countryLabel} ${convId.slice(0, 8)} status -> in progress`);
+    await onMovedToInProgressRegistration(deps, state.chatId, convId, channelId);
+    return true;
+  } catch (error) {
+    console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+    return false;
+  }
+}
+
+async function maybeEnsureInProgressAfterRegLink(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  convId: string,
+  channelId: string,
+  countryLabel: string,
+  outgoingTexts: string[],
+  regLinkSent: (out: string[]) => boolean,
+): Promise<boolean> {
+  if (!regLinkSent(outgoingTexts) || isInProgressStatusConversation(conv)) {
+    return false;
+  }
+  return tryMoveConversationToInProgressRegistration(
+    deps,
+    state,
+    client,
+    conv,
+    convId,
+    channelId,
+    countryLabel,
+  );
+}
+
 function findZmStatusId(state: ChatState, target: ZmStatusMoveTarget): string | undefined {
-  for (const folder of state.statusFolders ?? []) {
+  for (const folder of listStatusFolders(state)) {
     if (target === "in_progress_registration" && isZmInProgressRegistrationStatusName(folder.name)) {
       return folder.id;
     }

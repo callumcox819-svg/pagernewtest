@@ -99,7 +99,7 @@ export const CL_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
     "cle577",
   ],
   "06_link": ["cle333", "tinyurl.com/cle"],
-  "07_chrome": ["google chrome", "copiez ce lien", "copia este enlace", "copy this link"],
+  "07_chrome": ["copiez ce lien", "copia este enlace", "copy this link"],
   "08_game_id": ["commence par 17", "empieza por 17", "starts with 17", "numéro de joueur"],
   "09_deposit": ["bouton vert", "déposer", "deposit", "depositar", "depósito"],
   "10_tg_invite": ["canal telegram privé", "canal telegram prive"],
@@ -236,12 +236,25 @@ export function clRegistrationInstructionsSentInHistory(outgoingTexts: string[])
 const CL_REGISTRATION_LINK = "https://tinyurl.com/CLE333";
 
 export function clChromeReminderSentInHistory(outgoingTexts: string[]): boolean {
-  if (clScriptSentInHistory(outgoingTexts, "07_chrome")) {
-    return true;
-  }
   return outgoingTexts.some((line) => {
-    const lower = line.toLowerCase();
-    return lower.includes("google chrome") && lower.includes("colle");
+    const lower = line.toLowerCase().trim();
+    if (
+      lower.includes("cle577") ||
+      lower.includes("cle333") ||
+      lower.includes("lien d'inscription") ||
+      lower.includes("registration link") ||
+      lower.includes("enlace de registro") ||
+      lower.length > 160
+    ) {
+      return false;
+    }
+    return (
+      lower.includes("copiez ce lien") ||
+      lower.includes("copia este enlace") ||
+      lower.includes("copy this link") ||
+      (lower.includes("google chrome") &&
+        (lower.includes("colle") || lower.includes("paste") || lower.includes("pega")))
+    );
   });
 }
 
@@ -861,11 +874,11 @@ export function classifyClMessage(
 }
 
 export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
-  return scriptKeys.includes("07_chrome");
+  return scriptKeys.includes("06_link") || scriptKeys.includes("07_chrome");
 }
 
 export function clStatusMoveAfterSend(sentScriptKeys: string[]): boolean {
-  return sentScriptKeys.includes("07_chrome");
+  return sentScriptKeys.includes("06_link") || sentScriptKeys.includes("07_chrome");
 }
 
 /** Intro pair and registration trio are multi-send; everything else is one script per customer turn. */

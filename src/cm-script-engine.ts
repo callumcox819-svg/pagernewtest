@@ -77,7 +77,7 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   ],
   "05_registration": ["je vais vous envoyer", "lien d'inscription spécial", "code promotionnel", "cash056"],
   "06_link": ["cmr056", "tinyurl.com/cmr056"],
-  "07_chrome": ["google chrome", "colle le lien"],
+  "07_chrome": ["copiez ce lien", "navigateur google chrome"],
   "08_game_id": ["commence par 17", "numéro de joueur"],
   "09_deposit": ["bouton vert", "déposer", "deposer", "mtn", "orange"],
   "10_tg_invite": ["canal telegram privé", "canal telegram prive"],
@@ -199,26 +199,45 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
 
 export function cmRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
   const blob = outgoingTexts.join("\n").toLowerCase();
+  if (!blob.includes("cash056")) {
+    return false;
+  }
   return (
-    (blob.includes("je vous envoie le lien") ||
-      blob.includes("je t'envoie le lien") ||
-      blob.includes("telecharger l'application") ||
-      blob.includes("télécharger l'application") ||
-      blob.includes("telecharger l'app") ||
-      blob.includes("télécharger l'app")) &&
-    (blob.includes("cash056"))
+    blob.includes("je vais vous envoyer") ||
+    blob.includes("je vous envoie le lien") ||
+    blob.includes("je t'envoie le lien") ||
+    blob.includes("lien d'inscription spécial") ||
+    blob.includes("lien d'inscription special") ||
+    blob.includes("telecharger l'application") ||
+    blob.includes("télécharger l'application") ||
+    blob.includes("telecharger l'app") ||
+    blob.includes("télécharger l'app")
   );
 }
 
 const CM_REGISTRATION_LINK = "https://tinyurl.com/CMR056";
 
+/** Short Chrome reminder only — not the long 05_registration text (also mentions Chrome). */
 export function cmChromeReminderSentInHistory(outgoingTexts: string[]): boolean {
-  if (cmScriptSentInHistory(outgoingTexts, "07_chrome")) {
-    return true;
-  }
   return outgoingTexts.some((line) => {
-    const lower = line.toLowerCase();
-    return lower.includes("google chrome") && lower.includes("colle");
+    const lower = line.toLowerCase().trim();
+    if (!lower.includes("google chrome")) {
+      return false;
+    }
+    // Registration script embeds "Google Chrome" + "colle" — exclude it.
+    if (
+      lower.includes("cash056") ||
+      lower.includes("code promotionnel") ||
+      lower.includes("lien d'inscription") ||
+      lower.includes("cmr056") ||
+      lower.length > 160
+    ) {
+      return false;
+    }
+    return (
+      lower.includes("copiez ce lien") ||
+      (lower.includes("colle") && lower.includes("navigateur"))
+    );
   });
 }
 
@@ -820,11 +839,12 @@ export function classifyCmMessage(
 }
 
 export function regSendTriggersInProgress(scriptKeys: string[]): boolean {
-  return scriptKeys.includes("07_chrome");
+  return scriptKeys.includes("06_link") || scriptKeys.includes("07_chrome");
 }
 
+/** Move to «в процессе» once the registration link (or chrome reminder) went out. */
 export function cmStatusMoveAfterSend(sentScriptKeys: string[]): boolean {
-  return sentScriptKeys.includes("07_chrome");
+  return sentScriptKeys.includes("06_link") || sentScriptKeys.includes("07_chrome");
 }
 
 /** Intro pair and registration trio are multi-send; everything else is one script per customer turn. */
