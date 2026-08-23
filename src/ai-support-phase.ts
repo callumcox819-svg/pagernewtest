@@ -60,7 +60,7 @@ const SUPPORT_FUNNEL: Record<CountryCode, FunnelHistorySignals> = {
       "04_tier",
       "05_registration",
     ],
-    linkResendScriptKeys: ["06_link", "07_chrome", "07_mtn_tip"],
+    linkResendScriptKeys: ["06_link"],
     depositScriptKeys: ["09_deposit"],
     gameIdScriptKeys: ["08_game_id"],
   },

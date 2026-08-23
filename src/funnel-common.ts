@@ -59,9 +59,7 @@ export function registrationLinkScriptKeys(
   linkAlreadySent: boolean,
 ): string[] {
   if (country === "CM") {
-    return linkAlreadySent
-      ? ["06_link", "07_chrome", "07_mtn_tip"]
-      : ["05_registration", "06_link", "07_chrome", "07_mtn_tip"];
+    return linkAlreadySent ? ["06_link"] : ["05_registration", "06_link"];
   }
   if (country === "EG") {
     return linkAlreadySent ? ["05_link"] : ["04_registration", "05_link"];
@@ -71,7 +69,7 @@ export function registrationLinkScriptKeys(
 
 export function registrationHelpScriptKeys(country: CountryCode): string[] {
   if (country === "CM") {
-    return ["05_registration", "06_link", "07_chrome", "07_mtn_tip"];
+    return ["05_registration", "06_link"];
   }
   if (country === "EG") {
     return ["04_registration", "05_link"];
@@ -86,7 +84,7 @@ export function registrationResendScriptKeys(
 ): string[] {
   if (linkAlreadySent) {
     if (country === "CM") {
-      return ["06_link", "07_chrome", "07_mtn_tip"];
+      return ["06_link"];
     }
     return ["05_link"];
   }

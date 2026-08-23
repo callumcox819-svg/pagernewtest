@@ -101,11 +101,12 @@ export const CM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
 
 export const CM_FOLDER_NAME_HINTS = ["камерун", "cameroon", "cameroun", "cm"];
 
+/** Initial reg send: instructions + link only. Chrome/MTN tip are help-only, never after folder move. */
 export const CM_REG_SEND_KEYS = new Set(["05_registration", "06_link", "07_chrome", "07_mtn_tip"]);
 export const CM_INTRO_SEND_KEYS = new Set(["01_intro", "01_intro_2", "01_intro_3"]);
 
 const CM_INTRO_BUNDLE = ["01_intro", "01_intro_2", "01_intro_3"] as const;
-const CM_REG_BUNDLE = ["05_registration", "06_link", "07_chrome", "07_mtn_tip"] as const;
+const CM_REG_BUNDLE = ["05_registration", "06_link"] as const;
 
 export function scriptSnippet(key: string): string {
   return CM_SCRIPT_SNIPPETS[key] ?? "";
@@ -539,11 +540,8 @@ export function resolveCmFunnelScripts(
   }
 
   if (registrationHelp) {
-    if (regLinkSentInHistory(out) && !cmChromeReminderSentInHistory(out)) {
-      return ["07_chrome"];
-    }
     if (regLinkSentInHistory(out)) {
-      return ["07_chrome", "06_link"];
+      return ["06_link"];
     }
     const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out, t);
     if (reg.length) {
@@ -614,10 +612,10 @@ export function resolveCmFunnelScripts(
 
   if (linkSent) {
     if (registrationHelp) {
-      return ["07_chrome", "06_link"];
+      return ["06_link"];
     }
     if (isRegistrationBlocked(t)) {
-      return ["07_chrome", "06_link"];
+      return ["06_link"];
     }
     if (
       (options?.hasImage || isRegistrationConfirmed(t) || intent === "image_only") &&
@@ -905,29 +903,27 @@ export function limitCmScriptsForCustomerTurn(
   if (scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))) {
     const instructionsSent = cmRegistrationInstructionsSentInHistory(outgoingTexts);
     const linkSent = regLinkSentInHistory(outgoingTexts);
-    const chromeSent = cmChromeReminderSentInHistory(outgoingTexts);
-    const mtnTipSent = cmMtnTipSentInHistory(outgoingTexts);
 
-    if (!instructionsSent) {
-      return [...CM_REG_BUNDLE];
+    // First reg turn: only instructions + link, then stop (folder move). No chrome/Wi‑Fi.
+    const isInitialReg =
+      scriptKeys.includes("05_registration") ||
+      scriptKeys.includes("06_link") ||
+      (!linkSent && scriptKeys.every((key) => CM_REG_SEND_KEYS.has(key)));
+    if (!linkSent && isInitialReg) {
+      if (!instructionsSent) {
+        return [...CM_REG_BUNDLE];
+      }
+      return ["06_link"];
     }
-    const remaining: string[] = [];
-    if (!linkSent) {
-      remaining.push("06_link");
-    }
-    if (!chromeSent) {
-      remaining.push("07_chrome");
-    }
-    if (!mtnTipSent) {
-      remaining.push("07_mtn_tip");
-    }
-    if (remaining.length) {
-      return remaining;
-    }
-    if (scriptKeys.includes("06_link")) {
-      return scriptKeys.filter((key) => CM_REG_SEND_KEYS.has(key));
-    }
-    return [];
+
+    // Help / resend only — never auto-append Wi‑Fi tip.
+    const remaining = scriptKeys.filter(
+      (key) =>
+        CM_REG_SEND_KEYS.has(key) &&
+        key !== "07_mtn_tip" &&
+        !cmScriptSentInHistory(outgoingTexts, key),
+    );
+    return remaining.length ? remaining : [];
   }
   return [scriptKeys[0]!];
 }

@@ -1780,7 +1780,7 @@ async function processCmConversation(
     isDepositTierChoice(latestCustomerText) &&
     !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
   ) {
-    scriptKeys = ["05_registration", "06_link", "07_chrome", "07_mtn_tip"];
+    scriptKeys = ["05_registration", "06_link"];
   }
   if (
     tierSentInHistory(outgoingTexts) &&
@@ -1790,7 +1790,7 @@ async function processCmConversation(
       customerAgreedAfterOfferTable(latestCustomerText)) &&
     !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
   ) {
-    scriptKeys = ["05_registration", "06_link", "07_chrome", "07_mtn_tip"];
+    scriptKeys = ["05_registration", "06_link"];
   }
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
@@ -1968,6 +1968,8 @@ async function processCmConversation(
             outAfterLink,
             cmRegLinkSentInHistory,
           );
+          // After link + folder move: stop. No chrome / Wi‑Fi tips.
+          break;
         }
         continue;
       }
@@ -2015,6 +2017,10 @@ async function processCmConversation(
           outAfterLink,
           cmRegLinkSentInHistory,
         );
+        // After link + folder move: stop. No chrome / Wi‑Fi tips in the same turn.
+        if (scriptKey === "06_link") {
+          break;
+        }
       }
     }
     if (!allowMultiSend) {
@@ -2230,7 +2236,7 @@ async function processClConversation(
     isClDepositTierChoice(latestCustomerText) &&
     !scriptKeys.some((key) => CL_REG_SEND_KEYS.has(key))
   ) {
-    scriptKeys = ["05_registration", "06_link", "07_chrome", "07_mtn_tip"];
+    scriptKeys = ["05_registration", "06_link", "07_chrome"];
   }
   scriptKeys = limitClScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
