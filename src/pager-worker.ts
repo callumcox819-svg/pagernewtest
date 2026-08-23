@@ -407,6 +407,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
+  await retryPendingInProgressMoves(deps, freshState, client, enabledChannels);
+  freshState = hydrateOperatorState((await deps.stateStore.get(freshState.chatId)) ?? freshState);
+
   if (enabledEgInState.length && !enabledEgChannels.length) {
     console.error(
       `Pager worker: chat ${freshState.chatId} — Egypt channel enabled in settings but missing from poll list (${enabledEgInState.join(", ")}). Re-open «Каналы» and toggle Mahmoud Fathy.`,
@@ -1143,6 +1146,7 @@ async function onMovedToInProgressRegistration(
     conversationId: convId,
     channelId,
     ...buildInProgressFollowUpStatePatch(convId),
+    pendingInProgressMoveAt: undefined,
   });
 }
 
@@ -1605,6 +1609,19 @@ async function processCmConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
+  const outgoingTexts = collectCmOutgoingTexts(messages);
+  await maybeEnsureInProgressAfterRegLink(
+    deps,
+    currentState,
+    client,
+    conv,
+    convId,
+    runtime.channelId,
+    "CM",
+    outgoingTexts,
+    cmRegLinkSentInHistory,
+  );
+
   const lastIncoming = findLatestIncomingFromThread(sorted, conv, "CM");
   if (!lastIncoming) {
     return false;
@@ -1624,7 +1641,6 @@ async function processCmConversation(
     return false;
   }
 
-  const outgoingTexts = collectCmOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
   const tierChosenRecently = recentCustomerTexts.some((line) => isDepositTierChoice(line));
@@ -1647,17 +1663,6 @@ async function processCmConversation(
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
     operatorFolderEnabled: folderEnabled,
   });
-  await maybeEnsureInProgressAfterRegLink(
-    deps,
-    currentState,
-    client,
-    conv,
-    convId,
-    runtime.channelId,
-    "CM",
-    outgoingTexts,
-    cmRegLinkSentInHistory,
-  );
   const cmInProgressFollowUp =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
     isCustomerClarificationMessage(latestCustomerText);
@@ -1815,6 +1820,20 @@ async function processCmConversation(
       },
     );
     if (aiHandledEarly) {
+      const outAfterAi = collectCmOutgoingTexts(await client.listMessages(convId, 1, 80));
+      if (cmRegLinkSentInHistory(outAfterAi)) {
+        await maybeEnsureInProgressAfterRegLink(
+          deps,
+          currentState,
+          client,
+          conv,
+          convId,
+          runtime.channelId,
+          "CM",
+          outAfterAi,
+          cmRegLinkSentInHistory,
+        );
+      }
       return true;
     }
   }
@@ -1937,6 +1956,18 @@ async function processCmConversation(
             sendFailures: 0,
           });
           await sleep(500);
+          const outAfterLink = collectCmOutgoingTexts(await client.listMessages(convId, 1, 80));
+          await maybeEnsureInProgressAfterRegLink(
+            deps,
+            currentState,
+            client,
+            conv,
+            convId,
+            runtime.channelId,
+            "CM",
+            outAfterLink,
+            cmRegLinkSentInHistory,
+          );
         }
         continue;
       }
@@ -1970,13 +2001,33 @@ async function processCmConversation(
       sendFailures: 0,
     });
     await sleep(500);
+    if (scriptKey === "06_link" || scriptKey === "07_chrome") {
+      const outAfterLink = collectCmOutgoingTexts(await client.listMessages(convId, 1, 80));
+      if (cmRegLinkSentInHistory(outAfterLink)) {
+        await maybeEnsureInProgressAfterRegLink(
+          deps,
+          currentState,
+          client,
+          conv,
+          convId,
+          runtime.channelId,
+          "CM",
+          outAfterLink,
+          cmRegLinkSentInHistory,
+        );
+      }
+    }
     if (!allowMultiSend) {
       break;
     }
   }
 
   if (sentAny) {
-    const outAfterSend = collectCmOutgoingTexts(await client.listMessages(convId, 1, 80));
+    let outAfterSend = collectCmOutgoingTexts(await client.listMessages(convId, 1, 80));
+    if (cmStatusMoveAfterSend(sentScriptKeys) && !cmRegLinkSentInHistory(outAfterSend)) {
+      await sleep(400);
+      outAfterSend = collectCmOutgoingTexts(await client.listMessages(convId, 1, 80));
+    }
     if (cmStatusMoveAfterSend(sentScriptKeys) || cmRegLinkSentInHistory(outAfterSend)) {
       await maybeEnsureInProgressAfterRegLink(
         deps,
@@ -2050,6 +2101,19 @@ async function processClConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
+  const outgoingTexts = collectClOutgoingTexts(messages);
+  await maybeEnsureInProgressAfterRegLink(
+    deps,
+    currentState,
+    client,
+    conv,
+    convId,
+    runtime.channelId,
+    "CL",
+    outgoingTexts,
+    clRegLinkSentInHistory,
+  );
+
   const lastIncoming = findLatestIncomingFromThread(sorted, conv, "CM");
   if (!lastIncoming) {
     return false;
@@ -2067,7 +2131,6 @@ async function processClConversation(
     return false;
   }
 
-  const outgoingTexts = collectClOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
   const tierChosenRecently = recentCustomerTexts.some((line) => isClDepositTierChoice(line));
@@ -2088,17 +2151,6 @@ async function processClConversation(
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
     operatorFolderEnabled: folderEnabled,
   });
-  await maybeEnsureInProgressAfterRegLink(
-    deps,
-    currentState,
-    client,
-    conv,
-    convId,
-    runtime.channelId,
-    "CL",
-    outgoingTexts,
-    clRegLinkSentInHistory,
-  );
   const clInProgressFollowUp =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
     isCustomerClarificationMessage(latestCustomerText);
@@ -3450,28 +3502,171 @@ function findZmWaitingIdStatusId(state: ChatState): string | undefined {
   return undefined;
 }
 
+function scoreInProgressStatusFolderName(name: string): number {
+  const normalized = name.trim().toLowerCase();
+  if (/чекаю\s*id|waiting.*id|жду\s*айди|attente.*id/i.test(normalized)) {
+    return -1;
+  }
+  if (
+    /в процес[се]*\s*рег|процес.*рег|in registration process|en cours.*inscri|registration process/i.test(
+      normalized,
+    )
+  ) {
+    return 100;
+  }
+  if (/^в процес[се]*$|^in progress$|^en cours$/i.test(normalized)) {
+    return 90;
+  }
+  if (/в процес|у процес|процес|process|рега|реєстраці|не заверш|en cours/i.test(normalized)) {
+    return 50;
+  }
+  return 0;
+}
+
 function findFunnelFollowUpStatusId(state: ChatState): string | undefined {
-  const folders = listStatusFolders(state);
-  // Prefer exact «в процессе регистрации» over generic funnel folders.
-  for (const folder of folders) {
-    const name = folder.name.trim().toLowerCase();
-    if (/чекаю\s*id|waiting.*id|attente.*id/i.test(name)) {
+  let best: { id: string; score: number } | undefined;
+  for (const folder of listStatusFolders(state)) {
+    if (!folder.id || folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
       continue;
     }
-    if (isZmInProgressRegistrationStatusName(name)) {
-      return folder.id;
-    }
-  }
-  for (const folder of folders) {
-    const name = folder.name.trim().toLowerCase();
-    if (/чекаю\s*id|waiting.*id|attente.*id/i.test(name)) {
+    const score = scoreInProgressStatusFolderName(folder.name);
+    if (score <= 0) {
       continue;
     }
-    if (/в процес|процес|process|рега|реєстраці|не заверш|en cours/i.test(name)) {
-      return folder.id;
+    if (!best || score > best.score) {
+      best = { id: folder.id, score };
     }
   }
-  return undefined;
+  return best?.id;
+}
+
+async function schedulePendingInProgressMove(
+  deps: WorkerDeps,
+  chatId: number,
+  convId: string,
+  channelId: string,
+): Promise<void> {
+  await patchConversationState(deps.stateStore, chatId, convId, {
+    conversationId: convId,
+    channelId,
+    pendingInProgressMoveAt: new Date().toISOString(),
+  });
+}
+
+async function clearPendingInProgressMove(
+  deps: WorkerDeps,
+  chatId: number,
+  convId: string,
+  channelId: string,
+): Promise<void> {
+  await patchConversationState(deps.stateStore, chatId, convId, {
+    conversationId: convId,
+    channelId,
+    pendingInProgressMoveAt: undefined,
+  });
+}
+
+async function retryPendingInProgressMoves(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  enabledChannels: EnabledChannel[],
+): Promise<void> {
+  const entries = Object.entries(state.conversations ?? {});
+  if (!entries.length) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  for (const [convId, convState] of entries) {
+    if (convState.inProgressEnteredAt?.trim() || convState.pendingInProgressMoveAt?.trim()) {
+      continue;
+    }
+    if (convState.lastReplyRole !== "06_link" && convState.lastReplyRole !== "07_chrome") {
+      continue;
+    }
+    const lastReplyMs = Date.parse(convState.lastReplyAt ?? "");
+    if (!Number.isFinite(lastReplyMs) || nowMs - lastReplyMs > 7 * 24 * 60 * 60 * 1000) {
+      continue;
+    }
+    await schedulePendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+  }
+
+  const byChannel = new Map(enabledChannels.map((channel) => [channel.channelId, channel]));
+  let retried = 0;
+  let fixed = 0;
+
+  for (const [convId, convState] of entries) {
+    if (!convState.pendingInProgressMoveAt?.trim()) {
+      continue;
+    }
+    if (convState.inProgressEnteredAt?.trim()) {
+      await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+      continue;
+    }
+
+    const runtime = byChannel.get(convState.channelId);
+    if (!runtime) {
+      continue;
+    }
+    const country = runtime.runtime.country;
+    if (country !== "CM" && country !== "CL" && country !== "EG") {
+      continue;
+    }
+
+    retried += 1;
+    let conv: PagerConversation | undefined;
+    try {
+      conv = await client.openConversation(convId);
+    } catch {
+      continue;
+    }
+    if (!conv) {
+      continue;
+    }
+    if (isInProgressStatusConversation(conv)) {
+      await onMovedToInProgressRegistration(deps, state.chatId, convId, convState.channelId);
+      await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+      fixed += 1;
+      continue;
+    }
+
+    const messages = await client.listMessages(convId, 1, 80);
+    const outgoingTexts =
+      country === "CM"
+        ? collectCmOutgoingTexts(messages)
+        : country === "CL"
+          ? collectClOutgoingTexts(messages)
+          : collectEgOutgoingTexts(messages);
+    const regLinkSent =
+      country === "CM"
+        ? cmRegLinkSentInHistory
+        : country === "CL"
+          ? clRegLinkSentInHistory
+          : egRegLinkSentInHistory;
+    if (!regLinkSent(outgoingTexts)) {
+      await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+      continue;
+    }
+
+    const moved = await tryMoveConversationToInProgressRegistration(
+      deps,
+      state,
+      client,
+      conv,
+      convId,
+      convState.channelId,
+      country,
+    );
+    if (moved) {
+      fixed += 1;
+      await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+    }
+  }
+
+  if (retried) {
+    console.log(`Pager worker: pending in-progress retry checked=${retried} fixed=${fixed}`);
+  }
 }
 
 async function tryMoveConversationToInProgressRegistration(
@@ -3484,9 +3679,16 @@ async function tryMoveConversationToInProgressRegistration(
   countryLabel: string,
 ): Promise<boolean> {
   if (isInProgressStatusConversation(conv)) {
-    return false;
+    return true;
   }
-  const statusId = findFunnelFollowUpStatusId(state);
+
+  let workingState = state;
+  let statusId = findFunnelFollowUpStatusId(workingState);
+  if (!statusId) {
+    workingState = (await ensureStatusFolders(deps, workingState, client)) ?? workingState;
+    statusId = findFunnelFollowUpStatusId(workingState);
+  }
+
   const operatorId = await client.probeOperatorUserId();
   const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
   if (!statusId) {
@@ -3502,18 +3704,29 @@ async function tryMoveConversationToInProgressRegistration(
     return false;
   }
   if (currentStatusId === statusId) {
-    return false;
-  }
-  try {
-    await tryTakeConversationForProcessing(client, convId, countryLabel);
-    await client.patchConversationStatus(convId, statusId, operatorId);
-    console.log(`Pager worker: ${countryLabel} ${convId.slice(0, 8)} status -> in progress`);
     await onMovedToInProgressRegistration(deps, state.chatId, convId, channelId);
     return true;
-  } catch (error) {
-    console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
-    return false;
   }
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await tryTakeConversationForProcessing(client, convId, countryLabel);
+      await client.patchConversationStatus(convId, statusId, operatorId);
+      console.log(`Pager worker: ${countryLabel} ${convId.slice(0, 8)} status -> in progress`);
+      await onMovedToInProgressRegistration(deps, state.chatId, convId, channelId);
+      return true;
+    } catch (error) {
+      if (attempt >= 3) {
+        console.warn(
+          `Pager worker: status patch failed ${convId.slice(0, 8)} after ${attempt} attempts:`,
+          formatError(error),
+        );
+        return false;
+      }
+      await sleep(500 * attempt);
+    }
+  }
+  return false;
 }
 
 async function maybeEnsureInProgressAfterRegLink(
@@ -3527,10 +3740,15 @@ async function maybeEnsureInProgressAfterRegLink(
   outgoingTexts: string[],
   regLinkSent: (out: string[]) => boolean,
 ): Promise<boolean> {
-  if (!regLinkSent(outgoingTexts) || isInProgressStatusConversation(conv)) {
+  if (!regLinkSent(outgoingTexts)) {
     return false;
   }
-  return tryMoveConversationToInProgressRegistration(
+  if (isInProgressStatusConversation(conv)) {
+    await clearPendingInProgressMove(deps, state.chatId, convId, channelId);
+    return false;
+  }
+  await schedulePendingInProgressMove(deps, state.chatId, convId, channelId);
+  const moved = await tryMoveConversationToInProgressRegistration(
     deps,
     state,
     client,
@@ -3539,6 +3757,10 @@ async function maybeEnsureInProgressAfterRegLink(
     channelId,
     countryLabel,
   );
+  if (moved) {
+    await clearPendingInProgressMove(deps, state.chatId, convId, channelId);
+  }
+  return moved;
 }
 
 function findZmStatusId(state: ChatState, target: ZmStatusMoveTarget): string | undefined {

@@ -52,6 +52,8 @@ export type ConversationRuntimeState = {
   sendFailures?: number;
   /** Set when the bot moves the chat to «в процессе регистрации» (not legacy folder rows). */
   inProgressEnteredAt?: string;
+  /** Reg link went out but folder move failed — worker retries until cleared. */
+  pendingInProgressMoveAt?: string;
   inProgressFollowUpDueAt?: string;
   inProgressFollowUpVariant?: 0 | 1;
   inProgressFollowUpSentAt?: string;

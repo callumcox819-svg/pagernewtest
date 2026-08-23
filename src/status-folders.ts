@@ -84,7 +84,9 @@ export function isFunnelFollowUpFolderName(name: string): boolean {
   return (
     isZmInProgressRegistrationStatusName(normalized) ||
     isZmRegistrationCompleteStatusName(normalized) ||
-    /в процес|процес|process|рега|реєстраці|чекаю id|не заверш|en cours/i.test(normalized)
+    /в процес|у процес|процес|process|рега|реєстраці|чекаю id|не заверш|en cours|in progress/i.test(
+      normalized,
+    )
   );
 }
 
