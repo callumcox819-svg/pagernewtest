@@ -62,7 +62,7 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
   ZM: {
     intro: ["01_intro", "Hi! I want to show you"],
     details: ["02_how_it_works", "03_zmw_table", "How it works"],
-    registration: ["04_registration", "ZAM777", "05_link", "zambia777"],
+    registration: ["04_registration", "ZAM577", "05_link", "zam577"],
     deposit: ["06_deposit", "click \"Deposit\""],
     ask_id: ["07_game_id", "begins with 17"],
     no_money: ["No problem", "when you are ready"],

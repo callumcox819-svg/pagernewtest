@@ -2506,7 +2506,7 @@ async function processZmConversation(
     if (!replyText?.trim()) {
       if (scriptKey === "05_link") {
         const fallbackLink =
-          loadLocalZmScript("05_link")?.trim() || "https://tinyurl.com/zambia777";
+          loadLocalZmScript("05_link")?.trim() || "https://tinyurl.com/ZAM577";
         const sent = await client.sendMessageReliable(convId, fallbackLink, {
           channelId: runtime.channelId,
           conv,
