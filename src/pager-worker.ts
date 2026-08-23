@@ -211,6 +211,7 @@ import {
   countApiStatusFolders,
   isFunnelFollowUpFolderName,
   mergeStatusFolderList,
+  stripChannelNamesFromFolders,
   ALL_INBOX_FOLDER_ID,
   NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
@@ -839,6 +840,15 @@ async function buildWorkQueue(
       ) {
         continue;
       }
+      const folderIds = resolveChannelEnabledFolderIds(
+        enabledFolderIds,
+        runtime.runtime.country,
+        hasCmChannel,
+        hasEgChannel,
+      );
+      if (folderIds && folderIds.size > 0 && !conversationAllowedInFolders(conv, folderIds)) {
+        continue;
+      }
       if (!shouldQueueCatchUpConversation(conv)) {
         continue;
       }
@@ -908,14 +918,19 @@ async function buildWorkQueue(
           (isCm || isCl || isZm || isRw || isEg) &&
           isInProgressStatusConversation(conv)
         ) {
+          // Only when «в процессе» itself is enabled — never piggy-back on «Без статусу».
+          if (!inboxConversationEligible(conv, channelFolderIds)) {
+            continue;
+          }
           const followUpState = chatState.conversations?.[conv.id];
           if (followUpState && shouldSendInProgressFollowUp(followUpState)) {
             if (!selected.has(conv.id)) {
               selected.set(conv.id, conv);
               addedThisPage += 1;
             }
-            continue;
           }
+          // Never fall through to early-funnel processing for in-progress via inbox scan.
+          continue;
         }
 
         if (
@@ -1237,45 +1252,67 @@ async function processConversation(
     hasCmChannel,
     hasEgChannel,
   );
+
+  // List payloads often omit status — refresh before the folder gate.
+  let workingConv = conv;
+  try {
+    const opened = await client.openConversation(conv.id);
+    if (opened) {
+      workingConv = opened;
+    }
+  } catch {
+    // keep list snapshot
+  }
+
   if (
     channelFolderIds &&
     channelFolderIds.size > 0 &&
-    !conversationAllowedInFolders(conv, channelFolderIds)
+    !conversationAllowedInFolders(workingConv, channelFolderIds)
   ) {
     console.log(
-      `Pager worker: skip ${conv.id.slice(0, 8)} — outside enabled folders (status=${conv.status?.name || "none"})`,
+      `Pager worker: skip ${conv.id.slice(0, 8)} — outside enabled folders (status=${workingConv.status?.name || "none"})`,
     );
     return false;
   }
 
-  if (await trySendInProgressRegistrationFollowUp(deps, state, client, conv, runtime)) {
+  // Strict: «в процессе» only when that folder is explicitly enabled by the operator.
+  if (
+    isInProgressStatusConversation(workingConv) &&
+    channelFolderIds &&
+    channelFolderIds.size > 0 &&
+    !conversationAllowedInFolders(workingConv, channelFolderIds)
+  ) {
+    return false;
+  }
+
+  if (await trySendInProgressRegistrationFollowUp(deps, state, client, workingConv, runtime)) {
     return true;
   }
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
   const workerCountry = runtime.runtime.country;
   if (workerCountry === "RW") {
-    return processRwConversation(deps, state, client, conv, runtime, channel);
+    return processRwConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (workerCountry === "CL") {
-    return processClConversation(deps, state, client, conv, runtime, channel);
+    return processClConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (isClChannelName(runtime.channelName)) {
     console.warn(
       `Pager worker: ${runtime.channelName} is a Chile channel but country=${workerCountry} — routing CL`,
     );
-    return processClConversation(deps, state, client, conv, runtime, channel);
+    return processClConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (channel.country === "CM") {
-    return processCmConversation(deps, state, client, conv, runtime, channel);
+    return processCmConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (channel.country === "ZM") {
-    return processZmConversation(deps, state, client, conv, runtime, channel);
+    return processZmConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (channel.country === "EG") {
-    return processEgConversation(deps, state, client, conv, runtime, channel);
+    return processEgConversation(deps, state, client, workingConv, runtime, channel);
   }
-  return processGenericConversation(deps, state, client, conv, runtime, channel);
+  return processGenericConversation(deps, state, client, workingConv, runtime, channel);
   } finally {
     conversationsInFlight.delete(conv.id);
   }
@@ -1622,6 +1659,17 @@ async function processCmConversation(
     cmRegLinkSentInHistory,
   );
 
+  // Operator enabled «Без статусу» only → never script/AI chats already in «в процессе».
+  if (
+    !isNoStatusConversation(conv) &&
+    !isConversationInOperatorEnabledFolders(conv, currentState)
+  ) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} CM — folder not enabled (status=${conv.status?.name || "none"})`,
+    );
+    return false;
+  }
+
   const lastIncoming = findLatestIncomingFromThread(sorted, conv, "CM");
   if (!lastIncoming) {
     return false;
@@ -1793,6 +1841,18 @@ async function processCmConversation(
     scriptKeys = ["05_registration", "06_link"];
   }
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
+  // After reg link / in-progress: never re-send intro/age/steps/tier.
+  if (cmRegLinkSentInHistory(outgoingTexts) || isInProgressStatusConversation(conv)) {
+    const early = new Set([
+      "01_intro",
+      "01_intro_2",
+      "01_intro_3",
+      "02_age",
+      "03_steps",
+      "04_tier",
+    ]);
+    scriptKeys = scriptKeys.filter((key) => !early.has(key));
+  }
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
   scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support);
   const skipEarlySupportAi = supportAgentSkipsEarlyAi("CM", scriptKeys, support);
@@ -4964,9 +5024,12 @@ async function ensureStatusFolders(
   try {
     const session = await client.bootstrapSession();
     const statuses = await client.loadAllStatuses().catch(() => []);
-    const statusFolders = mergeStatusFolderList(
-      statuses,
-      state.operatorSettings?.statusFolders ?? state.statusFolders,
+    const statusFolders = stripChannelNamesFromFolders(
+      mergeStatusFolderList(
+        statuses,
+        state.operatorSettings?.statusFolders ?? state.statusFolders,
+      ),
+      state.pagerAccount?.liveChannels,
     );
     return deps.stateStore.patch(state.chatId, {
       statusFolders,

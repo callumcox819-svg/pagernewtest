@@ -1267,6 +1267,13 @@ async function showFoldersMenu(
     currentState.statusFolders ?? [],
     currentState.pagerAccount?.liveChannels,
   );
+  if (folders.length !== (currentState.statusFolders ?? []).length) {
+    currentState =
+      (await stateStore.patch(chatId, {
+        statusFolders: folders,
+        operatorSettings: buildOperatorSettings(currentState, { statusFolders: folders }),
+      })) ?? currentState;
+  }
   const enabled = folders.filter((folder) => folder.enabled).length;
   const apiFolderCount = folders.filter(
     (folder) => folder.id !== "" && folder.id !== "*",

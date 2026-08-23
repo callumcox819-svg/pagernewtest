@@ -2120,8 +2120,28 @@ function filterStatusesExcludingChannels(
     if (filter.names.has(item.name.trim().toLowerCase())) {
       return false;
     }
+    // Leaked messenger pages / agent names must not appear as status folders.
+    if (looksLikeLeakedChannelStatusName(item.name)) {
+      return false;
+    }
     return true;
   });
+}
+
+function looksLikeLeakedChannelStatusName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 60) {
+    return false;
+  }
+  const lower = trimmed.toLowerCase();
+  if (
+    /без статус|всі|все|в процес|процес|реєстрац|регистрац|заверш|чекаю|waiting|interested|complete|deposit|en cours|registration|process/i.test(
+      lower,
+    )
+  ) {
+    return false;
+  }
+  return /^[A-ZÀ-ÖØ-Þ][\p{L}'’.-]*(?:\s+[A-ZÀ-ÖØ-Þ][\p{L}'’.-]*){1,3}$/u.test(trimmed);
 }
 
 function isLikelyChannelRecord(record: Record<string, unknown>): boolean {

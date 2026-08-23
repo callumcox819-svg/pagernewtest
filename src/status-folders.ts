@@ -65,12 +65,14 @@ export function hasEnabledStatusFolders(state: {
 
 export function getEnabledFolderIds(state: {
   statusFolders?: StatusFolderState[];
+  operatorSettings?: { statusFolders?: StatusFolderState[] };
 }): Set<string> | null {
-  if (!state.statusFolders?.length) {
+  const folders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  if (!folders?.length) {
     return null;
   }
 
-  return new Set(state.statusFolders.filter((folder) => folder.enabled).map((folder) => folder.id));
+  return new Set(folders.filter((folder) => folder.enabled).map((folder) => folder.id));
 }
 
 export function isInProgressStatusConversation(conv: PagerConversation): boolean {
@@ -159,24 +161,12 @@ export function expandRwLearnFolderIds(
   return merged;
 }
 
+/** Operator folders are strict — never auto-add «в процессе» / mid-funnel folders. */
 export function expandEnabledFolderIds(
-  state: { statusFolders?: StatusFolderState[] },
+  _state: { statusFolders?: StatusFolderState[] },
   enabledFolderIds: Set<string> | null,
 ): Set<string> | null {
-  if (!enabledFolderIds) {
-    return null;
-  }
-  if (enabledFolderIds.has(ALL_INBOX_FOLDER_ID)) {
-    return enabledFolderIds;
-  }
-
-  const expanded = new Set(enabledFolderIds);
-  for (const folder of state.statusFolders ?? []) {
-    if (folder.id && isFunnelFollowUpFolderName(folder.name)) {
-      expanded.add(folder.id);
-    }
-  }
-  return expanded;
+  return enabledFolderIds;
 }
 
 export function countApiStatusFolders(folders?: StatusFolderState[]): number {
@@ -187,13 +177,13 @@ export function stripChannelNamesFromFolders(
   folders: StatusFolderState[],
   liveChannels?: Array<{ id: string; name: string }>,
 ): StatusFolderState[] {
-  if (!liveChannels?.length) {
-    return folders;
-  }
-
-  const channelIds = new Set(liveChannels.map((channel) => channel.id).filter(Boolean));
+  const channelIds = new Set(
+    (liveChannels ?? []).map((channel) => channel.id).filter(Boolean),
+  );
   const channelNames = new Set(
-    liveChannels.map((channel) => channel.name.trim().toLowerCase()).filter(Boolean),
+    (liveChannels ?? [])
+      .map((channel) => channel.name.trim().toLowerCase())
+      .filter(Boolean),
   );
 
   return folders.filter((folder) => {
@@ -203,8 +193,37 @@ export function stripChannelNamesFromFolders(
     if (channelIds.has(folder.id)) {
       return false;
     }
-    return !channelNames.has(folder.name.trim().toLowerCase());
+    const name = folder.name.trim().toLowerCase();
+    if (channelNames.has(name)) {
+      return false;
+    }
+    // Pager sometimes leaks messenger/page channels into the status list.
+    if (looksLikeLeakedChannelFolder(folder.name)) {
+      return false;
+    }
+    return true;
   });
+}
+
+/** Heuristic: person-name / page-style channel labels that are not real status folders. */
+export function looksLikeLeakedChannelFolder(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 60) {
+    return false;
+  }
+  const lower = trimmed.toLowerCase();
+  if (
+    /без статус|всі|все|в процес|процес|реєстрац|регистрац|заверш|чекаю|waiting|interested|complete|deposit|en cours|registration|process/i.test(
+      lower,
+    )
+  ) {
+    return false;
+  }
+  // "Brice Moukoko", "Mahmoud Fathy", "Mark Reyes" — two+ capitalized name tokens.
+  if (/^[A-ZÀ-ÖØ-Þ][\p{L}'’.-]*(?:\s+[A-ZÀ-ÖØ-Þ][\p{L}'’.-]*){1,3}$/u.test(trimmed)) {
+    return true;
+  }
+  return false;
 }
 
 export function mergeStatusFolderList(

@@ -26,7 +26,7 @@ const FR_INTERESTED =
 const FR_DECLINED =
   /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b|^non[.!]?$/i;
 const FR_REG_DONE =
-  /(déjà|deja).{0,32}(connect|inscription|inscrit|enregistr|1xbet)|je me suis deja connecte|je me suis inscrit|compte.{0,16}(ouvert|créé|cree)|j[' ]?ai (fini|créé|cree).{0,16}(inscription|compte)|c[' ]?est bon j[' ]?ai (créé|cree)|j[' ]?ai (créé|cree)\b/i;
+  /(déjà|deja).{0,32}(connect|inscription|inscrit|enregistr|1xbet)|je me suis deja connecte|je me suis inscrit|compte.{0,16}(ouvert|créé|cree)|j[' ]?ai (fini|créé|cree).{0,16}(inscription|compte)|c[' ]?est bon j[' ]?ai (créé|cree)|j[' ]?ai (créé|cree)\b|^j[' ]?ai déjà\.?$|^jai deja\.?$|^déjà\.?$|^deja\.?$/i;
 const FR_REG_PENDING =
   /\b(pas encore|pas fini|je m'inscris|j['']?inscris|en cours)\b/i;
 const POSITIVE_EMOJI = /[👍👌✅🔥❤️🙏😊🙂]/;
