@@ -205,6 +205,24 @@ export async function resolveScriptTextByKey(
       }
     }
   }
+  if (country === "RW") {
+    const rwLocalFirst = new Set([
+      "01_intro",
+      "02_how_it_works",
+      "03_deposit_table",
+      "04_registration",
+      "05_link",
+    ]);
+    if (rwLocalFirst.has(options.scriptKey)) {
+      const localRw = loadLocalRwScript(options.scriptKey);
+      if (localRw?.trim()) {
+        if (options.scriptKey === "04_registration") {
+          return stripRwRegistrationEmbeddedLink(localRw);
+        }
+        return localRw;
+      }
+    }
+  }
   const folderId =
     country === "RW"
       ? await resolveRwTemplateFolderId(client, options.folderId, options.liveBanks)
@@ -263,6 +281,9 @@ export async function resolveScriptTextByKey(
     if (country === "ZM" && options.scriptKey === "04_registration") {
       return stripZmRegistrationEmbeddedLink(local);
     }
+    if (country === "RW" && options.scriptKey === "04_registration") {
+      return stripRwRegistrationEmbeddedLink(local);
+    }
     return local;
   }
 
@@ -287,6 +308,10 @@ function stripZmRegistrationEmbeddedLink(text: string): string {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
+}
+
+function stripRwRegistrationEmbeddedLink(text: string): string {
+  return stripZmRegistrationEmbeddedLink(text);
 }
 
 export async function resolveTemplateText(

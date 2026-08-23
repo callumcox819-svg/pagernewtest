@@ -45,11 +45,11 @@ export const RW_BUILTIN_SCRIPTS: Record<RwScriptKey, string> = {
   "01_intro":
     "Hi! I want to show you how I work with casino platforms. I use analytical systems and artificial intelligence tools to identify the best moments to enter the game. This is not random gambling. It is a method based on data, statistics, discipline and strategy. The AI analyzes many game sessions and statistics to find better opportunities, while my experience helps to understand how the platform works. For me this is like a business: you enter at the right moment, follow the instructions, and exit at the right time. I only work with serious people who are ready to follow instructions and work responsibly. If you are interested, I can explain step by step how it works and how you can start.",
   "02_how_it_works":
-    "How it works:\n1. You create an account at the casino using my link and enter my promo code.\n2. You make the first deposit up from 1000 RWF\n3. I will send you clear instructions (screenshots and detailed explanations). Everything has been tested by my team - reliability guaranteed! ✅\n4. Your task is to follow the steps exactly, without personal initiative. You will play only the games that we have carefully tested and that bring profit. 💰",
+    "How it works:\n1) You create your own account at the casino using my link and enter my promo code.\n2) You make the first deposit up from 1000 RWF\n3) I will send you clear instructions (screenshots and detailed explanations). Everything has been tested by my team - reliability guaranteed! ✅\n4) Your task is to follow the steps exactly, without personal initiative. You will play only the games that we have carefully tested and that bring profit. 💰",
   "03_deposit_table":
-    "Here's what you can get with my help:\nThe first amount is your deposit.\nThe second amount is your profit.\n2000 RWF - 25000 RWF\n5000 RWF - 50000 RWF\n10000 RWF - 100000 RWF\n20000 RWF - 200000 RWF\nAre you ready to start today?",
+    "Here's what you can get with my help:\nThe first amount is your deposit.\nThe second amount is your profit.\n2000 RWF - 10000 RWF\n5000 RWF - 20000 RWF\n10000 RWF - 50000 RWF\n20000 RWF - 100000 RWF\nAre you ready to start today?",
   "04_registration":
-    "I will send you a special registration link.\nCopy it and paste it into your Google Chrome browser.\nTap on Registration\nWhen registering, select your country and currency.\nUse the promo code RND555\nAfter registration, text me here.\nHere is the link:",
+    "I will send you a special registration link.\nCopy it and paste it into your Google Chrome browser.\nTap on Registration\nYou can make registration by \"one click\" or e-mail\nWhen registering, select your country and currency.\nUse the promo code RND555\nAfter registration, text me here.\nHere is the link:",
   "05_link": "https://tinyurl.com/rund555",
 };
 
@@ -98,8 +98,15 @@ export function rwScriptSearchNeedles(key: string): string[] {
 
 const RW_GENERIC_NEEDLES: Record<RwScriptKey, string[]> = {
   "01_intro": ["analytical systems", "artificial intelligence", "hi! i want to show you"],
-  "02_how_it_works": ["how it works:", "1000 rwf", "first deposit up from", "1. you create"],
-  "03_deposit_table": ["2000 rwf - 25000 rwf", "ready to start today", "here's what you can get", "profit"],
+  "02_how_it_works": ["how it works:", "1000 rwf", "your own account", "first deposit up from"],
+  "03_deposit_table": [
+    "2000 rwf - 10000 rwf",
+    "5000 rwf - 20000 rwf",
+    "10000 rwf - 50000 rwf",
+    "20000 rwf - 100000 rwf",
+    "ready to start today",
+    "here's what you can get",
+  ],
   "04_registration": [
     "special registration link",
     "paste it into your google chrome",
@@ -180,6 +187,7 @@ export function rwRegistrationInstructionsSentInHistory(
   return (
     (blob.includes("special registration link") ||
       blob.includes("paste it into your google chrome") ||
+      blob.includes("one click") ||
       blob.includes("here is the link:")) &&
     blob.includes("rnd555")
   );
