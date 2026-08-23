@@ -1775,7 +1775,7 @@ async function processCmConversation(
     isDepositTierChoice(latestCustomerText) &&
     !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
   ) {
-    scriptKeys = ["05_registration", "06_link", "07_chrome"];
+    scriptKeys = ["05_registration", "06_link", "07_chrome", "07_mtn_tip"];
   }
   if (
     tierSentInHistory(outgoingTexts) &&
@@ -1785,7 +1785,7 @@ async function processCmConversation(
       customerAgreedAfterOfferTable(latestCustomerText)) &&
     !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
   ) {
-    scriptKeys = ["05_registration", "06_link", "07_chrome"];
+    scriptKeys = ["05_registration", "06_link", "07_chrome", "07_mtn_tip"];
   }
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
@@ -2178,7 +2178,7 @@ async function processClConversation(
     isClDepositTierChoice(latestCustomerText) &&
     !scriptKeys.some((key) => CL_REG_SEND_KEYS.has(key))
   ) {
-    scriptKeys = ["05_registration", "06_link", "07_chrome"];
+    scriptKeys = ["05_registration", "06_link", "07_chrome", "07_mtn_tip"];
   }
   scriptKeys = limitClScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   scriptKeys = filterDisabledScriptKeys(scriptKeys);

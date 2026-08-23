@@ -42,7 +42,7 @@ const REPLY_CACHE_TTL_MS = 90_000;
 
 const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>> = {
   CM: {
-    intro: ["01_intro", "Tu es du Cameroun", "Mon équipe cumule"],
+    intro: ["01_intro", "Tu es du Cameroun", "L'IA analyse", "Mon équipe cumule"],
     details: ["03_steps", "voici comment ça fonctionne", "02_age", "Quel âge"],
     registration: ["05_registration", "CASH056", "06_link", "CMR056"],
     deposit: ["09_deposit", "bouton vert"],

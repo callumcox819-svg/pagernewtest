@@ -24,13 +24,15 @@ import {
 
 export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "Tu es du Cameroun",
-  "01_intro_2": "Mon équipe cumule",
+  "01_intro_2": "L'IA analyse",
+  "01_intro_3": "Mon équipe cumule",
   "02_age": "Quel âge avez-vous",
   "03_steps": "voici comment ça fonctionne",
   "04_tier": "140 000 CFA",
   "05_registration": "CASH056",
   "06_link": "CMR056",
-  "07_chrome": "Google Chrome",
+  "07_chrome": "Copiez ce lien",
+  "07_mtn_tip": "ne s'ouvre pas sur MTN",
   "08_game_id": "commence par 17",
   "09_deposit": "bouton vert",
   "10_tg_invite": "canal Telegram privé",
@@ -38,15 +40,19 @@ export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
 };
 
 export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
-  "01_intro": ["tu es du cameroun", "bonjour !tu es du cameroun"],
+  "01_intro": ["tu es du cameroun", "bonjour ! tu es du cameroun", "bonjour !tu es du cameroun"],
   "01_intro_2": [
+    "l'ia analyse",
+    "l ia analyse",
+    "approche « insider »",
+    'approche "insider"',
+    "gagner ensemble",
+  ],
+  "01_intro_3": [
     "mon équipe cumule",
     "mon equipe cumule",
-    "business comme un autre",
-    "gagner ensemble",
-    "ans d'expérience",
-    "ans d'experience",
-    "expérience dans les paris",
+    "ans d'expérience sur le terrain",
+    "ans d'experience sur le terrain",
   ],
   "02_age": ["quel âge", "quel age", "age avez-vous", "age as-tu"],
   "03_steps": [
@@ -78,6 +84,7 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "05_registration": ["je vais vous envoyer", "lien d'inscription spécial", "code promotionnel", "cash056"],
   "06_link": ["cmr056", "tinyurl.com/cmr056"],
   "07_chrome": ["copiez ce lien", "navigateur google chrome"],
+  "07_mtn_tip": ["ne s'ouvre pas sur mtn", "essayez le wi-fi", "autre opérateur mobile"],
   "08_game_id": ["commence par 17", "numéro de joueur"],
   "09_deposit": ["bouton vert", "déposer", "deposer", "mtn", "orange"],
   "10_tg_invite": ["canal telegram privé", "canal telegram prive"],
@@ -94,10 +101,11 @@ export const CM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
 
 export const CM_FOLDER_NAME_HINTS = ["камерун", "cameroon", "cameroun", "cm"];
 
-export const CM_REG_SEND_KEYS = new Set(["05_registration", "06_link", "07_chrome"]);
-export const CM_INTRO_SEND_KEYS = new Set(["01_intro", "01_intro_2"]);
+export const CM_REG_SEND_KEYS = new Set(["05_registration", "06_link", "07_chrome", "07_mtn_tip"]);
+export const CM_INTRO_SEND_KEYS = new Set(["01_intro", "01_intro_2", "01_intro_3"]);
 
-const CM_REG_BUNDLE = ["05_registration", "06_link", "07_chrome"] as const;
+const CM_INTRO_BUNDLE = ["01_intro", "01_intro_2", "01_intro_3"] as const;
+const CM_REG_BUNDLE = ["05_registration", "06_link", "07_chrome", "07_mtn_tip"] as const;
 
 export function scriptSnippet(key: string): string {
   return CM_SCRIPT_SNIPPETS[key] ?? "";
@@ -109,6 +117,12 @@ export function scriptSearchNeedles(key: string): string[] {
 
 export function cmScriptSentInHistory(outgoingTexts: string[], scriptKey: string): boolean {
   if (scriptKey === "01_intro_2") {
+    const blob = outgoingTexts.join("\n").toLowerCase();
+    if (blob.includes("l'ia analyse") || blob.includes("l ia analyse")) {
+      return true;
+    }
+  }
+  if (scriptKey === "01_intro_3") {
     const blob = outgoingTexts.join("\n").toLowerCase();
     if (blob.includes("mon équipe") || blob.includes("mon equipe")) {
       return true;
@@ -204,6 +218,7 @@ export function cmRegistrationInstructionsSentInHistory(outgoingTexts: string[])
   }
   return (
     blob.includes("je vais vous envoyer") ||
+    blob.includes("je vais vous envoyer") ||
     blob.includes("je vous envoie le lien") ||
     blob.includes("je t'envoie le lien") ||
     blob.includes("lien d'inscription spécial") ||
@@ -218,6 +233,14 @@ export function cmRegistrationInstructionsSentInHistory(outgoingTexts: string[])
 const CM_REGISTRATION_LINK = "https://tinyurl.com/CMR056";
 
 /** Short Chrome reminder only — not the long 05_registration text (also mentions Chrome). */
+export function cmMtnTipSentInHistory(outgoingTexts: string[]): boolean {
+  if (cmScriptSentInHistory(outgoingTexts, "07_mtn_tip")) {
+    return true;
+  }
+  const blob = outgoingTexts.join("\n").toLowerCase();
+  return blob.includes("ne s'ouvre pas sur mtn") || blob.includes("ne s ouvre pas sur mtn");
+}
+
 export function cmChromeReminderSentInHistory(outgoingTexts: string[]): boolean {
   return outgoingTexts.some((line) => {
     const lower = line.toLowerCase().trim();
@@ -407,6 +430,9 @@ export function funnelStepFromScriptGaps(
   if (!cmScriptSentInHistory(outgoingTexts, "01_intro_2")) {
     return Math.min(step, 1);
   }
+  if (!cmScriptSentInHistory(outgoingTexts, "01_intro_3")) {
+    return Math.min(step, 1);
+  }
   if (!cmScriptSentInHistory(outgoingTexts, "02_age") && !ageQuestionSentInHistory(outgoingTexts)) {
     return Math.min(step, 1);
   }
@@ -478,6 +504,7 @@ export function resolveCmFunnelScripts(
 
   const introSent = cmScriptSentInHistory(out, "01_intro");
   const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
+  const intro3Sent = cmScriptSentInHistory(out, "01_intro_3");
   const ageSent = cmScriptSentInHistory(out, "02_age") || ageQuestionSentInHistory(out);
   const stepsSent = stepsSentInHistory(out);
   const tierSent = tierSentInHistory(out);
@@ -488,10 +515,13 @@ export function resolveCmFunnelScripts(
 
   if (notRegisteredYet) {
     if (!introSent) {
-      return ["01_intro", "01_intro_2"];
+      return [...CM_INTRO_BUNDLE];
     }
     if (!intro2Sent) {
-      return ["01_intro_2"];
+      return CM_INTRO_BUNDLE.filter((key) => key !== "01_intro");
+    }
+    if (!intro3Sent) {
+      return ["01_intro_3"];
     }
     if (!ageSent) {
       return ["02_age"];
@@ -525,10 +555,11 @@ export function resolveCmFunnelScripts(
     }
     if (effectiveStep < 3) {
       if (!introSent) {
-        return ["01_intro", "01_intro_2"];
+        return [...CM_INTRO_BUNDLE];
       }
-      if (!intro2Sent) {
-        return ["01_intro_2"];
+      const remainingIntro = CM_INTRO_BUNDLE.filter((key) => !cmScriptSentInHistory(out, key));
+      if (remainingIntro.length) {
+        return [...remainingIntro];
       }
       if (!ageSent) {
         return ["02_age"];
@@ -628,12 +659,13 @@ export function resolveCmFunnelScripts(
         signal ||
         t.length > 0
       ) {
-        return ["01_intro", "01_intro_2"];
+        return [...CM_INTRO_BUNDLE];
       }
       return [];
     }
-    if (introSent && !intro2Sent) {
-      return ["01_intro_2"];
+    const remainingIntro = CM_INTRO_BUNDLE.filter((key) => !cmScriptSentInHistory(out, key));
+    if (remainingIntro.length) {
+      return [...remainingIntro];
     }
     return [];
   }
@@ -806,10 +838,11 @@ export function resolveCmFunnelScripts(
     !introSent &&
     (t.length > 0 || signal || intent === "interested" || intent === "question")
   ) {
-    return ["01_intro", "01_intro_2"];
+    return [...CM_INTRO_BUNDLE];
   }
-  if (introSent && !intro2Sent) {
-    return ["01_intro_2"];
+  const remainingIntro = CM_INTRO_BUNDLE.filter((key) => !cmScriptSentInHistory(out, key));
+  if (remainingIntro.length) {
+    return [...remainingIntro];
   }
   if (introSent && !ageSent && (t.length > 0 || signal)) {
     return ["02_age"];
@@ -863,16 +896,17 @@ export function limitCmScriptsForCustomerTurn(
       outgoingTexts,
     ) : ["04_tier"];
   }
-  if (
-    scriptKeys.includes("01_intro") &&
-    !cmScriptSentInHistory(outgoingTexts, "01_intro")
-  ) {
-    return scriptKeys.filter((key) => key === "01_intro" || key === "01_intro_2");
+  if (scriptKeys.some((key) => CM_INTRO_SEND_KEYS.has(key))) {
+    const remaining = CM_INTRO_BUNDLE.filter((key) => !cmScriptSentInHistory(outgoingTexts, key));
+    if (remaining.length) {
+      return [...remaining];
+    }
   }
   if (scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))) {
     const instructionsSent = cmRegistrationInstructionsSentInHistory(outgoingTexts);
     const linkSent = regLinkSentInHistory(outgoingTexts);
     const chromeSent = cmChromeReminderSentInHistory(outgoingTexts);
+    const mtnTipSent = cmMtnTipSentInHistory(outgoingTexts);
 
     if (!instructionsSent) {
       return [...CM_REG_BUNDLE];
@@ -884,11 +918,14 @@ export function limitCmScriptsForCustomerTurn(
     if (!chromeSent) {
       remaining.push("07_chrome");
     }
+    if (!mtnTipSent) {
+      remaining.push("07_mtn_tip");
+    }
     if (remaining.length) {
       return remaining;
     }
     if (scriptKeys.includes("06_link")) {
-      return scriptKeys.filter((key) => key === "06_link" || key === "07_chrome");
+      return scriptKeys.filter((key) => CM_REG_SEND_KEYS.has(key));
     }
     return [];
   }
