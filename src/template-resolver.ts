@@ -61,7 +61,7 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
   },
   ZM: {
     intro: ["01_intro", "Hi! I want to show you"],
-    details: ["02_how_it_works", "How it works"],
+    details: ["02_how_it_works", "03_zmw_table", "How it works"],
     registration: ["04_registration", "ZAM777", "05_link", "zambia777"],
     deposit: ["06_deposit", "click \"Deposit\""],
     ask_id: ["07_game_id", "begins with 17"],
@@ -186,6 +186,25 @@ export async function resolveScriptTextByKey(
       return localLink.trim();
     }
   }
+  if (country === "ZM") {
+    const zmLocalFirst = new Set([
+      "01_intro",
+      "02_how_it_works",
+      "03_zmw_table",
+      "04_registration",
+      "05_link",
+      "06_deposit",
+    ]);
+    if (zmLocalFirst.has(options.scriptKey)) {
+      const localZm = loadLocalZmScript(options.scriptKey);
+      if (localZm?.trim()) {
+        if (options.scriptKey === "04_registration") {
+          return stripZmRegistrationEmbeddedLink(localZm);
+        }
+        return localZm;
+      }
+    }
+  }
   const folderId =
     country === "RW"
       ? await resolveRwTemplateFolderId(client, options.folderId, options.liveBanks)
@@ -241,6 +260,9 @@ export async function resolveScriptTextByKey(
     if (country === "CM" && options.scriptKey === "05_registration") {
       return stripCmRegistrationEmbeddedLink(local);
     }
+    if (country === "ZM" && options.scriptKey === "04_registration") {
+      return stripZmRegistrationEmbeddedLink(local);
+    }
     return local;
   }
 
@@ -253,6 +275,15 @@ function stripCmRegistrationEmbeddedLink(text: string): string {
     .replace(/\n?https?:\/\/\S+/gi, "")
     .replace(/\n?(?:www\.)?tinyurl\.com\/\S+/gi, "")
     .replace(/\n?camerun01\b/gi, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
+function stripZmRegistrationEmbeddedLink(text: string): string {
+  return text
+    .replace(/\n?https?:\/\/\S+/gi, "")
+    .replace(/\n?(?:www\.)?tinyurl\.com\/\S+/gi, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();

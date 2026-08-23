@@ -44,9 +44,11 @@ export const ZM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "02_how_it_works": ["how it works:", "minimum deposit", "only 30zmw", "based on analysis and ai"],
   "03_zmw_table": [
     "30 zmw - 200 zmw",
+    "50 zmw - 400 zmw",
+    "100 zmw - 800 zmw",
+    "200 zmw - 1500 zmw",
     "which one will you choose",
     "here's what you can get",
-    "30 zmw - 300 zmw",
   ],
   "04_registration": [
     "promo code zam777",
@@ -54,7 +56,7 @@ export const ZM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
     "paste it into your browser",
     "send me a screenshot so i can check",
   ],
-  "05_link": ["tinyurl.com/zambia777", "tinyurl.com/zam577"],
+  "05_link": ["tinyurl.com/zambia777"],
   "06_deposit": ['click "deposit"', "minimum deposit amount"],
   "07_game_id": ["begins with 17", "send me your game id", "game id"],
   "08_tg_invite": ["join our private telegram channel", "grow together with us", "new strategies every day"],
@@ -64,8 +66,8 @@ export const ZM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
 export const ZM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
   "04_registration": ["registration by e-mail", "make registration by e-mail", "by e-mail", "how it works:"],
   "05_link": ["promo code", "special registration", "how it works", "30 zmw"],
-  "02_how_it_works": ["promo code zam777", "tinyurl.com/zambia777", "promo code zam577", "tinyurl.com/zam577"],
-  "03_zmw_table": ["promo code zam777", "tinyurl.com/zambia777", "promo code zam577", "tinyurl.com/zam577"],
+  "02_how_it_works": ["promo code zam777", "tinyurl.com/zambia777"],
+  "03_zmw_table": ["promo code zam777", "tinyurl.com/zambia777"],
 };
 
 export const ZM_FOLDER_NAME_HINTS = ["замб", "zamb", "zambia"];
@@ -112,8 +114,7 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
   return (
-    blob.includes("tinyurl.com/zambia777") ||
-    blob.includes("tinyurl.com/zam577")
+    blob.includes("tinyurl.com/zambia777")
   );
 }
 
@@ -124,7 +125,7 @@ export function zmRegistrationInstructionsSentInHistory(outgoingTexts: string[])
       blob.includes("here is the link") ||
       blob.includes("paste it into your browser") ||
       blob.includes("paste it into your google chrome")) &&
-    (blob.includes("zam777") || blob.includes("zam577"))
+    (blob.includes("zam777"))
   );
 }
 
@@ -201,16 +202,14 @@ function stepForOutgoingText(text: string): number {
   }
   if (
     t.includes("tinyurl.com/zambia777") ||
-    t.includes("promo code zam777") ||
-    t.includes("tinyurl.com/zam577") ||
-    t.includes("promo code zam577")
+    t.includes("promo code zam777")
   ) {
     return 4;
   }
   if (
     t.includes("30 zmw - 200 zmw") ||
+    t.includes("50 zmw - 400 zmw") ||
     t.includes("which one will you choose") ||
-    t.includes("30 zmw - 300 zmw") ||
     t.includes("are you ready to start today")
   ) {
     return 3;
