@@ -187,7 +187,7 @@ export async function resolveScriptTextByKey(
     }
   }
   if (country === "CM") {
-    const cmIntroLocalFirst = new Set(["01_intro", "01_intro_2", "01_intro_3"]);
+    const cmIntroLocalFirst = new Set(["01_intro", "01_intro_3"]);
     if (cmIntroLocalFirst.has(options.scriptKey)) {
       const localIntro = loadLocalCmScript(options.scriptKey);
       if (localIntro?.trim()) {

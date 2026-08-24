@@ -53,7 +53,6 @@ const SUPPORT_FUNNEL: Record<CountryCode, FunnelHistorySignals> = {
     gameIdSent: cmGameIdSent,
     introScriptKeys: [
       "01_intro",
-      "01_intro_2",
       "01_intro_3",
       "02_age",
       "03_steps",

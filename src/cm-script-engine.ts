@@ -103,9 +103,9 @@ export const CM_FOLDER_NAME_HINTS = ["камерун", "cameroon", "cameroun", "
 
 /** Initial reg send: instructions + link only. Chrome/MTN tip are help-only, never after folder move. */
 export const CM_REG_SEND_KEYS = new Set(["05_registration", "06_link", "07_chrome", "07_mtn_tip"]);
-export const CM_INTRO_SEND_KEYS = new Set(["01_intro", "01_intro_2", "01_intro_3"]);
+export const CM_INTRO_SEND_KEYS = new Set(["01_intro", "01_intro_3"]);
 
-const CM_INTRO_BUNDLE = ["01_intro", "01_intro_2", "01_intro_3"] as const;
+const CM_INTRO_BUNDLE = ["01_intro", "01_intro_3"] as const;
 const CM_REG_BUNDLE = ["05_registration", "06_link"] as const;
 
 export function scriptSnippet(key: string): string {
@@ -428,9 +428,6 @@ export function funnelStepFromScriptGaps(
     return 0;
   }
   step = Math.max(step, 1);
-  if (!cmScriptSentInHistory(outgoingTexts, "01_intro_2")) {
-    return Math.min(step, 1);
-  }
   if (!cmScriptSentInHistory(outgoingTexts, "01_intro_3")) {
     return Math.min(step, 1);
   }
@@ -504,7 +501,6 @@ export function resolveCmFunnelScripts(
     isCustomerSaysNotRegisteredYet(t) || recentTextsIndicateNotRegistered(recentTexts);
 
   const introSent = cmScriptSentInHistory(out, "01_intro");
-  const intro2Sent = cmScriptSentInHistory(out, "01_intro_2");
   const intro3Sent = cmScriptSentInHistory(out, "01_intro_3");
   const ageSent = cmScriptSentInHistory(out, "02_age") || ageQuestionSentInHistory(out);
   const stepsSent = stepsSentInHistory(out);
@@ -517,9 +513,6 @@ export function resolveCmFunnelScripts(
   if (notRegisteredYet) {
     if (!introSent) {
       return [...CM_INTRO_BUNDLE];
-    }
-    if (!intro2Sent) {
-      return CM_INTRO_BUNDLE.filter((key) => key !== "01_intro");
     }
     if (!intro3Sent) {
       return ["01_intro_3"];
