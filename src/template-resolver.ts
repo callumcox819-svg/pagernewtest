@@ -186,6 +186,15 @@ export async function resolveScriptTextByKey(
       return localLink.trim();
     }
   }
+  if (country === "CM") {
+    const cmIntroLocalFirst = new Set(["01_intro", "01_intro_2", "01_intro_3"]);
+    if (cmIntroLocalFirst.has(options.scriptKey)) {
+      const localIntro = loadLocalCmScript(options.scriptKey);
+      if (localIntro?.trim()) {
+        return localIntro.trim();
+      }
+    }
+  }
   if (country === "ZM") {
     const zmLocalFirst = new Set([
       "01_intro",

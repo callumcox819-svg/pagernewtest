@@ -1958,7 +1958,14 @@ async function processCmConversation(
   let sentAny = false;
   const sentScriptKeys: string[] = [];
   const allowMultiSend = cmAllowsMultiSend(scriptKeys);
+  const coveredOutgoing = [...outgoingTexts];
   for (const scriptKey of scriptKeys) {
+    if (cmScriptSentInHistory(coveredOutgoing, scriptKey)) {
+      console.log(
+        `Pager worker: CM ${convId.slice(0, 8)} skip duplicate key=${scriptKey} (already in thread/batch)`,
+      );
+      continue;
+    }
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
       liveBanks: currentState.pagerAccount?.liveTemplateBanks,
@@ -1966,7 +1973,7 @@ async function processCmConversation(
       country: "CM",
     });
     if (!replyText?.trim()) {
-      if (scriptKey === "01_intro_2") {
+      if (scriptKey === "01_intro_2" || scriptKey === "01_intro_3") {
         console.warn(`CM script optional miss ${convId.slice(0, 8)}: ${scriptKey}`);
         continue;
       }
@@ -2039,7 +2046,16 @@ async function processCmConversation(
       continue;
     }
 
-    const sent = await client.sendMessageReliable(convId, replyText.trim(), {
+    const trimmedReply = replyText.trim();
+    if (cmOutgoingAlreadyContainsText(coveredOutgoing, trimmedReply)) {
+      console.log(
+        `Pager worker: CM ${convId.slice(0, 8)} skip duplicate text key=${scriptKey}`,
+      );
+      coveredOutgoing.push(trimmedReply);
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, trimmedReply, {
       channelId: runtime.channelId,
       conv,
     });
@@ -2053,6 +2069,7 @@ async function processCmConversation(
     }
     sentAny = true;
     sentScriptKeys.push(scriptKey);
+    coveredOutgoing.push(trimmedReply);
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,
@@ -4454,6 +4471,23 @@ function buildRuntimeChannelConfig(
     templateBank,
     statusMap: mapped?.statusMap ?? statusMapForCountry(config, country),
   };
+}
+
+/** True when this script body (or its opening) was already sent in the current batch/thread. */
+function cmOutgoingAlreadyContainsText(outgoingTexts: string[], text: string): boolean {
+  const body = text.trim().toLowerCase();
+  if (!body) {
+    return false;
+  }
+  const blob = outgoingTexts.join("\n").toLowerCase();
+  if (!blob) {
+    return false;
+  }
+  if (blob.includes(body)) {
+    return true;
+  }
+  const needle = body.slice(0, Math.min(90, body.length));
+  return needle.length >= 40 && blob.includes(needle);
 }
 
 function truncate(value: string, max = 40): string {
