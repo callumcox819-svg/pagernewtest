@@ -33,9 +33,16 @@ import {
 } from "./status-folders.js";
 import {
   buildInProgressFollowUpStatePatch,
+  classifyInProgressRegistrationReply,
+  hasManualOperatorReplyAfterInProgress,
   inProgressFollowUpAlreadySent,
   inProgressFollowUpMessage,
+  inProgressPlanAskAlreadySent,
+  inProgressPlanAskMessage,
+  isInProgressBotMuted,
   isInProgressFollowUpCountry,
+  latestIncomingCustomerText,
+  shouldHandleInProgressFollowUpCustomerReply,
   shouldSendInProgressFollowUp,
 } from "./in-progress-followup.js";
 import {
@@ -923,7 +930,14 @@ async function buildWorkQueue(
             continue;
           }
           const followUpState = chatState.conversations?.[conv.id];
-          if (followUpState && shouldSendInProgressFollowUp(followUpState)) {
+          if (!followUpState || isInProgressBotMuted(followUpState)) {
+            continue;
+          }
+          const dueFollowUp = shouldSendInProgressFollowUp(followUpState);
+          const needsCustomerReply =
+            shouldHandleInProgressFollowUpCustomerReply(followUpState) &&
+            (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection));
+          if (dueFollowUp || needsCustomerReply) {
             if (!selected.has(conv.id)) {
               selected.set(conv.id, conv);
               addedThisPage += 1;
@@ -1182,11 +1196,29 @@ async function trySendInProgressRegistrationFollowUp(
 
   const convId = conv.id;
   const convState = getConversationState(state, convId, runtime.channelId);
-  if (!shouldSendInProgressFollowUp(convState)) {
+  if (isInProgressBotMuted(convState)) {
     return false;
   }
 
-  const messages = await client.listMessages(convId, 1, 50);
+  const messages = await client.listMessages(convId, 1, 80);
+  const operatorId = await client.probeOperatorUserId();
+  const enteredAt = convState.inProgressEnteredAt?.trim();
+  if (
+    enteredAt &&
+    hasManualOperatorReplyAfterInProgress(messages, enteredAt, country, conv, operatorId || undefined)
+  ) {
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      inProgressMutedAt: new Date().toISOString(),
+      inProgressFollowUpSentAt: convState.inProgressFollowUpSentAt ?? new Date().toISOString(),
+    });
+    console.log(
+      `Pager worker: ${country} ${convId.slice(0, 8)} in-progress muted — operator already replied`,
+    );
+    return false;
+  }
+
   const outgoingTexts =
     country === "CM"
       ? collectCmOutgoingTexts(messages)
@@ -1197,6 +1229,32 @@ async function trySendInProgressRegistrationFollowUp(
           : country === "EG"
             ? collectEgOutgoingTexts(messages)
             : collectRwOutgoingTexts(messages);
+
+  if (inProgressPlanAskAlreadySent(country, outgoingTexts)) {
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      inProgressPlanAskSentAt: convState.inProgressPlanAskSentAt ?? new Date().toISOString(),
+      inProgressMutedAt: new Date().toISOString(),
+    });
+    return false;
+  }
+
+  if (shouldHandleInProgressFollowUpCustomerReply(convState)) {
+    return tryHandleInProgressFollowUpCustomerReply(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      messages,
+      outgoingTexts,
+    );
+  }
+
+  if (!shouldSendInProgressFollowUp(convState)) {
+    return false;
+  }
 
   if (inProgressFollowUpAlreadySent(country, outgoingTexts)) {
     await patchConversationState(deps.stateStore, state.chatId, convId, {
@@ -1228,6 +1286,79 @@ async function trySendInProgressRegistrationFollowUp(
     `Pager worker: ${country} ${convId.slice(0, 8)} in-progress follow-up sent (variant=${variant})`,
   );
   return true;
+}
+
+async function tryHandleInProgressFollowUpCustomerReply(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  messages: PagerMessage[],
+  outgoingTexts: string[],
+): Promise<boolean> {
+  const country = runtime.runtime.country;
+  if (!isInProgressFollowUpCountry(country)) {
+    return false;
+  }
+  const convId = conv.id;
+  const customerText = latestIncomingCustomerText(messages);
+  if (!customerText) {
+    return false;
+  }
+
+  // Only react when the latest message is from the customer (they answered the ping).
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const newest = sorted[0];
+  if (!newest || !isIncomingDirection(newest.messageDirection)) {
+    return false;
+  }
+
+  const kind = classifyInProgressRegistrationReply(country, customerText);
+  if (kind === "not_yet") {
+    if (inProgressPlanAskAlreadySent(country, outgoingTexts)) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        inProgressPlanAskSentAt: new Date().toISOString(),
+        inProgressMutedAt: new Date().toISOString(),
+      });
+      return false;
+    }
+    const text = inProgressPlanAskMessage(country);
+    await tryTakeConversationForProcessing(client, convId, country);
+    const sent = await client.sendMessageReliable(convId, text, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      return false;
+    }
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      inProgressPlanAskSentAt: new Date().toISOString(),
+      inProgressMutedAt: new Date().toISOString(),
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: "in_progress_plan_ask",
+      sendFailures: 0,
+    });
+    console.log(`Pager worker: ${country} ${convId.slice(0, 8)} in-progress plan-ask sent`);
+    return true;
+  }
+
+  // YES or other → mute, no more bot messages.
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    inProgressMutedAt: new Date().toISOString(),
+  });
+  console.log(
+    `Pager worker: ${country} ${convId.slice(0, 8)} in-progress muted after reply kind=${kind}`,
+  );
+  return false;
 }
 
 async function processConversation(
@@ -1287,6 +1418,16 @@ async function processConversation(
 
   if (await trySendInProgressRegistrationFollowUp(deps, state, client, workingConv, runtime)) {
     return true;
+  }
+
+  // In-progress muted / operator-owned — never run scripts or AI.
+  const mutedState = getConversationState(state, workingConv.id, runtime.channelId);
+  if (isInProgressStatusConversation(workingConv) && isInProgressBotMuted(mutedState)) {
+    return false;
+  }
+  if (isInProgressStatusConversation(workingConv)) {
+    // Stay in follow-up lane only — no early funnel / AI while folder is «в процессе».
+    return false;
   }
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);

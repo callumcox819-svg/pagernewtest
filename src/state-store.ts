@@ -57,6 +57,10 @@ export type ConversationRuntimeState = {
   inProgressFollowUpDueAt?: string;
   inProgressFollowUpVariant?: 0 | 1;
   inProgressFollowUpSentAt?: string;
+  /** After «already registered?» → customer said not yet → bot asked when they plan to register. */
+  inProgressPlanAskSentAt?: string;
+  /** Operator took over, or follow-up flow finished (yes / after plan ask / other) — bot stays silent. */
+  inProgressMutedAt?: string;
   /** Chile funnel reply language (es/en/fr). */
   clReplyLanguage?: "es" | "en" | "fr";
 };
