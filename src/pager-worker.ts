@@ -29,8 +29,14 @@ import {
 } from "./rw-learn.js";
 import {
   isInProgressStatusConversation,
+  isIgnoreStatusConversation,
+  findIgnoreStatusId,
   isConversationInOperatorEnabledFolders,
 } from "./status-folders.js";
+import {
+  isTrollDetectionCountry,
+  shouldIgnoreTrollCustomer,
+} from "./customer-troll.js";
 import {
   buildInProgressFollowUpStatePatch,
   classifyInProgressRegistrationReply,
@@ -202,6 +208,7 @@ import {
   clAllowsMultiSend,
   CL_REG_SEND_KEYS,
   tierSentInHistory as clTierSentInHistory,
+  depositSentInHistory as clDepositSentInHistory,
 } from "./cl-script-engine.js";
 import {
   isDepositTierChoice as isClDepositTierChoice,
@@ -1179,6 +1186,21 @@ async function onMovedToInProgressRegistration(
   });
 }
 
+async function onMovedToIgnore(
+  deps: WorkerDeps,
+  chatId: number,
+  convId: string,
+  channelId: string,
+): Promise<void> {
+  await patchConversationState(deps.stateStore, chatId, convId, {
+    conversationId: convId,
+    channelId,
+    ignoredAt: new Date().toISOString(),
+    inProgressFollowUpDueAt: undefined,
+    inProgressMutedAt: new Date().toISOString(),
+  });
+}
+
 async function trySendInProgressRegistrationFollowUp(
   deps: WorkerDeps,
   state: ChatState,
@@ -1403,6 +1425,19 @@ async function processConversation(
     console.log(
       `Pager worker: skip ${conv.id.slice(0, 8)} — outside enabled folders (status=${workingConv.status?.name || "none"})`,
     );
+    return false;
+  }
+
+  if (isIgnoreStatusConversation(workingConv)) {
+    console.log(
+      `Pager worker: skip ${conv.id.slice(0, 8)} — ignore folder (status=${workingConv.status?.name || "none"})`,
+    );
+    return false;
+  }
+
+  const convStateEarly = getConversationState(state, workingConv.id, runtime.channelId);
+  if (convStateEarly.ignoredAt) {
+    console.log(`Pager worker: skip ${conv.id.slice(0, 8)} — troll ignored`);
     return false;
   }
 
@@ -1832,6 +1867,27 @@ async function processCmConversation(
 
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+
+  if (
+    await tryHandleTrollCustomerToIgnore(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "CM",
+      latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      convState.funnelStep ?? 0,
+      Boolean(extractProofImageUrl(lastIncoming)),
+    )
+  ) {
+    return true;
+  }
+
   const tierChosenRecently = recentCustomerTexts.some((line) => isDepositTierChoice(line));
   const awaitingRegAfterTierChoice =
     tierSentInHistory(outgoingTexts) &&
@@ -2357,6 +2413,27 @@ async function processClConversation(
 
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+
+  if (
+    await tryHandleTrollCustomerToIgnore(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "CL",
+      latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      convState.funnelStep ?? 0,
+      Boolean(extractProofImageUrl(lastIncoming)),
+    )
+  ) {
+    return true;
+  }
+
   const tierChosenRecently = recentCustomerTexts.some((line) => isClDepositTierChoice(line));
   const awaitingRegAfterTierChoice =
     clTierSentInHistory(outgoingTexts) &&
@@ -3017,6 +3094,20 @@ async function tryRunAiAgentTurn(
   },
 ): Promise<boolean> {
   if (options.folderEnabled === false) {
+    return false;
+  }
+  if (
+    isTrollDetectionCountry(options.country) &&
+    shouldIgnoreTrollCustomer(
+      options.customerText,
+      options.recentCustomerTexts,
+      {
+        hasFunnelProgress: hasTrollFunnelProgress(options.country, options.outgoingTexts),
+        latestHasImage: false,
+      },
+      options.funnelStep,
+    )
+  ) {
     return false;
   }
   if (
@@ -3891,6 +3982,145 @@ async function retryPendingInProgressMoves(
   if (retried) {
     console.log(`Pager worker: pending in-progress retry checked=${retried} fixed=${fixed}`);
   }
+}
+
+async function tryMoveConversationToIgnore(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  convId: string,
+  channelId: string,
+  countryLabel: string,
+): Promise<boolean> {
+  if (isIgnoreStatusConversation(conv)) {
+    await onMovedToIgnore(deps, state.chatId, convId, channelId);
+    return true;
+  }
+
+  let workingState = state;
+  let statusId = findIgnoreStatusId(workingState);
+  if (!statusId) {
+    workingState = (await ensureStatusFolders(deps, workingState, client)) ?? workingState;
+    statusId = findIgnoreStatusId(workingState);
+  }
+
+  const operatorId = await client.probeOperatorUserId();
+  const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+  if (!statusId) {
+    console.warn(
+      `Pager worker: ${countryLabel} ${convId.slice(0, 8)} ignore move skipped — ИГНОР folder not found`,
+    );
+    return false;
+  }
+  if (!operatorId) {
+    console.warn(
+      `Pager worker: ${countryLabel} ${convId.slice(0, 8)} ignore move skipped — no operator user id`,
+    );
+    return false;
+  }
+  if (currentStatusId === statusId) {
+    await onMovedToIgnore(deps, state.chatId, convId, channelId);
+    return true;
+  }
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await tryTakeConversationForProcessing(client, convId, countryLabel);
+      await client.patchConversationStatus(convId, statusId, operatorId);
+      console.log(`Pager worker: ${countryLabel} ${convId.slice(0, 8)} status -> ignore`);
+      await onMovedToIgnore(deps, state.chatId, convId, channelId);
+      return true;
+    } catch (error) {
+      if (attempt >= 3) {
+        console.warn(
+          `Pager worker: ignore status patch failed ${convId.slice(0, 8)} after ${attempt} attempts:`,
+          formatError(error),
+        );
+        return false;
+      }
+      await sleep(500 * attempt);
+    }
+  }
+  return false;
+}
+
+function hasTrollFunnelProgress(country: string, outgoingTexts: string[]): boolean {
+  if (country === "CL") {
+    return (
+      clTierSentInHistory(outgoingTexts) ||
+      clRegLinkSentInHistory(outgoingTexts) ||
+      clDepositSentInHistory(outgoingTexts)
+    );
+  }
+  if (country === "CM") {
+    return (
+      tierSentInHistory(outgoingTexts) ||
+      cmRegLinkSentInHistory(outgoingTexts) ||
+      cmDepositSentInHistory(outgoingTexts)
+    );
+  }
+  return false;
+}
+
+async function tryHandleTrollCustomerToIgnore(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  convState: ConversationRuntimeState,
+  convId: string,
+  country: import("./customer-troll.js").TrollDetectionCountry,
+  latestCustomerText: string,
+  recentCustomerTexts: string[],
+  outgoingTexts: string[],
+  funnelStep: number,
+  latestHasImage: boolean,
+): Promise<boolean> {
+  if (!isTrollDetectionCountry(country)) {
+    return false;
+  }
+  if (convState.ignoredAt || isIgnoreStatusConversation(conv)) {
+    return true;
+  }
+  if (
+    !shouldIgnoreTrollCustomer(
+      latestCustomerText,
+      recentCustomerTexts,
+      {
+        hasFunnelProgress: hasTrollFunnelProgress(country, outgoingTexts),
+        latestHasImage,
+      },
+      funnelStep,
+    )
+  ) {
+    return false;
+  }
+
+  console.log(
+    `Pager worker: ${country} ${convId.slice(0, 8)} troll detected — moving to ignore (text=${truncate(latestCustomerText)})`,
+  );
+
+  const moved = await tryMoveConversationToIgnore(
+    deps,
+    state,
+    client,
+    conv,
+    convId,
+    runtime.channelId,
+    country,
+  );
+  if (!moved) {
+    return false;
+  }
+
+  try {
+    await client.acknowledgeConversation(convId);
+  } catch {
+    // non-fatal
+  }
+  return true;
 }
 
 async function tryMoveConversationToInProgressRegistration(

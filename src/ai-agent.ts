@@ -7,7 +7,13 @@ import {
 } from "./ai-support-phase.js";
 import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion, isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
 import { isDepositTierChoice, isCmRegistrationHelpRequest, wantsRegistrationLink as cmWantsRegistrationLink } from "./cm-intent.js";
-import { tierSentInHistory as cmTierSentInHistory } from "./cm-script-engine.js";
+import { tierSentInHistory as cmTierSentInHistory, regLinkSentInHistory as cmRegLinkSentInHistory, depositSentInHistory as cmDepositSentInHistory } from "./cm-script-engine.js";
+import {
+  tierSentInHistory as clTierSentInHistory,
+  regLinkSentInHistory as clRegLinkSentInHistory,
+  depositSentInHistory as clDepositSentInHistory,
+} from "./cl-script-engine.js";
+import { isTrollDetectionCountry, shouldIgnoreTrollCustomer } from "./customer-troll.js";
 import { explainScriptsSentInHistory as zmExplainScriptsSentInHistory } from "./zm-script-engine.js";
 import { isZmDepositAmountChoice } from "./zm-intent.js";
 import {
@@ -27,6 +33,24 @@ import {
 export type AiAgentContext = AiAssistContext;
 
 export { detectImageMimeType, maybeAiAssistVision, type AiVisionContext };
+
+function funnelProgressForTrollGate(country: string, outgoing: string[]): boolean {
+  if (country === "CL") {
+    return (
+      clTierSentInHistory(outgoing) ||
+      clRegLinkSentInHistory(outgoing) ||
+      clDepositSentInHistory(outgoing)
+    );
+  }
+  if (country === "CM") {
+    return (
+      cmTierSentInHistory(outgoing) ||
+      cmRegLinkSentInHistory(outgoing) ||
+      cmDepositSentInHistory(outgoing)
+    );
+  }
+  return false;
+}
 
 /** Pre-support: customer asked for link/instructions — funnel scripts must run, not AI. */
 function customerWantsPreSupportRegistration(country: CountryCode, text: string): boolean {
@@ -119,6 +143,23 @@ export function customerWantsSupportAgentReply(text: string, intent: string): bo
 export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
   if (ctx.agentTrigger) {
     return false;
+  }
+  if (isTrollDetectionCountry(ctx.country)) {
+    const text = ctx.customerText.trim();
+    if (
+      text &&
+      shouldIgnoreTrollCustomer(
+        text,
+        ctx.recentCustomerTexts ?? [],
+        {
+          hasFunnelProgress: funnelProgressForTrollGate(ctx.country, ctx.recentOutgoingTexts ?? []),
+          latestHasImage: false,
+        },
+        ctx.funnelStep ?? 0,
+      )
+    ) {
+      return false;
+    }
   }
   if (ctx.forceSupportAgent) {
     return customerWantsSupportAgentReply(ctx.customerText.trim(), ctx.intent);

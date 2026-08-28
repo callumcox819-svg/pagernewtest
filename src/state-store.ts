@@ -61,6 +61,8 @@ export type ConversationRuntimeState = {
   inProgressPlanAskSentAt?: string;
   /** Operator took over, or follow-up flow finished (yes / after plan ask / other) — bot stays silent. */
   inProgressMutedAt?: string;
+  /** Moved to «ИГНОР» — no scripts, no AI. */
+  ignoredAt?: string;
   /** Chile funnel reply language (es/en/fr). */
   clReplyLanguage?: "es" | "en" | "fr";
 };

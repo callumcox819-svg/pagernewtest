@@ -133,6 +133,31 @@ export function isRwCompletedConversation(conv: PagerConversation): boolean {
   return name.length > 0 && isRwCompletedStatusName(name);
 }
 
+export function isIgnoreStatusName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return /^игнор$|^ignore$|игнорир|не\s*серьез|not\s*serious|troll|spam/i.test(normalized);
+}
+
+export function isIgnoreStatusConversation(conv: PagerConversation): boolean {
+  const name = (conv.status?.name || "").trim();
+  return name.length > 0 && isIgnoreStatusName(name);
+}
+
+export function findIgnoreStatusId(state: {
+  statusFolders?: StatusFolderState[];
+  operatorSettings?: { statusFolders?: StatusFolderState[] };
+}): string | undefined {
+  for (const folder of state.operatorSettings?.statusFolders ?? state.statusFolders ?? []) {
+    if (!folder.id || folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
+      continue;
+    }
+    if (isIgnoreStatusName(folder.name)) {
+      return folder.id;
+    }
+  }
+  return undefined;
+}
+
 export function findCompletedFolderIds(folders: StatusFolderState[]): string[] {
   return folders
     .filter(
