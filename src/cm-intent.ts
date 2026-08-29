@@ -18,7 +18,7 @@ export type CmIntent =
   | "image_only";
 
 const FR_POSITIVE =
-  /\b(oui|ok|okay|d'accord|dac|dacc|bien|super|parfait|merci|yes|yeah|yep)\b/i;
+  /\b(oui|ok|okay|okey|d'accord|dac|dacc|bien|super|parfait|merci|yes|yeah|yep)\b/i;
 const FR_GREETING =
   /^(bonjour|bonsoir|salut|saluu+t|bjr|slt|hello|hi)([\s,!.]|$)/i;
 const FR_INTERESTED =
@@ -519,7 +519,7 @@ export function isFunnelPositiveReaction(text: string, funnelStep: number): bool
   if (POSITIVE_EMOJI.test(t)) {
     return true;
   }
-  if (/^(oui|ok|yes|d'accord)\.?$/i.test(t)) {
+  if (/^(oui|ok|okay|okey|yes|d'accord)\.?$/i.test(t)) {
     return true;
   }
   if (/\boui\b/i.test(t) && t.split(/\s+/).length <= 12) {
@@ -547,7 +547,7 @@ export function isReadyForRegistration(text: string): boolean {
   if (isProfitFigure(t)) {
     return true;
   }
-  if (/^(oui|ok|yes|d'accord)\.?$/i.test(t)) {
+  if (/^(oui|ok|okay|okey|yes|d'accord)\.?$/i.test(t)) {
     return true;
   }
   if (FR_POSITIVE.test(t) && t.split(/\s+/).length <= 4) {

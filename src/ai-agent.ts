@@ -69,7 +69,7 @@ function customerWantsPreSupportRegistration(country: CountryCode, text: string)
 
 /** Short «continue funnel» replies — scripts handle these, not the agent (pre-support only). */
 const FUNNEL_ACK =
-  /^(ok|okay|yes|oui|d'accord|نعم|اه|آه|تمام|طيب|حاضر|mashi|mashy|👍|👌|✅|🔥)[.!\s]*$/iu;
+  /^(ok|okay|okey|yes|oui|d'accord|نعم|اه|آه|تمام|طيب|حاضر|mashi|mashy|👍|👌|✅|🔥)[.!\s]*$/iu;
 
 /** Complex thread: agent helps; mechanical steps stay on scripts. */
 export function isComplexCustomerMessage(text: string): boolean {

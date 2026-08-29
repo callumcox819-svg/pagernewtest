@@ -53,6 +53,9 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
     "mon equipe cumule",
     "ans d'expérience sur le terrain",
     "ans d'experience sur le terrain",
+    "pour moi, c'est un business",
+    "personnes sérieuses",
+    "gagner ensemble",
   ],
   "02_age": ["quel âge", "quel age", "age avez-vous", "age as-tu"],
   "03_steps": [
@@ -125,9 +128,13 @@ export function cmScriptSentInHistory(outgoingTexts: string[], scriptKey: string
   }
   if (scriptKey === "01_intro_3") {
     const blob = outgoingTexts.join("\n").toLowerCase();
-    if (blob.includes("mon équipe") || blob.includes("mon equipe")) {
+    if (blob.includes("gagner ensemble")) {
       return true;
     }
+    if (blob.includes("mon équipe") || blob.includes("mon equipe")) {
+      return blob.includes("pour moi, c'est un business") || blob.includes("personnes sérieuses");
+    }
+    return false;
   }
   if (scriptKey === "04_tier") {
     return tierSentInHistory(outgoingTexts);

@@ -713,7 +713,7 @@ export function cmFunnelNeedsContinuation(
   const ready =
     isClientReadyPhrase(text) ||
     isCmReadyForRegistration(text) ||
-    /^(oui|ok|okay|yes|d'accord)\b/i.test(text) ||
+    /^(oui|ok|okay|okey|yes|d'accord)\b/i.test(text) ||
     /intéresse|interes|investir|je veux/i.test(text);
 
   if (!introSent) {

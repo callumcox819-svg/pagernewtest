@@ -50,11 +50,11 @@ export function customerAgreedAfterOfferTable(text: string): boolean {
   if (!t || /\b(not interested|no thanks|stop|scam|leave me alone)\b/i.test(t)) {
     return false;
   }
-  if (/^(yes|yeah|yep|ok|okay|sure|alright|oui|d'accord|si|sí|listo|vale)[\s,!.]*$/i.test(t)) {
+  if (/^(yes|yeah|yep|ok|okay|okey|sure|alright|oui|d'accord|si|sí|listo|vale)[\s,!.]*$/i.test(t)) {
     return true;
   }
   return (
-    /\b(yes|yeah|yep|ok|okay|sure|oui|d'accord|si|sí|listo|vale)\b/i.test(t) &&
+    /\b(yes|yeah|yep|ok|okay|okey|sure|oui|d'accord|si|sí|listo|vale)\b/i.test(t) &&
     /\b(start|begin|ready|kwacha|zmw|deposit|register|instruction|instructions|link|lien|help|aide|inscri)\b/i.test(
       t,
     )
