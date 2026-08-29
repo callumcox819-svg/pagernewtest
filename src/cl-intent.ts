@@ -538,9 +538,19 @@ export function wantsRegistrationLink(text: string): boolean {
   if (/\b(envoi|envoyer|envoyez|donne|donner|donnez).{0,24}\b(lien|link|numero|numéro)\b/i.test(normalized)) {
     return true;
   }
+  if (
+    /\b(j'?attends?|en attente|attente|waiting for|wait for).{0,35}\b(lien|link|inscri)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  if (/\b(lien|link)\b.{0,35}\b(j'?attends?|attente|waiting)\b/i.test(normalized)) {
+    return true;
+  }
   return (
     /\b(lien|link|inscri|register|compte|account)\b/i.test(t) &&
-    /\b(envoi|envoy|donn|send|veux|besoin|where|faut|donne|donner)\b/i.test(t)
+    /\b(envoi|envoy|donn|send|veux|besoin|where|faut|donne|donner|attends?|attente)\b/i.test(t)
   );
 }
 

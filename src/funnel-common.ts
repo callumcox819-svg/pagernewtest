@@ -34,6 +34,13 @@ export function customerRequestsRegistrationMaterials(text: string): boolean {
   if (/\b(aide|help).{0,40}\b(lien|link|inscri|instruction|étape|etape|register)\b/i.test(t)) {
     return true;
   }
+  if (
+    /\b(j'?attends?|en attente|attente|waiting for|wait for).{0,35}\b(lien|link|inscri|register)\b/i.test(
+      t.toLowerCase().replace(/['’]/g, "'"),
+    )
+  ) {
+    return true;
+  }
   return false;
 }
 
