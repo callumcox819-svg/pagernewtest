@@ -43,6 +43,7 @@ import {
   classifyInProgressRegistrationReply,
   hasCustomerIncomingAfter,
   hasManualOperatorReplyAfterInProgress,
+  resolveRecentInProgressEnteredAtMs,
   inProgressFollowUpAlreadySent,
   inProgressFollowUpMessage,
   isInProgressFollowUpAttemptCoolingDown,
@@ -1198,11 +1199,12 @@ async function onMovedToInProgressRegistration(
   chatId: number,
   convId: string,
   channelId: string,
+  enteredAtMs?: number,
 ): Promise<void> {
   await patchConversationState(deps.stateStore, chatId, convId, {
     conversationId: convId,
     channelId,
-    ...buildInProgressFollowUpStatePatch(convId),
+    ...buildInProgressFollowUpStatePatch(convId, enteredAtMs ?? Date.now()),
     pendingInProgressMoveAt: undefined,
   });
 }
@@ -1250,9 +1252,27 @@ async function trySendInProgressRegistrationFollowUp(
   if (isInProgressBotMuted(convState)) {
     return false;
   }
-  if (!convState.inProgressEnteredAt?.trim()) {
+  if (isInProgressFollowUpAttemptCoolingDown(convState)) {
     return false;
   }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  const operatorId = await client.probeOperatorUserId();
+
+  if (!convState.inProgressEnteredAt?.trim()) {
+    const enteredMs = resolveRecentInProgressEnteredAtMs(convState, messages);
+    if (enteredMs === null) {
+      return false;
+    }
+    const schedulePatch = buildInProgressFollowUpStatePatch(convId, enteredMs);
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      ...schedulePatch,
+    });
+    convState = { ...convState, ...schedulePatch };
+  }
+
   if (isInProgressFollowUpExpired(convState)) {
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
@@ -1261,16 +1281,10 @@ async function trySendInProgressRegistrationFollowUp(
     });
     return false;
   }
-  if (isInProgressFollowUpAttemptCoolingDown(convState)) {
-    return false;
-  }
-
-  const messages = await client.listMessages(convId, 1, 80);
-  const operatorId = await client.probeOperatorUserId();
 
   const enteredAt = convState.inProgressEnteredAt?.trim();
   const enteredMs = enteredAt ? Date.parse(enteredAt) : Number.NaN;
-  if (Number.isFinite(enteredMs) && hasCustomerIncomingAfter(messages, enteredMs)) {
+  if (Number.isFinite(enteredMs) && hasCustomerIncomingAfter(messages, enteredMs, country)) {
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,
@@ -4282,6 +4296,17 @@ async function maybeEnsureInProgressAfterRegLink(
   }
   if (isInProgressStatusConversation(conv)) {
     await clearPendingInProgressMove(deps, state.chatId, convId, channelId);
+    const convState = getConversationState(state, convId, channelId);
+    if (!convState.inProgressEnteredAt?.trim()) {
+      const lastReplyMs = Date.parse(convState.lastReplyAt ?? "");
+      await onMovedToInProgressRegistration(
+        deps,
+        state.chatId,
+        convId,
+        channelId,
+        Number.isFinite(lastReplyMs) ? lastReplyMs : undefined,
+      );
+    }
     return false;
   }
   await schedulePendingInProgressMove(deps, state.chatId, convId, channelId);

@@ -186,24 +186,44 @@ export function shouldSendInProgressFollowUp(
 }
 
 /** Queue in-progress chats only when the bot scheduled a recent follow-up. */
+const REG_LINK_ENTRY_ROLES = new Set([
+  "05_registration",
+  "06_link",
+  "07_chrome",
+  "05_link",
+  "registration",
+  "link",
+]);
+
+/** Queue in-progress chats only when the bot scheduled a recent follow-up. */
 export function shouldQueueInProgressFollowUp(
   convState: ConversationRuntimeState | undefined,
   nowMs = Date.now(),
 ): boolean {
-  if (!convState?.inProgressEnteredAt?.trim()) {
-    return false;
-  }
-  if (isInProgressBotMuted(convState)) {
+  if (!convState || isInProgressBotMuted(convState)) {
     return false;
   }
   if (convState.inProgressFollowUpSentAt?.trim()) {
     return false;
   }
+
+  if (!convState.inProgressEnteredAt?.trim()) {
+    const lastReplyMs = Date.parse(convState.lastReplyAt ?? "");
+    if (
+      !Number.isFinite(lastReplyMs) ||
+      !REG_LINK_ENTRY_ROLES.has(convState.lastReplyRole ?? "") ||
+      nowMs - lastReplyMs > IN_PROGRESS_FOLLOWUP_MAX_AGE_MS
+    ) {
+      return false;
+    }
+    return nowMs - lastReplyMs >= IN_PROGRESS_FOLLOWUP_MIN_MS;
+  }
+
   if (isInProgressFollowUpExpired(convState, nowMs)) {
     return false;
   }
   if (!convState.inProgressFollowUpDueAt?.trim()) {
-    return false;
+    return true;
   }
   return shouldSendInProgressFollowUp(convState, nowMs);
 }
@@ -233,10 +253,10 @@ export function isInProgressFollowUpAttemptCoolingDown(
   return nowMs - attemptMs < IN_PROGRESS_FOLLOWUP_ATTEMPT_COOLDOWN_MS;
 }
 
-/** Customer wrote after entering «в процессе» — skip the silence follow-up. */
 export function hasCustomerIncomingAfter(
   messages: PagerMessage[],
   afterMs: number,
+  country?: InProgressFollowUpCountry,
 ): boolean {
   for (const message of messages) {
     if (!isIncomingDirection(message.messageDirection)) {
@@ -246,12 +266,93 @@ export function hasCustomerIncomingAfter(
     if (!text) {
       continue;
     }
+    if (country && isWeakInProgressSilenceReply(country, text)) {
+      continue;
+    }
     const ts = Date.parse(parseMessageTimestamp(message.createdAt));
     if (Number.isFinite(ts) && ts > afterMs) {
       return true;
     }
   }
   return false;
+}
+
+/** «D'accord» / «ok» after the link — not an answer to «already registered?». */
+export function isWeakInProgressSilenceReply(
+  country: InProgressFollowUpCountry,
+  text: string,
+): boolean {
+  const trimmed = (text || "").trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (/^(👍|👌|✅|🙏|🤝|🔥)[\s!]*$/u.test(trimmed)) {
+    return true;
+  }
+  if (country === "EG") {
+    return /^(تمام|طيب|حاضر|اوك|أوك|ماشي|ماشى|نعم)[.!\s]*$/u.test(trimmed);
+  }
+  if (country === "CM" || country === "CL") {
+    return /^(ok|okay|okey|oui|d'accord|d accord|dac|dacc|bien|super|parfait|merci|thanks|thank you|salut|bonjour|bonsoir|yes|yeah|yep|si|sí|vale|listo|hum+|hm+|mhm+)[.!\s]*$/i.test(
+      trimmed,
+    );
+  }
+  return /^(ok|okay|okey|yes|yeah|yep|sure|alright|thanks|thank you|hum+|hm+|mhm+)[.!\s]*$/i.test(
+    trimmed,
+  );
+}
+
+function isRecentRegLinkOutgoingText(text: string): boolean {
+  const trimmed = (text || "").trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    /tinyurl\.com|voici le lien|here(?:'|')?s the link|registration link|lien\s*:/i.test(trimmed) ||
+    (trimmed.includes("http") && /registr|inscri|lien|link|compte|account/i.test(trimmed))
+  );
+}
+
+/** Start follow-up clock only for a recent bot reg-link send — never legacy threads. */
+export function resolveRecentInProgressEnteredAtMs(
+  convState: ConversationRuntimeState,
+  messages: PagerMessage[],
+  nowMs = Date.now(),
+): number | null {
+  if (convState.inProgressEnteredAt?.trim()) {
+    const enteredMs = Date.parse(convState.inProgressEnteredAt);
+    if (Number.isFinite(enteredMs)) {
+      return enteredMs;
+    }
+  }
+
+  const lastReplyMs = Date.parse(convState.lastReplyAt ?? "");
+  if (
+    Number.isFinite(lastReplyMs) &&
+    REG_LINK_ENTRY_ROLES.has(convState.lastReplyRole ?? "") &&
+    nowMs - lastReplyMs <= IN_PROGRESS_FOLLOWUP_MAX_AGE_MS
+  ) {
+    return lastReplyMs;
+  }
+
+  let newestLinkMs: number | null = null;
+  for (const message of messages) {
+    if (!isOutgoingDirection(message.messageDirection) && !message.isDelivered && !message.facebookMessageId) {
+      continue;
+    }
+    const ts = Date.parse(parseMessageTimestamp(message.createdAt));
+    if (!Number.isFinite(ts) || nowMs - ts > IN_PROGRESS_FOLLOWUP_MAX_AGE_MS) {
+      continue;
+    }
+    const text = (message.text || "").trim();
+    if (!isRecentRegLinkOutgoingText(text)) {
+      continue;
+    }
+    if (!newestLinkMs || ts > newestLinkMs) {
+      newestLinkMs = ts;
+    }
+  }
+  return newestLinkMs;
 }
 
 /** Customer answered the «already registered?» ping — may need «when do you plan?» or mute. */
