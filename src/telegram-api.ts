@@ -512,6 +512,60 @@ export function buildFoldersKeyboard(
     }),
   ]);
   rows.push([inlineBtn("Обновить папки", "folders:refresh", { emojiId: PREMIUM_EMOJI.refresh })]);
+  rows.push([
+    inlineBtn("Папки AI", "folders:ai", {
+      emojiId: PREMIUM_EMOJI.robot,
+      style: "primary",
+    }),
+  ]);
+  rows.push([inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })]);
+
+  return { inline_keyboard: rows };
+}
+
+export function buildAiFoldersKeyboard(
+  folders: Array<{ name: string; enabled: boolean; aiEnabled?: boolean }>,
+  page = 0,
+): ReplyMarkup {
+  const totalPages = Math.max(1, Math.ceil(folders.length / FOLDERS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * FOLDERS_PAGE_SIZE;
+  const slice = folders.slice(start, start + FOLDERS_PAGE_SIZE);
+
+  const rows = slice.map((folder, offset) => {
+    const aiOn = folder.aiEnabled ?? folder.enabled;
+    return [
+      inlineBtn(truncateLabel(folder.name, 28), `ai_folder_toggle:${start + offset}`, {
+        emojiId: aiOn ? PREMIUM_EMOJI.robot : PREMIUM_EMOJI.cross,
+        style: aiOn ? "primary" : undefined,
+      }),
+    ];
+  });
+
+  if (totalPages > 1) {
+    const nav: InlineKeyboardButton[] = [];
+    if (safePage > 0) {
+      nav.push(inlineBtn("◀", `ai_folders:page:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }));
+    }
+    nav.push(inlineBtn(`${safePage + 1}/${totalPages}`, "ai_folders:noop", { emojiId: PREMIUM_EMOJI.chart }));
+    if (safePage < totalPages - 1) {
+      nav.push(inlineBtn("▶", `ai_folders:page:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }));
+    }
+    rows.push(nav);
+  }
+
+  const allAiOn = folders.length > 0 && folders.every((folder) => folder.aiEnabled ?? folder.enabled);
+  rows.push([
+    inlineBtn(allAiOn ? "AI везде" : "AI во все", "ai_folders:all_on", {
+      emojiId: PREMIUM_EMOJI.robot,
+      style: "primary",
+    }),
+    inlineBtn("AI выкл.", "ai_folders:all_off", {
+      emojiId: PREMIUM_EMOJI.cross,
+      style: "danger",
+    }),
+  ]);
+  rows.push([inlineBtn("Папки бота", "folders:back", { emojiId: PREMIUM_EMOJI.back })]);
   rows.push([inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })]);
 
   return { inline_keyboard: rows };

@@ -19,10 +19,13 @@ import { createStateStore, type ChannelRuntimeState, type ChatState, type StateS
 import { createAppMetaStore, type AppMetaStore } from "./app-meta-store.js";
 import {
   countApiStatusFolders,
+  isAiFolderEnabled,
   mergeStatusFolderList,
   setAllStatusFolders,
+  setAllAiStatusFolders,
   stripChannelNamesFromFolders,
   toggleStatusFolder,
+  toggleAiStatusFolder,
   hasEnabledStatusFolders,
 } from "./status-folders.js";
 import {
@@ -36,6 +39,7 @@ import {
   buildChannelKeyboard,
   buildCountryKeyboard,
   buildFoldersKeyboard,
+  buildAiFoldersKeyboard,
   buildFoldersRetryKeyboard,
   FOLDERS_PAGE_SIZE,
   buildMainMenuKeyboard,
@@ -516,6 +520,61 @@ async function handleCallback(
       await showFoldersMenu(chatId, nextState, messageId);
       return;
     }
+
+    if (value === "ai") {
+      await showAiFoldersMenu(chatId, state, messageId);
+      return;
+    }
+
+    if (value === "back") {
+      await showFoldersMenu(chatId, state, messageId);
+      return;
+    }
+    return;
+  }
+
+  if (kind === "ai_folders") {
+    await telegram.answerCallbackQuery(callbackId);
+
+    if (value === "page" && extra) {
+      await showAiFoldersMenu(chatId, state, messageId, Number(extra));
+      return;
+    }
+
+    if (value === "noop") {
+      return;
+    }
+
+    if (value === "all_on" || value === "all_off") {
+      const baseFolders = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+      const folders = setAllAiStatusFolders(baseFolders, value === "all_on");
+      const nextState =
+        (await stateStore.patch(chatId, {
+          statusFolders: folders,
+          operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
+        })) ?? state;
+      await showAiFoldersMenu(chatId, nextState, messageId);
+      return;
+    }
+    return;
+  }
+
+  if (kind === "ai_folder_toggle" && value) {
+    const index = Number(value);
+    const baseFolders = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+    const folders = toggleAiStatusFolder(baseFolders, index);
+    const folder = folders[index];
+    const nextState =
+      (await stateStore.patch(chatId, {
+        statusFolders: folders,
+        operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
+      })) ?? state;
+    const page = Math.floor(index / FOLDERS_PAGE_SIZE);
+    await telegram.answerCallbackQuery(
+      callbackId,
+      folder ? `AI: ${isAiFolderEnabled(folder) ? "вкл" : "выкл"} — ${folder.name}` : "Готово",
+    );
+    await showAiFoldersMenu(chatId, nextState, messageId, page);
     return;
   }
 
@@ -1326,8 +1385,44 @@ async function showFoldersMenu(
     "«Без статусу» — только новые чаты без статуса.",
     "«Всі» — все чаты. Можно включить любую одну папку.",
     "Каналы включаются отдельно в меню «Каналы».",
+    "AI — отдельно в кнопке «Папки AI».",
   ].join("\n");
   const keyboard = buildFoldersKeyboard(folders, page);
+
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function showAiFoldersMenu(
+  chatId: number,
+  state: ChatState,
+  messageId?: number,
+  page = 0,
+) {
+  const folders = stripChannelNamesFromFolders(
+    state.operatorSettings?.statusFolders ?? state.statusFolders ?? [],
+    state.pagerAccount?.liveChannels,
+  );
+  if (!folders.length) {
+    await telegram.sendMessage(chatId, "Сначала загрузи папки в меню «Папки».", buildFoldersRetryKeyboard());
+    return;
+  }
+
+  const aiOn = folders.filter((folder) => isAiFolderEnabled(folder)).length;
+  const text = [
+    "Папки AI — где бот может отвечать через AI:",
+    "🤖 включено | ⬜ выключено",
+    "",
+    `AI включён в ${aiOn} из ${folders.length} папок`,
+    "Скрипты работают по настройкам в меню «Папки».",
+    "Если папку не трогали — AI повторяет настройку бота для неё.",
+    "Пример: скрипты в «Без статусу», AI только в «В процесі реєстрації».",
+  ].join("\n");
+  const keyboard = buildAiFoldersKeyboard(folders, page);
 
   if (!messageId) {
     await telegram.sendMessage(chatId, text, keyboard);

@@ -6,7 +6,10 @@ export const ALL_INBOX_FOLDER_ID = "*";
 export type StatusFolderState = {
   id: string;
   name: string;
+  /** Bot scripts / funnel processing. */
   enabled: boolean;
+  /** AI agent replies. When unset, follows `enabled`. */
+  aiEnabled?: boolean;
 };
 
 export function isNoStatusConversation(conv: PagerConversation): boolean {
@@ -73,6 +76,36 @@ export function getEnabledFolderIds(state: {
   }
 
   return new Set(folders.filter((folder) => folder.enabled).map((folder) => folder.id));
+}
+
+export function isAiFolderEnabled(folder: StatusFolderState): boolean {
+  return folder.aiEnabled ?? folder.enabled;
+}
+
+export function getAiEnabledFolderIds(state: {
+  statusFolders?: StatusFolderState[];
+  operatorSettings?: { statusFolders?: StatusFolderState[] };
+}): Set<string> | null {
+  const folders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  if (!folders?.length) {
+    return null;
+  }
+
+  return new Set(folders.filter((folder) => isAiFolderEnabled(folder)).map((folder) => folder.id));
+}
+
+export function isConversationInAiEnabledFolders(
+  conv: PagerConversation,
+  state: {
+    statusFolders?: StatusFolderState[];
+    operatorSettings?: { statusFolders?: StatusFolderState[] };
+  },
+): boolean {
+  const enabled = getAiEnabledFolderIds(state);
+  if (!enabled || enabled.size === 0) {
+    return false;
+  }
+  return conversationAllowedInFolders(conv, enabled);
 }
 
 export function isInProgressStatusConversation(conv: PagerConversation): boolean {
@@ -268,27 +301,33 @@ export function buildStatusFolderList(
   apiStatuses: Array<{ id: string; name: string }>,
   existing?: StatusFolderState[],
 ): StatusFolderState[] {
-  const preserved = new Map((existing ?? []).map((folder) => [folder.id, folder.enabled]));
+  const preserved = new Map(
+    (existing ?? []).map((folder) => [folder.id, { enabled: folder.enabled, aiEnabled: folder.aiEnabled }]),
+  );
   const hasExisting = Boolean(existing?.length);
 
   const folders: StatusFolderState[] = [
     {
       id: NO_STATUS_FOLDER_ID,
       name: "Без статусу",
-      enabled: preserved.get(NO_STATUS_FOLDER_ID) ?? false,
+      enabled: preserved.get(NO_STATUS_FOLDER_ID)?.enabled ?? false,
+      aiEnabled: preserved.get(NO_STATUS_FOLDER_ID)?.aiEnabled,
     },
     {
       id: ALL_INBOX_FOLDER_ID,
       name: "Всі",
-      enabled: preserved.get(ALL_INBOX_FOLDER_ID) ?? !hasExisting,
+      enabled: preserved.get(ALL_INBOX_FOLDER_ID)?.enabled ?? !hasExisting,
+      aiEnabled: preserved.get(ALL_INBOX_FOLDER_ID)?.aiEnabled,
     },
   ];
 
   for (const status of apiStatuses) {
+    const saved = preserved.get(status.id);
     folders.push({
       id: status.id,
       name: status.name,
-      enabled: preserved.get(status.id) ?? false,
+      enabled: saved?.enabled ?? false,
+      aiEnabled: saved?.aiEnabled,
     });
   }
 
@@ -313,4 +352,25 @@ export function toggleStatusFolder(
   }
   next[index] = { ...folder, enabled: !folder.enabled };
   return next;
+}
+
+export function toggleAiStatusFolder(
+  folders: StatusFolderState[],
+  index: number,
+): StatusFolderState[] {
+  const next = [...folders];
+  const folder = next[index];
+  if (!folder) {
+    return folders;
+  }
+  const current = isAiFolderEnabled(folder);
+  next[index] = { ...folder, aiEnabled: !current };
+  return next;
+}
+
+export function setAllAiStatusFolders(
+  folders: StatusFolderState[],
+  aiEnabled: boolean,
+): StatusFolderState[] {
+  return folders.map((folder) => ({ ...folder, aiEnabled }));
 }

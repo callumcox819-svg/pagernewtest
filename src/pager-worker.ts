@@ -32,6 +32,7 @@ import {
   isIgnoreStatusConversation,
   findIgnoreStatusId,
   isConversationInOperatorEnabledFolders,
+  isConversationInAiEnabledFolders,
 } from "./status-folders.js";
 import {
   isTrollDetectionCountry,
@@ -249,6 +250,16 @@ type WorkerDeps = {
 const MAX_SEND_FAILURES = 5;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 500;
 const INBOX_TOP = 40;
+
+function resolveConversationFolderGates(
+  conv: PagerConversation,
+  state: ChatState,
+): { botFolderEnabled: boolean; aiFolderEnabled: boolean } {
+  return {
+    botFolderEnabled: isConversationInOperatorEnabledFolders(conv, state),
+    aiFolderEnabled: isConversationInAiEnabledFolders(conv, state),
+  };
+}
 /** Soft fill after unread sweep — read/in-progress follow-ups. */
 const INBOX_TOP_CM_FOLLOWUP = 40;
 /** Hard cap for unread/incoming so large backlogs still enter the queue. */
@@ -1550,9 +1561,9 @@ async function processRwFunnelConversation(
     !rwScriptSentInHistory(outgoingTexts, "01_intro", drafts) &&
     Boolean(latestCustomerText);
 
-  const folderEnabled = isConversationInOperatorEnabledFolders(conv, state);
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(conv, state);
   const support = buildSupportSnapshot(RW_AI_COUNTRY, isInProgressStatusConversation(conv), outgoingTexts, {
-    operatorFolderEnabled: folderEnabled,
+    operatorFolderEnabled: aiFolderEnabled,
   });
   const rwInProgressBypass =
     inProgressFollowUpEligible(support, latestCustomerText, false) ||
@@ -1753,7 +1764,7 @@ async function processRwFunnelConversation(
         intent,
         scriptKeys,
         support,
-        folderEnabled,
+        aiFolderEnabled,
       },
     );
     if (aiHandledEarly) {
@@ -1903,10 +1914,13 @@ async function processCmConversation(
 
   const operatorUserId = operatorUserIdEarly;
 
-  const folderEnabled = isConversationInOperatorEnabledFolders(conv, currentState);
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    currentState,
+  );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
-    operatorFolderEnabled: folderEnabled,
+    operatorFolderEnabled: aiFolderEnabled,
   });
   const cmInProgressFollowUp =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
@@ -2073,7 +2087,7 @@ async function processCmConversation(
         intent,
         scriptKeys,
         support,
-        folderEnabled,
+        aiFolderEnabled,
       },
     );
     if (aiHandledEarly) {
@@ -2447,10 +2461,13 @@ async function processClConversation(
     !clScriptSentInHistory(outgoingTexts, "01_intro") &&
     Boolean(latestCustomerText);
 
-  const folderEnabled = isConversationInOperatorEnabledFolders(conv, currentState);
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    currentState,
+  );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
-    operatorFolderEnabled: folderEnabled,
+    operatorFolderEnabled: aiFolderEnabled,
   });
   const clInProgressFollowUp =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
@@ -2698,10 +2715,13 @@ async function processZmConversation(
     Boolean(latestCustomerText);
 
   const operatorUserId = operatorUserIdEarly;
-  const folderEnabled = isConversationInOperatorEnabledFolders(conv, currentState);
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    currentState,
+  );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("ZM", isInProgressStatusConversation(conv), outgoingTexts, {
-    operatorFolderEnabled: folderEnabled,
+    operatorFolderEnabled: aiFolderEnabled,
   });
   const zmInProgressBypass =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
@@ -3017,7 +3037,7 @@ async function processZmConversation(
         intent,
         scriptKeys,
         support,
-        folderEnabled,
+        aiFolderEnabled,
       },
     );
     if (aiHandledEarly) {
@@ -3091,9 +3111,10 @@ async function tryRunAiAgentTurn(
     forceSupportAgent?: boolean;
     agentTrigger?: import("./ai-assist.js").AiAgentTrigger;
     folderEnabled?: boolean;
+    aiFolderEnabled?: boolean;
   },
 ): Promise<boolean> {
-  if (options.folderEnabled === false) {
+  if (options.aiFolderEnabled === false || options.folderEnabled === false) {
     return false;
   }
   if (
@@ -3285,10 +3306,13 @@ async function processEgConversation(
     isFreshCustomerMessage(lastIncoming.createdAt);
 
   const operatorUserId = operatorUserIdEarly;
-  const folderEnabled = isConversationInOperatorEnabledFolders(conv, currentState);
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    currentState,
+  );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("EG", isInProgressStatusConversation(conv), outgoingTexts, {
-    operatorFolderEnabled: folderEnabled,
+    operatorFolderEnabled: aiFolderEnabled,
   });
   const egInProgressBypass =
     inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
@@ -3413,7 +3437,7 @@ async function processEgConversation(
         intent,
         scriptKeys,
         support,
-        folderEnabled,
+        aiFolderEnabled,
       },
     );
     if (aiHandledEarly) {
@@ -5217,11 +5241,11 @@ async function tryHandleCustomerImage(
     isInProgressStatusConversation(ctx.conv),
     ctx.outgoingTexts,
     {
-      operatorFolderEnabled: isConversationInOperatorEnabledFolders(ctx.conv, ctx.state),
+      operatorFolderEnabled: isConversationInAiEnabledFolders(ctx.conv, ctx.state),
     },
   );
 
-  if (ctx.channel.country === "CM" && deps.env.AI_ENABLED && image.length > 0 && cmRegLinkSentInHistory(ctx.outgoingTexts)) {
+  if (ctx.channel.country === "CM" && deps.env.AI_ENABLED && image.length > 0 && cmRegLinkSentInHistory(ctx.outgoingTexts) && isConversationInAiEnabledFolders(ctx.conv, ctx.state)) {
     const extract = await maybeAiVisionExtractCmProof(deps.env, {
       imageBase64: image.toString("base64"),
       mimeType: detectImageMimeType(image),
@@ -5241,7 +5265,7 @@ async function tryHandleCustomerImage(
     }
   }
 
-  if (deps.env.AI_ENABLED && image.length > 0) {
+  if (deps.env.AI_ENABLED && image.length > 0 && isConversationInAiEnabledFolders(ctx.conv, ctx.state)) {
     const sorted = ctx.sortedMessages ?? [];
     const botAlreadyAnswered =
       sorted.length > 0 &&
