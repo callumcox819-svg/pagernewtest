@@ -43,15 +43,15 @@ import {
   classifyInProgressRegistrationReply,
   hasCustomerIncomingAfter,
   hasManualOperatorReplyAfterInProgress,
-  inferInProgressEnteredAtMs,
   inProgressFollowUpAlreadySent,
   inProgressFollowUpMessage,
+  isInProgressFollowUpAttemptCoolingDown,
+  isInProgressFollowUpExpired,
   inProgressPlanAskAlreadySent,
   inProgressPlanAskMessage,
   isInProgressBotMuted,
   isInProgressFollowUpCountry,
   latestIncomingCustomerText,
-  pickInProgressFollowUpVariant,
   shouldHandleInProgressFollowUpCustomerReply,
   shouldQueueInProgressFollowUp,
   shouldSendInProgressFollowUp,
@@ -229,7 +229,9 @@ import { customerAgreedAfterOfferTable } from "./funnel-common.js";
 import {
   buildStatusFoldersFromPager,
   countApiStatusFolders,
+  isClosedRegistrationStatusConversation,
   isFunnelFollowUpFolderName,
+  isInProgressFollowUpFolderEnabled,
   ALL_INBOX_FOLDER_ID,
   NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
@@ -946,6 +948,10 @@ async function buildWorkQueue(
           (isCm || isCl || isZm || isRw || isEg) &&
           isInProgressStatusConversation(conv)
         ) {
+          const statusFolders = chatState.operatorSettings?.statusFolders ?? chatState.statusFolders;
+          if (!isInProgressFollowUpFolderEnabled(conv, statusFolders)) {
+            continue;
+          }
           // Only when «в процессе» itself is enabled — never piggy-back on «Без статусу».
           if (!inboxConversationEligible(conv, channelFolderIds)) {
             continue;
@@ -1230,42 +1236,37 @@ async function trySendInProgressRegistrationFollowUp(
   if (!isInProgressStatusConversation(conv)) {
     return false;
   }
+  if (isClosedRegistrationStatusConversation(conv)) {
+    return false;
+  }
+
+  const statusFolders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  if (!isInProgressFollowUpFolderEnabled(conv, statusFolders)) {
+    return false;
+  }
 
   const convId = conv.id;
   let convState = getConversationState(state, convId, runtime.channelId);
   if (isInProgressBotMuted(convState)) {
     return false;
   }
+  if (!convState.inProgressEnteredAt?.trim()) {
+    return false;
+  }
+  if (isInProgressFollowUpExpired(convState)) {
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      inProgressMutedAt: new Date().toISOString(),
+    });
+    return false;
+  }
+  if (isInProgressFollowUpAttemptCoolingDown(convState)) {
+    return false;
+  }
 
   const messages = await client.listMessages(convId, 1, 80);
   const operatorId = await client.probeOperatorUserId();
-
-  if (!convState.inProgressEnteredAt?.trim()) {
-    const enteredMs = inferInProgressEnteredAtMs(convState, messages);
-    if (enteredMs === null) {
-      return false;
-    }
-    const schedulePatch = buildInProgressFollowUpStatePatch(convId, enteredMs);
-    await patchConversationState(deps.stateStore, state.chatId, convId, {
-      conversationId: convId,
-      channelId: runtime.channelId,
-      ...schedulePatch,
-    });
-    convState = { ...convState, ...schedulePatch };
-  } else if (!convState.inProgressFollowUpDueAt?.trim()) {
-    const enteredMs = Date.parse(convState.inProgressEnteredAt);
-    const schedulePatch = {
-      inProgressFollowUpDueAt: buildInProgressFollowUpStatePatch(convId, enteredMs).inProgressFollowUpDueAt,
-      inProgressFollowUpVariant:
-        convState.inProgressFollowUpVariant ?? pickInProgressFollowUpVariant(convId),
-    };
-    await patchConversationState(deps.stateStore, state.chatId, convId, {
-      conversationId: convId,
-      channelId: runtime.channelId,
-      ...schedulePatch,
-    });
-    convState = { ...convState, ...schedulePatch };
-  }
 
   const enteredAt = convState.inProgressEnteredAt?.trim();
   const enteredMs = enteredAt ? Date.parse(enteredAt) : Number.NaN;
@@ -1343,6 +1344,11 @@ async function trySendInProgressRegistrationFollowUp(
 
   const variant = convState.inProgressFollowUpVariant ?? 0;
   const text = inProgressFollowUpMessage(country, variant);
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    inProgressFollowUpLastAttemptAt: new Date().toISOString(),
+  });
   await tryTakeConversationForProcessing(client, convId, country);
   const sent = await client.sendMessageReliable(convId, text, {
     channelId: runtime.channelId,
@@ -1497,7 +1503,15 @@ async function processConversation(
     return false;
   }
 
-  // Strict: «в процессе» only when that folder is explicitly enabled by the operator.
+  // Strict: in-progress follow-up only when that folder is explicitly enabled (not «Всі» alone).
+  const statusFolders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  if (
+    isInProgressStatusConversation(workingConv) &&
+    !isInProgressFollowUpFolderEnabled(workingConv, statusFolders)
+  ) {
+    return false;
+  }
+
   if (
     isInProgressStatusConversation(workingConv) &&
     channelFolderIds &&

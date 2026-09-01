@@ -114,6 +114,53 @@ export function isInProgressStatusConversation(conv: PagerConversation): boolean
 }
 
 /** Status folders the bot moves chats into mid-funnel — must still receive follow-up replies. */
+export function isClosedRegistrationStatusConversation(conv: PagerConversation): boolean {
+  const name = (conv.status?.name || "").trim().toLowerCase();
+  if (!name) {
+    return false;
+  }
+  if (isIgnoreStatusName(name)) {
+    return true;
+  }
+  return /скасован|cancel|cancelled|canceled|заверш|complete|completed|registered|^win$|deposit|выигр/i.test(
+    name,
+  );
+}
+
+/** Follow-up only when operator explicitly enabled the «в процессе» status folder (not via «Всі»). */
+export function isInProgressFollowUpFolderEnabled(
+  conv: PagerConversation,
+  folders: StatusFolderState[] | undefined,
+): boolean {
+  if (!isInProgressStatusConversation(conv)) {
+    return false;
+  }
+  const statusId = (conv.statusId || "").trim();
+  const statusName = (conv.status?.name || "").trim().toLowerCase();
+  if (!statusId && !statusName) {
+    return false;
+  }
+
+  for (const folder of folders ?? []) {
+    if (!folder.enabled) {
+      continue;
+    }
+    if (folder.id === ALL_INBOX_FOLDER_ID || folder.id === NO_STATUS_FOLDER_ID) {
+      continue;
+    }
+    const folderName = folder.name.trim().toLowerCase();
+    const matchesStatus =
+      (statusId && folder.id === statusId) ||
+      (statusName && folderName === statusName) ||
+      (statusName && isFunnelFollowUpFolderName(folder.name) && isFunnelFollowUpFolderName(statusName));
+    if (!matchesStatus) {
+      continue;
+    }
+    return isFunnelFollowUpFolderName(folder.name) || isFunnelFollowUpFolderName(statusName);
+  }
+  return false;
+}
+
 export function isFunnelFollowUpFolderName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   return (

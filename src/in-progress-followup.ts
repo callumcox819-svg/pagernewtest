@@ -15,6 +15,9 @@ export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW" | "CL";
 
 export const IN_PROGRESS_FOLLOWUP_MIN_MS = 20 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_MAX_MS = 22 * 60 * 1000;
+/** Only ping chats the bot moved to «в процессе» within this window. */
+export const IN_PROGRESS_FOLLOWUP_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+export const IN_PROGRESS_FOLLOWUP_ATTEMPT_COOLDOWN_MS = 60 * 60 * 1000;
 
 /** ZM/RW English, CM French, CL Spanish, EG Arabic — aligned with AI market languages. */
 const FOLLOWUP_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
@@ -182,79 +185,52 @@ export function shouldSendInProgressFollowUp(
   return Number.isFinite(dueMs) && dueMs <= nowMs;
 }
 
-/** Queue in-progress chats for follow-up evaluation (including backfill when state is missing). */
+/** Queue in-progress chats only when the bot scheduled a recent follow-up. */
 export function shouldQueueInProgressFollowUp(
   convState: ConversationRuntimeState | undefined,
   nowMs = Date.now(),
 ): boolean {
-  if (convState && isInProgressBotMuted(convState)) {
-    return false;
-  }
-  if (convState?.inProgressFollowUpSentAt?.trim()) {
-    return false;
-  }
   if (!convState?.inProgressEnteredAt?.trim()) {
-    return true;
+    return false;
+  }
+  if (isInProgressBotMuted(convState)) {
+    return false;
+  }
+  if (convState.inProgressFollowUpSentAt?.trim()) {
+    return false;
+  }
+  if (isInProgressFollowUpExpired(convState, nowMs)) {
+    return false;
   }
   if (!convState.inProgressFollowUpDueAt?.trim()) {
-    return true;
+    return false;
   }
   return shouldSendInProgressFollowUp(convState, nowMs);
 }
 
-const REG_LINK_ENTRY_ROLES = new Set([
-  "05_registration",
-  "06_link",
-  "07_chrome",
-  "05_link",
-  "registration",
-  "link",
-]);
-
-/** When bot moved chat to «в процессе» but state was not saved — infer from last reg link send. */
-export function inferInProgressEnteredAtMs(
+export function isInProgressFollowUpExpired(
   convState: ConversationRuntimeState,
-  messages: PagerMessage[],
-): number | null {
-  if (convState.inProgressEnteredAt?.trim()) {
-    const enteredMs = Date.parse(convState.inProgressEnteredAt);
-    if (Number.isFinite(enteredMs)) {
-      return enteredMs;
-    }
+  nowMs = Date.now(),
+): boolean {
+  const enteredMs = Date.parse(convState.inProgressEnteredAt ?? "");
+  if (!Number.isFinite(enteredMs)) {
+    return true;
   }
+  return nowMs - enteredMs > IN_PROGRESS_FOLLOWUP_MAX_AGE_MS;
+}
 
-  const lastReplyMs = Date.parse(convState.lastReplyAt ?? "");
-  if (Number.isFinite(lastReplyMs) && REG_LINK_ENTRY_ROLES.has(convState.lastReplyRole ?? "")) {
-    return lastReplyMs;
+export function isInProgressFollowUpAttemptCoolingDown(
+  convState: ConversationRuntimeState,
+  nowMs = Date.now(),
+): boolean {
+  if (convState.inProgressFollowUpSentAt?.trim()) {
+    return false;
   }
-
-  const chronological = [...messages].sort(
-    (left, right) =>
-      Date.parse(parseMessageTimestamp(left.createdAt)) -
-      Date.parse(parseMessageTimestamp(right.createdAt)),
-  );
-  for (let index = chronological.length - 1; index >= 0; index -= 1) {
-    const message = chronological[index];
-    if (!isOutgoingDirection(message.messageDirection) && !message.isDelivered && !message.facebookMessageId) {
-      continue;
-    }
-    const ts = Date.parse(parseMessageTimestamp(message.createdAt));
-    if (!Number.isFinite(ts)) {
-      continue;
-    }
-    const text = (message.text || "").trim().toLowerCase();
-    if (!text) {
-      continue;
-    }
-    if (
-      /tinyurl\.com|voici le lien|here(?:'|')?s the link|registration link|lien\s*:/i.test(text) ||
-      text.includes("http")
-    ) {
-      return ts;
-    }
+  const attemptMs = Date.parse(convState.inProgressFollowUpLastAttemptAt ?? "");
+  if (!Number.isFinite(attemptMs)) {
+    return false;
   }
-
-  return null;
+  return nowMs - attemptMs < IN_PROGRESS_FOLLOWUP_ATTEMPT_COOLDOWN_MS;
 }
 
 /** Customer wrote after entering «в процессе» — skip the silence follow-up. */
