@@ -1467,6 +1467,7 @@ function buildPagerClient(cookieHeader: string, orgId?: string, orgSlug?: string
   const cookies = parseCookieHeader(enriched);
   return new PagerClient({
     baseUrl: env.PAGER_BASE_URL,
+    webBaseUrl: env.PAGER_WEB_URL,
     cookieHeader: enriched,
     orgId: orgId || cookies._pager_org_id,
     orgSlug: orgSlug || cookies._pager_org_slug,

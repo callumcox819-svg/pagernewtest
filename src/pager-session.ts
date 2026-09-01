@@ -43,6 +43,7 @@ export function buildPagerAccountPatch(
 function buildPagerClient(state: ChatState, env: AppEnv, cookieHeader: string, orgId?: string) {
   return new PagerClient({
     baseUrl: env.PAGER_BASE_URL,
+    webBaseUrl: env.PAGER_WEB_URL,
     cookieHeader: enrichPagerCookies(cookieHeader, {
       organizationId: orgId ?? state.pagerAccount?.organizationId,
       pagerUserId: state.pagerAccount?.pagerUserId,

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { cleanPagerCookies, enrichPagerCookies, parseCookieHeader } from "./clerk-auth.js";
+import {
+  parsePagerMovedEndpoint,
+  resolvePagerApiBaseUrl,
+  resolvePagerWebBaseUrl,
+} from "./pager-urls.js";
 
 export type PagerChannel = {
   id: string;
@@ -102,10 +107,13 @@ export class PagerClient {
   private sessionUserId = "";
   private cachedOperatorImageUrl = "";
   private cookieHeader: string;
+  private apiBaseUrl: string;
+  private readonly webBaseUrl: string;
 
   constructor(
     private readonly options: {
       baseUrl: string;
+      webBaseUrl?: string;
       cookieHeader: string;
       orgId?: string;
       orgSlug?: string;
@@ -113,6 +121,8 @@ export class PagerClient {
       sessionUserId?: string;
     },
   ) {
+    this.apiBaseUrl = resolvePagerApiBaseUrl(options.baseUrl);
+    this.webBaseUrl = resolvePagerWebBaseUrl(options.baseUrl, options.webBaseUrl);
     this.orgId = options.orgId ?? "";
     this.orgSlug = options.orgSlug ?? "";
     this.cookieHeader = cleanPagerCookies(options.cookieHeader);
@@ -732,8 +742,8 @@ export class PagerClient {
             Accept: "*/*",
             Cookie: cleanPagerCookies(this.cookieHeader),
             "User-Agent": BROWSER_UA,
-            Origin: this.options.baseUrl,
-            Referer: `${this.options.baseUrl}/`,
+            Origin: this.webBaseUrl,
+            Referer: `${this.webBaseUrl}/`,
           },
         },
       );
@@ -1144,7 +1154,7 @@ export class PagerClient {
     fields: Record<string, string | Blob>,
     referer?: string,
   ): Promise<unknown> {
-    const url = new URL(path, this.options.baseUrl);
+    const url = new URL(path, this.apiBaseUrl);
     for (const [key, value] of Object.entries(params)) {
       if (value) {
         url.searchParams.set(key, value);
@@ -1174,6 +1184,14 @@ export class PagerClient {
     });
     const text = await response.text();
     if (!response.ok) {
+      if (response.status === 410) {
+        const migrated = parsePagerMovedEndpoint(text);
+        if (migrated && migrated !== this.apiBaseUrl) {
+          console.warn(`Pager API migrated (upload): ${this.apiBaseUrl} -> ${migrated}`);
+          this.apiBaseUrl = migrated;
+          return this.postMultipart(path, params, fields, referer);
+        }
+      }
       throw new PagerApiError(response.status, text);
     }
     if (!text.trim()) {
@@ -1191,7 +1209,7 @@ export class PagerClient {
       headers: {
         Cookie: cleanPagerCookies(this.cookieHeader),
         "User-Agent": BROWSER_UA,
-        Referer: this.options.baseUrl,
+        Referer: this.webBaseUrl,
       },
     });
     if (!response.ok) {
@@ -1462,7 +1480,7 @@ export class PagerClient {
     const locale = this.options.locale ?? "uk";
     const path = `/${locale}/${this.orgSlug}/chats/${convId}`;
     try {
-      await fetch(new URL(path, this.options.baseUrl), {
+      await fetch(new URL(path, this.webBaseUrl), {
         method: "GET",
         headers: {
           Accept: "text/html",
@@ -1505,12 +1523,12 @@ export class PagerClient {
 
     for (const path of paths) {
       try {
-        const response = await fetch(new URL(path, this.options.baseUrl), {
+        const response = await fetch(new URL(path, this.webBaseUrl), {
           method: "GET",
           headers: {
             Cookie: cleanPagerCookies(this.cookieHeader),
             Accept: "text/html",
-            Referer: `${this.options.baseUrl}/`,
+            Referer: `${this.webBaseUrl}/`,
             "User-Agent": BROWSER_UA,
           },
           redirect: "follow",
@@ -1671,8 +1689,8 @@ export class PagerClient {
   private chatReferer(convId?: string): string {
     const locale = this.options.locale ?? "uk";
     const base = this.orgSlug
-      ? `${this.options.baseUrl}/${locale}/${this.orgSlug}/chats`
-      : `${this.options.baseUrl}/`;
+      ? `${this.webBaseUrl}/${locale}/${this.orgSlug}/chats`
+      : `${this.webBaseUrl}/`;
     return convId ? `${base}/${convId}` : base;
   }
 
@@ -1684,7 +1702,7 @@ export class PagerClient {
       Cookie: cleanPagerCookies(this.cookieHeader),
       Accept: options?.accept ?? "*/*",
       "User-Agent": BROWSER_UA,
-      Origin: this.options.baseUrl,
+      Origin: this.webBaseUrl,
       Referer: this.chatReferer(),
     };
     if (options?.includeJsonContentType) {
@@ -1701,8 +1719,9 @@ export class PagerClient {
       body?: unknown;
       referer?: string;
     },
+    allowEndpointMigration = true,
   ): Promise<T> {
-    const url = new URL(path, this.options.baseUrl);
+    const url = new URL(path, this.apiBaseUrl);
     if (options.params) {
       for (const [key, value] of Object.entries(options.params)) {
         if (value) {
@@ -1726,6 +1745,14 @@ export class PagerClient {
 
     const text = await response.text();
     if (!response.ok) {
+      if (response.status === 410 && allowEndpointMigration) {
+        const migrated = parsePagerMovedEndpoint(text);
+        if (migrated && migrated !== this.apiBaseUrl) {
+          console.warn(`Pager API migrated: ${this.apiBaseUrl} -> ${migrated}`);
+          this.apiBaseUrl = migrated;
+          return this.request(path, options, false);
+        }
+      }
       throw new PagerApiError(response.status, text);
     }
 

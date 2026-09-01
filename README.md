@@ -61,7 +61,7 @@ Create `.env` from `.env.example`:
 ```env
 TELEGRAM_BOT_TOKEN=put_your_botfather_token_here
 TELEGRAM_BOT_NAME=Pager Test Bot
-PAGER_BASE_URL=https://www.pager.co.ua
+PAGER_BASE_URL=https://api.pager.co.ua
 BOT_CONFIG_PATH=config/bot.config.yaml
 BOT_STATE_PATH=data/chat-state.json
 DATABASE_URL=

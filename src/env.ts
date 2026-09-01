@@ -4,7 +4,11 @@ import { z } from "zod";
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_BOT_NAME: z.string().default("Pager Test Bot"),
-  PAGER_BASE_URL: z.string().url().default("https://www.pager.co.ua"),
+  PAGER_BASE_URL: z.string().url().default("https://api.pager.co.ua"),
+  /** Web UI origin for Referer/HTML warm-up (login pages stay on www). */
+  PAGER_WEB_URL: z
+    .preprocess((value) => (value === "" || value === undefined ? undefined : value), z.string().url())
+    .optional(),
   BOT_CONFIG_PATH: z.string().default("config/bot.config.yaml"),
   BOT_STATE_PATH: z.string().default("data/chat-state.json"),
   DATABASE_URL: z
