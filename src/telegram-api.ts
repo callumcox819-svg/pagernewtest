@@ -392,16 +392,16 @@ export function buildChannelKeyboard(
       ...channels.map((channel, index) => {
         const activeStyle: ButtonStyle | undefined = channel.enabled ? "success" : undefined;
         return [
-          inlineBtn(truncateLabel(`${index + 1}. ${channel.name}`, 24), `channel_toggle:${index}`, {
+          inlineBtn(truncateLabel(`${index + 1}. ${channel.name}`, 24), `channel_toggle|${channel.id}`, {
             emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
             style: activeStyle,
           }),
-          inlineBtn("ℹ️", `channel_info:${index}`, { style: activeStyle }),
-          inlineBtn(COUNTRY_LABELS[channel.country] ?? channel.country, `channel_country:${index}`, {
+          inlineBtn("ℹ️", `channel_info|${channel.id}`, { style: activeStyle }),
+          inlineBtn(COUNTRY_LABELS[channel.country] ?? channel.country, `channel_country|${channel.id}`, {
             emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
             style: activeStyle,
           }),
-          inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 10), `channel_bank:${index}`, {
+          inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 10), `channel_bank|${channel.id}`, {
             emojiId: PREMIUM_EMOJI.openFolder,
             style: activeStyle,
           }),
@@ -428,22 +428,22 @@ export function buildChannelKeyboard(
   };
 }
 
-export function buildCountryKeyboard(channelIndex: number): ReplyMarkup {
+export function buildCountryKeyboard(channelId: string): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn("Замбия", `country_pick:${channelIndex}:ZM`, { emojiId: PREMIUM_EMOJI.flagZm }),
-        inlineBtn("Египет", `country_pick:${channelIndex}:EG`, { emojiId: PREMIUM_EMOJI.flagEg }),
+        inlineBtn("Замбия", `country_pick|${channelId}|ZM`, { emojiId: PREMIUM_EMOJI.flagZm }),
+        inlineBtn("Египет", `country_pick|${channelId}|EG`, { emojiId: PREMIUM_EMOJI.flagEg }),
       ],
       [
-        inlineBtn("Камерун", `country_pick:${channelIndex}:CM`, { emojiId: PREMIUM_EMOJI.flagCm }),
-        inlineBtn("Руанда", `country_pick:${channelIndex}:RW`, {
+        inlineBtn("Камерун", `country_pick|${channelId}|CM`, { emojiId: PREMIUM_EMOJI.flagCm }),
+        inlineBtn("Руанда", `country_pick|${channelId}|RW`, {
           emojiId: PREMIUM_EMOJI.globe,
           style: "primary",
         }),
       ],
       [
-        inlineBtn("Чили", `country_pick:${channelIndex}:CL`, {
+        inlineBtn("Чили", `country_pick|${channelId}|CL`, {
           emojiId: PREMIUM_EMOJI.globe,
           style: "primary",
         }),
@@ -454,11 +454,11 @@ export function buildCountryKeyboard(channelIndex: number): ReplyMarkup {
 }
 
 export function buildTemplateKeyboard(
-  channelIndex: number,
+  channelId: string,
   templateBanks: Array<{ id: string; name: string }>,
 ): ReplyMarkup {
   const rows = templateBanks.map((bank, folderIndex) => [
-    inlineBtn(bank.name, `template_pick:${channelIndex}:${folderIndex}`, {
+    inlineBtn(bank.name, `template_pick|${channelId}|${folderIndex}`, {
       emojiId: PREMIUM_EMOJI.openFolder,
     }),
   ]);

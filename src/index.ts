@@ -221,7 +221,7 @@ async function handleCallback(
   }
 
   const state = await getOrCreateState(chatId);
-  const [kind, value, extra] = data.split(":");
+  const { kind, value, extra } = parseCallbackData(data);
 
   if (kind === "channels") {
     if (value === "all_on" || value === "all_off") {
@@ -260,7 +260,7 @@ async function handleCallback(
 
   if (kind === "channel_toggle" && value) {
     const latestState = (await stateStore.get(chatId)) ?? state;
-    const channel = getChannelByIndex(latestState, value);
+    const channel = getChannelFromCallback(latestState, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
@@ -281,19 +281,19 @@ async function handleCallback(
   }
 
   if (kind === "channel_info" && value) {
-    const channel = getChannelByIndex(state, value);
+    const latestState = (await stateStore.get(chatId)) ?? state;
+    const channel = getChannelFromCallback(latestState, value);
     if (!channel) {
-      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден — жми «Обновить каналы»");
       return;
     }
 
-    const selectable = getSelectableChannels(state);
-    const row = selectable[Number(value)];
-    const channelNum = Number(value) + 1;
+    const row = getSelectableRowForChannel(latestState, channel.id);
+    const channelNum = getChannelDisplayNumber(latestState, channel.id);
     await telegram.answerCallbackQuery(callbackId, "Смотрю последний чат…");
 
     try {
-      const sessionResult = await ensurePagerSession({ env, stateStore }, state);
+      const sessionResult = await ensurePagerSession({ env, stateStore }, latestState);
       if (!sessionResult) {
         await telegram.sendMessage(chatId, "Pager не подключён — не могу загрузить чаты.");
         return;
@@ -337,7 +337,7 @@ async function handleCallback(
           preview,
           "",
           "Сверь с Pager/Facebook — какая страница даёт такой лид.",
-          "Потом жми кнопку страны (CM/EG) у этого номера и переключи на Египет.",
+          "Если страна неверна — жми кнопку страны (CM/EG/…) у этого канала.",
         ].join("\n"),
       );
     } catch (error) {
@@ -375,7 +375,7 @@ async function handleCallback(
   }
 
   if (kind === "channel_country" && value) {
-    const channel = getChannelByIndex(state, value);
+    const channel = getChannelFromCallback(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
@@ -386,14 +386,14 @@ async function handleCallback(
       chatId,
       messageId,
       `Выбери страну для ${channel.name}:`,
-      buildCountryKeyboard(Number(value)),
+      buildCountryKeyboard(channel.id),
       callbackId,
     );
     return;
   }
 
   if (kind === "country_pick" && value && extra) {
-    const channel = getChannelByIndex(state, value);
+    const channel = getChannelFromCallback(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
@@ -431,7 +431,7 @@ async function handleCallback(
   }
 
   if (kind === "channel_bank" && value) {
-    const channel = getChannelByIndex(state, value);
+    const channel = getChannelFromCallback(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
@@ -448,14 +448,14 @@ async function handleCallback(
       chatId,
       messageId,
       `Выбери папку шаблонов для ${channel.name}:`,
-      buildTemplateKeyboard(Number(value), banks),
+      buildTemplateKeyboard(channel.id, banks),
       callbackId,
     );
     return;
   }
 
   if (kind === "template_pick" && value && extra) {
-    const channel = getChannelByIndex(state, value);
+    const channel = getChannelFromCallback(state, value);
     if (!channel) {
       await telegram.answerCallbackQuery(callbackId, "Channel not found");
       return;
@@ -943,6 +943,43 @@ function getEffectiveChannel(state: ChatState) {
     ...channel,
     templateBank: state.templateBankOverride,
   };
+}
+
+function parseCallbackData(data: string): { kind: string; value: string; extra?: string } {
+  if (data.includes("|")) {
+    const [kind, value, extra] = data.split("|");
+    return { kind: kind ?? "", value: value ?? "", extra };
+  }
+  const [kind, value, extra] = data.split(":");
+  return { kind: kind ?? "", value: value ?? "", extra };
+}
+
+function getSelectableRowForChannel(
+  state: ChatState,
+  channelId: string,
+): ReturnType<typeof getSelectableChannels>[number] | undefined {
+  return getSelectableChannels(state).find((row) => row.id === channelId);
+}
+
+function getChannelDisplayNumber(state: ChatState, channelId: string): number {
+  const index = getSelectableChannels(state).findIndex((row) => row.id === channelId);
+  return index >= 0 ? index + 1 : 0;
+}
+
+function getChannelById(state: ChatState, channelId: string) {
+  const row = getSelectableRowForChannel(state, channelId);
+  if (!row) {
+    return undefined;
+  }
+  return resolveChannelForState(state, row.id);
+}
+
+/** Legacy keyboards used list index; new ones use channel id. */
+function getChannelFromCallback(state: ChatState, value: string) {
+  if (/^\d+$/.test(value)) {
+    return getChannelByIndex(state, value);
+  }
+  return getChannelById(state, value);
 }
 
 function getChannelByIndex(state: ChatState, indexRaw: string) {
