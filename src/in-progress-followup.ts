@@ -13,24 +13,24 @@ import type { CountryCode } from "./config.js";
 /** Markets that get delayed «в процессе» check-ins (each in its own language). */
 export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW" | "CL";
 
-export const IN_PROGRESS_FOLLOWUP_MIN_MS = 10 * 60 * 1000;
-export const IN_PROGRESS_FOLLOWUP_MAX_MS = 15 * 60 * 1000;
+export const IN_PROGRESS_FOLLOWUP_MIN_MS = 20 * 60 * 1000;
+export const IN_PROGRESS_FOLLOWUP_MAX_MS = 22 * 60 * 1000;
 
-/** ZM/RW English, CM French, EG Arabic — aligned with AI market languages. */
+/** ZM/RW English, CM French, CL Spanish, EG Arabic — aligned with AI market languages. */
 const FOLLOWUP_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
-  ZM: ["have you already registered", "what stage are you at"],
-  RW: ["have you already registered", "what stage are you at"],
-  CM: ["déjà inscrit", "quelle étape"],
-  CL: ["ya te registraste", "en qué etapa"],
-  EG: ["هل قمت بالتسجيل", "في أي مرحلة"],
+  ZM: ["have you already registered", "when will you complete registration"],
+  RW: ["have you already registered", "when will you complete registration"],
+  CM: ["déjà inscrit", "terminer l'inscription", "terminer votre inscription"],
+  CL: ["ya te registraste", "terminarás el registro", "terminaras el registro"],
+  EG: ["هل قمت بالتسجيل", "متى ستنهي التسجيل", "متى ستكمل التسجيل"],
 };
 
 const FOLLOWUP_MESSAGES: Record<InProgressFollowUpCountry, [string, string]> = {
-  ZM: ["Have you already registered?", "What stage are you at now?"],
-  RW: ["Have you already registered?", "What stage are you at now?"],
-  CM: ["Vous êtes déjà inscrit(e) ?", "À quelle étape en êtes-vous ?"],
-  CL: ["¿Ya te registraste?", "¿En qué etapa estás ahora?"],
-  EG: ["هل قمت بالتسجيل بالفعل؟", "في أي مرحلة أنت الآن؟"],
+  ZM: ["Have you already registered?", "When will you complete registration?"],
+  RW: ["Have you already registered?", "When will you complete registration?"],
+  CM: ["Vous êtes déjà inscrit(e) ?", "Quand allez-vous terminer l'inscription ?"],
+  CL: ["¿Ya te registraste?", "¿Cuándo terminarás el registro?"],
+  EG: ["هل قمت بالتسجيل بالفعل؟", "متى ستنهي التسجيل؟"],
 };
 
 const PLAN_ASK_MESSAGES: Record<InProgressFollowUpCountry, string> = {
@@ -180,6 +180,102 @@ export function shouldSendInProgressFollowUp(
   }
   const dueMs = Date.parse(dueAt);
   return Number.isFinite(dueMs) && dueMs <= nowMs;
+}
+
+/** Queue in-progress chats for follow-up evaluation (including backfill when state is missing). */
+export function shouldQueueInProgressFollowUp(
+  convState: ConversationRuntimeState | undefined,
+  nowMs = Date.now(),
+): boolean {
+  if (convState && isInProgressBotMuted(convState)) {
+    return false;
+  }
+  if (convState?.inProgressFollowUpSentAt?.trim()) {
+    return false;
+  }
+  if (!convState?.inProgressEnteredAt?.trim()) {
+    return true;
+  }
+  if (!convState.inProgressFollowUpDueAt?.trim()) {
+    return true;
+  }
+  return shouldSendInProgressFollowUp(convState, nowMs);
+}
+
+const REG_LINK_ENTRY_ROLES = new Set([
+  "05_registration",
+  "06_link",
+  "07_chrome",
+  "05_link",
+  "registration",
+  "link",
+]);
+
+/** When bot moved chat to «в процессе» but state was not saved — infer from last reg link send. */
+export function inferInProgressEnteredAtMs(
+  convState: ConversationRuntimeState,
+  messages: PagerMessage[],
+): number | null {
+  if (convState.inProgressEnteredAt?.trim()) {
+    const enteredMs = Date.parse(convState.inProgressEnteredAt);
+    if (Number.isFinite(enteredMs)) {
+      return enteredMs;
+    }
+  }
+
+  const lastReplyMs = Date.parse(convState.lastReplyAt ?? "");
+  if (Number.isFinite(lastReplyMs) && REG_LINK_ENTRY_ROLES.has(convState.lastReplyRole ?? "")) {
+    return lastReplyMs;
+  }
+
+  const chronological = [...messages].sort(
+    (left, right) =>
+      Date.parse(parseMessageTimestamp(left.createdAt)) -
+      Date.parse(parseMessageTimestamp(right.createdAt)),
+  );
+  for (let index = chronological.length - 1; index >= 0; index -= 1) {
+    const message = chronological[index];
+    if (!isOutgoingDirection(message.messageDirection) && !message.isDelivered && !message.facebookMessageId) {
+      continue;
+    }
+    const ts = Date.parse(parseMessageTimestamp(message.createdAt));
+    if (!Number.isFinite(ts)) {
+      continue;
+    }
+    const text = (message.text || "").trim().toLowerCase();
+    if (!text) {
+      continue;
+    }
+    if (
+      /tinyurl\.com|voici le lien|here(?:'|')?s the link|registration link|lien\s*:/i.test(text) ||
+      text.includes("http")
+    ) {
+      return ts;
+    }
+  }
+
+  return null;
+}
+
+/** Customer wrote after entering «в процессе» — skip the silence follow-up. */
+export function hasCustomerIncomingAfter(
+  messages: PagerMessage[],
+  afterMs: number,
+): boolean {
+  for (const message of messages) {
+    if (!isIncomingDirection(message.messageDirection)) {
+      continue;
+    }
+    const text = (message.text || "").trim();
+    if (!text) {
+      continue;
+    }
+    const ts = Date.parse(parseMessageTimestamp(message.createdAt));
+    if (Number.isFinite(ts) && ts > afterMs) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Customer answered the «already registered?» ping — may need «when do you plan?» or mute. */

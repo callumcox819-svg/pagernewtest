@@ -41,7 +41,9 @@ import {
 import {
   buildInProgressFollowUpStatePatch,
   classifyInProgressRegistrationReply,
+  hasCustomerIncomingAfter,
   hasManualOperatorReplyAfterInProgress,
+  inferInProgressEnteredAtMs,
   inProgressFollowUpAlreadySent,
   inProgressFollowUpMessage,
   inProgressPlanAskAlreadySent,
@@ -49,7 +51,9 @@ import {
   isInProgressBotMuted,
   isInProgressFollowUpCountry,
   latestIncomingCustomerText,
+  pickInProgressFollowUpVariant,
   shouldHandleInProgressFollowUpCustomerReply,
+  shouldQueueInProgressFollowUp,
   shouldSendInProgressFollowUp,
 } from "./in-progress-followup.js";
 import {
@@ -911,7 +915,7 @@ async function buildWorkQueue(
     const maxPages = isEg ? INBOX_PAGES_EG : INBOX_PAGES_DEEP;
     const pageSize = isEg ? 100 : 100;
     const unreadCap = isEg ? INBOX_TOP_EG : INBOX_TOP_UNREAD;
-    const followUpCap = isEg ? 0 : INBOX_TOP_CM_FOLLOWUP;
+    const followUpCap = INBOX_TOP_CM_FOLLOWUP;
     let unreadAdded = 0;
     let followUpAdded = 0;
     let catchUpAddedChannel = 0;
@@ -947,11 +951,12 @@ async function buildWorkQueue(
             continue;
           }
           const followUpState = chatState.conversations?.[conv.id];
-          if (!followUpState || isInProgressBotMuted(followUpState)) {
+          if (followUpState && isInProgressBotMuted(followUpState)) {
             continue;
           }
-          const dueFollowUp = shouldSendInProgressFollowUp(followUpState);
+          const dueFollowUp = shouldQueueInProgressFollowUp(followUpState);
           const needsCustomerReply =
+            followUpState &&
             shouldHandleInProgressFollowUpCustomerReply(followUpState) &&
             (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection));
           if (dueFollowUp || needsCustomerReply) {
@@ -1046,7 +1051,7 @@ async function buildWorkQueue(
       }
 
       const unreadFull = unreadAdded >= unreadCap;
-      const followUpFull = isEg || followUpAdded >= followUpCap;
+      const followUpFull = followUpAdded >= followUpCap;
       if (unreadFull && followUpFull) {
         break;
       }
@@ -1227,14 +1232,55 @@ async function trySendInProgressRegistrationFollowUp(
   }
 
   const convId = conv.id;
-  const convState = getConversationState(state, convId, runtime.channelId);
+  let convState = getConversationState(state, convId, runtime.channelId);
   if (isInProgressBotMuted(convState)) {
     return false;
   }
 
   const messages = await client.listMessages(convId, 1, 80);
   const operatorId = await client.probeOperatorUserId();
+
+  if (!convState.inProgressEnteredAt?.trim()) {
+    const enteredMs = inferInProgressEnteredAtMs(convState, messages);
+    if (enteredMs === null) {
+      return false;
+    }
+    const schedulePatch = buildInProgressFollowUpStatePatch(convId, enteredMs);
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      ...schedulePatch,
+    });
+    convState = { ...convState, ...schedulePatch };
+  } else if (!convState.inProgressFollowUpDueAt?.trim()) {
+    const enteredMs = Date.parse(convState.inProgressEnteredAt);
+    const schedulePatch = {
+      inProgressFollowUpDueAt: buildInProgressFollowUpStatePatch(convId, enteredMs).inProgressFollowUpDueAt,
+      inProgressFollowUpVariant:
+        convState.inProgressFollowUpVariant ?? pickInProgressFollowUpVariant(convId),
+    };
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      ...schedulePatch,
+    });
+    convState = { ...convState, ...schedulePatch };
+  }
+
   const enteredAt = convState.inProgressEnteredAt?.trim();
+  const enteredMs = enteredAt ? Date.parse(enteredAt) : Number.NaN;
+  if (Number.isFinite(enteredMs) && hasCustomerIncomingAfter(messages, enteredMs)) {
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      inProgressMutedAt: new Date().toISOString(),
+    });
+    console.log(
+      `Pager worker: ${country} ${convId.slice(0, 8)} in-progress follow-up skipped — customer already replied`,
+    );
+    return false;
+  }
+
   if (
     enteredAt &&
     hasManualOperatorReplyAfterInProgress(messages, enteredAt, country, conv, operatorId || undefined)
