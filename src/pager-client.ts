@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cleanPagerCookies, enrichPagerCookies, parseCookieHeader } from "./clerk-auth.js";
+import { cleanPagerCookies, enrichPagerCookies, extractPagerBearerToken, parseCookieHeader } from "./clerk-auth.js";
 import {
   parsePagerMovedEndpoint,
   resolvePagerApiBaseUrl,
@@ -1705,6 +1705,10 @@ export class PagerClient {
       Origin: this.webBaseUrl,
       Referer: this.chatReferer(),
     };
+    const bearer = extractPagerBearerToken(this.cookieHeader);
+    if (bearer) {
+      headers.Authorization = `Bearer ${bearer}`;
+    }
     if (options?.includeJsonContentType) {
       headers["Content-Type"] = "application/json";
     }

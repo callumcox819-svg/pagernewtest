@@ -233,6 +233,28 @@ export class ClerkPasswordAuthClient {
   }
 }
 
+export function extractPagerBearerToken(cookieHeader: string): string | undefined {
+  const cookies = parseCookieHeader(cleanPagerCookies(cookieHeader));
+  const direct = cookies.__session?.trim();
+  if (direct && looksLikeJwt(direct)) {
+    return direct;
+  }
+  for (const [key, value] of Object.entries(cookies)) {
+    if (!key.startsWith("__session_") || !value?.trim()) {
+      continue;
+    }
+    const token = value.trim();
+    if (looksLikeJwt(token)) {
+      return token;
+    }
+  }
+  return undefined;
+}
+
+function looksLikeJwt(token: string): boolean {
+  return token.split(".").length === 3 && token.length > 20;
+}
+
 export function parseCookieHeader(raw: string): Record<string, string> {
   const trimmed = raw.trim();
   if (!trimmed) {
