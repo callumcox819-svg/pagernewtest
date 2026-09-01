@@ -223,10 +223,9 @@ import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveRwTemplate
 import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
 import { customerAgreedAfterOfferTable } from "./funnel-common.js";
 import {
+  buildStatusFoldersFromPager,
   countApiStatusFolders,
   isFunnelFollowUpFolderName,
-  mergeStatusFolderList,
-  stripChannelNamesFromFolders,
   ALL_INBOX_FOLDER_ID,
   NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
@@ -5453,11 +5452,9 @@ async function ensureStatusFolders(
   try {
     const session = await client.bootstrapSession();
     const statuses = await client.loadAllStatuses().catch(() => []);
-    const statusFolders = stripChannelNamesFromFolders(
-      mergeStatusFolderList(
-        statuses,
-        state.operatorSettings?.statusFolders ?? state.statusFolders,
-      ),
+    const statusFolders = buildStatusFoldersFromPager(
+      statuses,
+      state.operatorSettings?.statusFolders ?? state.statusFolders,
       state.pagerAccount?.liveChannels,
     );
     return deps.stateStore.patch(state.chatId, {

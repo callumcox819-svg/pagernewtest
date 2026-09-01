@@ -270,18 +270,32 @@ export function looksLikeLeakedChannelFolder(name: string): boolean {
     return false;
   }
   const lower = trimmed.toLowerCase();
-  if (
-    /без статус|всі|все|в процес|процес|реєстрац|регистрац|заверш|чекаю|waiting|interested|complete|deposit|en cours|registration|process/i.test(
-      lower,
-    )
-  ) {
+  if (isKnownChatStatusFolderName(lower)) {
     return false;
   }
-  // "Brice Moukoko", "Mahmoud Fathy", "Mark Reyes" — two+ capitalized name tokens.
+  // "Brice Moukoko", "Mahmoud Fathy" — messenger page / agent names.
   if (/^[A-ZÀ-ÖØ-Þ][\p{L}'’.-]*(?:\s+[A-ZÀ-ÖØ-Þ][\p{L}'’.-]*){1,3}$/u.test(trimmed)) {
     return true;
   }
+  // "ZenHaven", "EcoRiors" — single-word CamelCase channel/page brands.
+  if (/^[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+$/.test(trimmed)) {
+    return true;
+  }
   return false;
+}
+
+function isKnownChatStatusFolderName(lower: string): boolean {
+  return /без статус|всі|все|в процес|процес|реєстрац|регистрац|заверш|чекаю|waiting|interested|complete|completed|deposit|en cours|registration|registered|process|^win$|игнор|ignore/i.test(
+    lower,
+  );
+}
+
+export function buildStatusFoldersFromPager(
+  apiStatuses: Array<{ id: string; name: string }>,
+  existing?: StatusFolderState[],
+  liveChannels?: Array<{ id: string; name: string }>,
+): StatusFolderState[] {
+  return stripChannelNamesFromFolders(mergeStatusFolderList(apiStatuses, existing), liveChannels);
 }
 
 export function mergeStatusFolderList(

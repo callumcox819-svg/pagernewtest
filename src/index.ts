@@ -18,9 +18,9 @@ import { clearTemplateReplyCache } from "./template-resolver.js";
 import { createStateStore, type ChannelRuntimeState, type ChatState, type StateStore } from "./state-store.js";
 import { createAppMetaStore, type AppMetaStore } from "./app-meta-store.js";
 import {
+  buildStatusFoldersFromPager,
   countApiStatusFolders,
   isAiFolderEnabled,
-  mergeStatusFolderList,
   setAllStatusFolders,
   setAllAiStatusFolders,
   stripChannelNamesFromFolders,
@@ -1447,8 +1447,9 @@ async function syncStatusFolders(
 
     const { client, state: sessionState } = sessionResult;
     const statuses = await client.loadAllStatuses();
-    const statusFolders = stripChannelNamesFromFolders(
-      mergeStatusFolderList(statuses, previousFolders),
+    const statusFolders = buildStatusFoldersFromPager(
+      statuses,
+      previousFolders,
       sessionState.pagerAccount?.liveChannels,
     );
     const apiCount = countApiStatusFolders(statusFolders);
@@ -1517,7 +1518,12 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
       resolvePagerOrgSlug(state),
     );
     const statuses = await client.loadAllStatuses().catch(() => []);
-    const statusFolders = mergeStatusFolderList(statuses, state.statusFolders);
+    const liveChannels = session.channels.map((channel) => ({
+      id: channel.id,
+      name: channel.name,
+      channelSource: channel.channelSource,
+    }));
+    const statusFolders = buildStatusFoldersFromPager(statuses, state.statusFolders, liveChannels);
 
     return await stateStore.patch(chatId, {
       pagerAccount: {
@@ -1525,11 +1531,7 @@ async function refreshPagerData(chatId: number, state: ChatState): Promise<ChatS
         organizationId: session.organizationId,
         organizationName: session.organizationName,
         organizationSlug: session.organizationSlug,
-        liveChannels: session.channels.map((channel) => ({
-          id: channel.id,
-          name: channel.name,
-          channelSource: channel.channelSource,
-        })),
+        liveChannels,
         liveTemplateBanks: session.templateBanks.map((bank) => ({
           id: bank.id,
           name: bank.name,
@@ -1650,9 +1652,15 @@ async function handlePendingInput(
         session.organizationSlug,
       );
       const statuses = await statusClient.loadAllStatuses().catch(() => []);
-      const statusFolders = mergeStatusFolderList(
+      const liveChannels = session.channels.map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        channelSource: channel.channelSource,
+      }));
+      const statusFolders = buildStatusFoldersFromPager(
         statuses,
         state.operatorSettings?.statusFolders ?? state.statusFolders,
+        liveChannels,
       );
       const merged = mergeChannelsOnLogin(
         state,
@@ -1739,9 +1747,15 @@ async function handlePendingInput(
         session.organizationSlug,
       );
       const statuses = await statusClient.loadAllStatuses().catch(() => []);
-      const statusFolders = mergeStatusFolderList(
+      const liveChannels = session.channels.map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        channelSource: channel.channelSource,
+      }));
+      const statusFolders = buildStatusFoldersFromPager(
         statuses,
         state.operatorSettings?.statusFolders ?? state.statusFolders,
+        liveChannels,
       );
       const merged = mergeChannelsOnLogin(
         state,
