@@ -314,6 +314,7 @@ function stripZmRegistrationEmbeddedLink(text: string): string {
   return text
     .replace(/\n?https?:\/\/\S+/gi, "")
     .replace(/\n?(?:www\.)?tinyurl\.com\/\S+/gi, "")
+    .replace(/\n?here is the link:\s*$/i, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();

@@ -2941,7 +2941,14 @@ async function processZmConversation(
   let sentAny = false;
   const sentScriptKeys: string[] = [];
   const allowMultiSend = zmAllowsMultiSend(scriptKeys);
+  const coveredOutgoing = [...outgoingTexts];
   for (const scriptKey of scriptKeys) {
+    if (zmScriptSentInHistory(coveredOutgoing, scriptKey)) {
+      console.log(
+        `Pager worker: ZM ${convId.slice(0, 8)} skip duplicate key=${scriptKey} (already in thread/batch)`,
+      );
+      continue;
+    }
     const replyText = await resolveScriptTextByKey(client, {
       folderId,
       liveBanks: currentState.pagerAccount?.liveTemplateBanks,
@@ -2950,6 +2957,33 @@ async function processZmConversation(
       refreshSavedReplies: true,
     });
     if (!replyText?.trim()) {
+      if (scriptKey === "04_registration") {
+        const fallbackText = loadLocalZmScript("04_registration")?.trim();
+        if (fallbackText) {
+          const sent = await client.sendMessageReliable(convId, fallbackText, {
+            channelId: runtime.channelId,
+            conv,
+          });
+          if (sent) {
+            sentAny = true;
+            sentScriptKeys.push(scriptKey);
+            coveredOutgoing.push(fallbackText);
+            await patchConversationState(deps.stateStore, state.chatId, convId, {
+              conversationId: convId,
+              channelId: runtime.channelId,
+              lastCustomerMessageId: lastIncoming.id,
+              lastCustomerMessageAt: lastIncoming.createdAt,
+              lastReplyAt: new Date().toISOString(),
+              lastReplyRole: scriptKey,
+              sendFailures: 0,
+            });
+            await sleep(500);
+          }
+        } else {
+          console.warn(`ZM script missing ${convId.slice(0, 8)}: ${scriptKey}`);
+        }
+        continue;
+      }
       if (scriptKey === "05_link") {
         const fallbackLink =
           loadLocalZmScript("05_link")?.trim() || "https://tinyurl.com/ZAM577";
@@ -2993,6 +3027,7 @@ async function processZmConversation(
     }
     sentAny = true;
     sentScriptKeys.push(scriptKey);
+    coveredOutgoing.push(replyText.trim());
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,

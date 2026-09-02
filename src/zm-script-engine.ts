@@ -51,11 +51,10 @@ export const ZM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
     "here's what you can get",
   ],
   "04_registration": [
-    "promo code zam577",
     "special registration link",
-    "google chrome browser",
-    "one click",
-    "text me here",
+    "paste it into your google chrome",
+    "promo code zam577",
+    "registration by one click",
   ],
   "05_link": ["tinyurl.com/zam577"],
   "06_deposit": ['click "deposit"', "i'm waiting for you"],
@@ -99,6 +98,9 @@ export function scriptSentInHistory(outgoingTexts: string[], snippet: string): b
 }
 
 export function zmScriptSentInHistory(outgoingTexts: string[], scriptKey: string): boolean {
+  if (scriptKey === "04_registration") {
+    return zmRegistrationInstructionsSentInHistory(outgoingTexts);
+  }
   return scriptSearchNeedles(scriptKey).some((needle) => scriptSentInHistory(outgoingTexts, needle));
 }
 
@@ -122,12 +124,13 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
 
 export function zmRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
   const blob = outgoingTexts.join("\n").toLowerCase();
+  if (!blob.includes("zam577") && !blob.includes("zam777")) {
+    return false;
+  }
   return (
-    (blob.includes("special registration link") ||
-      blob.includes("here is the link") ||
-      blob.includes("paste it into your browser") ||
-      blob.includes("paste it into your google chrome")) &&
-    (blob.includes("zam577") || blob.includes("zam777"))
+    blob.includes("special registration link") ||
+    (blob.includes("paste it into your google chrome") && blob.includes("promo code")) ||
+    (blob.includes("registration by") && blob.includes("one click"))
   );
 }
 
@@ -318,10 +321,10 @@ export function limitZmScriptsForCustomerTurn(
   if (scriptKeys.some((key) => ZM_REG_SEND_KEYS.has(key))) {
     const instructionsSent = zmRegistrationInstructionsSentInHistory(outgoingTexts);
     const linkSent = regLinkSentInHistory(outgoingTexts);
-    if (!instructionsSent) {
-      return [...ZM_REG_BUNDLE];
-    }
     if (!linkSent) {
+      if (!instructionsSent) {
+        return [...ZM_REG_BUNDLE];
+      }
       return ["05_link"];
     }
     return [];
