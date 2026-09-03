@@ -41,6 +41,7 @@ import {
   buildFoldersKeyboard,
   buildAiFoldersKeyboard,
   buildFoldersRetryKeyboard,
+  CHANNELS_PAGE_SIZE,
   FOLDERS_PAGE_SIZE,
   buildMainMenuKeyboard,
   buildOperatorReplyKeyboard,
@@ -201,15 +202,35 @@ async function runTelegramBot(): Promise<never> {
 }
 
 async function handleUpdate(update: TelegramUpdate) {
-  if (update.callback_query?.message?.chat.id) {
-    const chatId = update.callback_query.message.chat.id;
-    const messageId = update.callback_query.message.message_id;
-    await handleCallback(chatId, update.callback_query.id, update.callback_query.data, messageId);
-    return;
-  }
+  try {
+    if (update.callback_query?.message?.chat.id) {
+      const chatId = update.callback_query.message.chat.id;
+      const messageId = update.callback_query.message.message_id;
+      await handleCallback(chatId, update.callback_query.id, update.callback_query.data, messageId);
+      return;
+    }
 
-  if (update.message) {
-    await handleMessage(update.message);
+    if (update.message) {
+      await handleMessage(update.message);
+    }
+  } catch (error) {
+    const chatId =
+      update.callback_query?.message?.chat.id ?? update.message?.chat.id;
+    console.error("Telegram update failed:", formatError(error));
+    if (chatId) {
+      try {
+        if (update.callback_query?.id) {
+          await telegram.answerCallbackQuery(update.callback_query.id, "Ошибка меню");
+        }
+        await telegram.sendMessage(
+          chatId,
+          `Не удалось открыть меню: ${formatError(error)}\nПопробуй ещё раз или /start.`,
+          buildMainMenuKeyboard(),
+        );
+      } catch {
+        // ignore secondary send failure
+      }
+    }
   }
 }
 
@@ -231,6 +252,15 @@ async function handleCallback(
     if (value === "all_on" || value === "all_off") {
       // handled below
     } else {
+      if (value === "page" && extra !== undefined) {
+        await telegram.answerCallbackQuery(callbackId);
+        await showChannelsMenu(chatId, state, messageId, Number(extra) || 0);
+        return;
+      }
+      if (value === "noop") {
+        await telegram.answerCallbackQuery(callbackId);
+        return;
+      }
       if (value === "back" || value === "refresh") {
         const nextState =
           value === "refresh" ? (await refreshPagerData(chatId, state)) ?? state : state;
@@ -270,6 +300,7 @@ async function handleCallback(
       return;
     }
 
+    const page = Number(extra ?? "0");
     const runtime = getChannelRuntime(latestState, channel.id, channel.country);
     const nextEnabled = !isChannelEnabled(latestState, channel.id, runtime.enabled);
     const nextState = await setChannelEnabled(chatId, latestState, channel.id, nextEnabled);
@@ -278,7 +309,10 @@ async function handleCallback(
       await telegram.editMessageReplyMarkup(
         chatId,
         messageId,
-        buildChannelKeyboard(getSelectableChannels(nextState ?? latestState)),
+        buildChannelKeyboard(
+          getSelectableChannels(nextState ?? latestState),
+          Number.isFinite(page) ? page : 0,
+        ),
       );
     }
     return;
@@ -1307,16 +1341,31 @@ function buildChannelRuntimeMap(
   );
 }
 
-async function showChannelsMenu(chatId: number, state: ChatState, messageId?: number) {
-  const text = buildChannelsMenuCaption(state);
-  const keyboard = buildChannelKeyboard(getSelectableChannels(state));
+async function showChannelsMenu(chatId: number, state: ChatState, messageId?: number, page = 0) {
+  const channels = getSelectableChannels(state);
+  const text = buildChannelsMenuCaption(state, page);
+  const keyboard = buildChannelKeyboard(channels, page);
 
-  if (!messageId) {
-    await telegram.sendMessage(chatId, text, keyboard);
-    return;
+  try {
+    if (!messageId) {
+      await telegram.sendMessage(chatId, text, keyboard);
+      return;
+    }
+    await safeEditMenu(chatId, messageId, text, keyboard);
+  } catch (error) {
+    console.error("showChannelsMenu failed:", formatError(error));
+    await telegram.sendMessage(
+      chatId,
+      [
+        "Не удалось показать список каналов.",
+        formatError(error),
+        channels.length
+          ? `Каналов: ${channels.length}. Нажми «Каналы» ещё раз.`
+          : "Сначала подключи Pager аккаунт.",
+      ].join("\n"),
+      buildMainMenuKeyboard(),
+    );
   }
-
-  await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
 async function showFoldersMenu(
@@ -1861,7 +1910,7 @@ function buildMainMenuCaption(state: ChatState): string {
   return `Pager: ${org}\nВключено ${enabledChannels.length}/${liveCount}:\n${summary}${extra}\nbuild ${getDeployLabel()}`;
 }
 
-function buildChannelsMenuCaption(state: ChatState): string {
+function buildChannelsMenuCaption(state: ChatState, page = 0): string {
   const channels = getSelectableChannels(state);
   const enabled = channels.filter((channel) =>
     isChannelEnabled(state, channel.id, getChannelRuntime(state, channel.id, channel.country).enabled),
@@ -1872,8 +1921,11 @@ function buildChannelsMenuCaption(state: ChatState): string {
     nameCounts.set(channel.name, (nameCounts.get(channel.name) ?? 0) + 1);
   }
   const hasDuplicateNames = [...nameCounts.values()].some((count) => count > 1);
+  const totalPages = Math.max(1, Math.ceil(channels.length / CHANNELS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const pageLabel = totalPages > 1 ? ` · стр. ${safePage + 1}/${totalPages}` : "";
 
-  const base = `Каналы ${enabled}/${channels.length} · build ${getDeployLabel()}`;
+  const base = `Каналы ${enabled}/${channels.length}${pageLabel} · build ${getDeployLabel()}`;
   return hasDuplicateNames ? `${base}\nОдинаковые имена — жми ℹ️.` : base;
 }
 
@@ -1916,6 +1968,8 @@ const XP_STATS_COUNTRIES: XPartnersCountry[] = ["CM", "EG", "ZM", "RW"];
 
 function normalizeMenuButtonText(text: string): string {
   return text
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF\u2060]/g, "")
     .replace(/[^\p{L}\p{N}\s/:-]+/gu, "")
     .replace(/\s+/g, " ")
     .trim()
@@ -1927,28 +1981,28 @@ function resolveMenuTextAction(text?: string): MenuAction | undefined {
     return undefined;
   }
   const normalized = normalizeMenuButtonText(text);
-  if (/^(pager аккаунт|pager account|account)$/.test(normalized)) {
+  if (/pager\s*аккаунт|pager\s*account|^account$/.test(normalized)) {
     return "pager_account";
   }
-  if (/^(каналы|channels)$/.test(normalized)) {
+  if (/канал|channels/.test(normalized)) {
     return "channels";
   }
-  if (/^(выбор папок|папки|folders)$/.test(normalized)) {
+  if (/выбор\s*папок|^папки$|folders/.test(normalized)) {
     return "folders";
   }
-  if (/^(статус|status|настройки|settings)$/.test(normalized)) {
+  if (/^статус$|^status$|настройки|settings/.test(normalized)) {
     return "status";
   }
-  if (/^(статистика|statistics|stats|1xpartners)$/.test(normalized)) {
+  if (/статистик|statistics|^stats$|1xpartners/.test(normalized)) {
     return "stats";
   }
-  if (/^(rw воронка|обучение rw|обучение|rw learn|learn)$/.test(normalized)) {
+  if (/rw\s*воронка|обучение\s*rw|^обучение$|rw\s*learn|^learn$/.test(normalized)) {
     return "learn";
   }
-  if (/^(сброс|reset)$/.test(normalized)) {
+  if (/^сброс$|^reset$/.test(normalized)) {
     return "reset";
   }
-  if (/^(меню|menu|start)$/.test(normalized)) {
+  if (/^меню$|^menu$|^start$/.test(normalized)) {
     return "main";
   }
   return undefined;

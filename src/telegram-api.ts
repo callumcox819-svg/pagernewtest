@@ -378,6 +378,9 @@ function truncateLabel(value: string, max = 14): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
+/** Keep under Telegram's ~100 inline-button limit (4 buttons per channel row). */
+export const CHANNELS_PAGE_SIZE = 8;
+
 export function buildChannelKeyboard(
   channels: Array<{
     id: string;
@@ -386,46 +389,64 @@ export function buildChannelKeyboard(
     enabled: boolean;
     templateBank?: string;
   }>,
+  page = 0,
 ): ReplyMarkup {
-  return {
-    inline_keyboard: [
-      ...channels.map((channel, index) => {
-        const activeStyle: ButtonStyle | undefined = channel.enabled ? "success" : undefined;
-        return [
-          inlineBtn(truncateLabel(`${index + 1}. ${channel.name}`, 24), `channel_toggle|${channel.id}`, {
-            emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
-            style: activeStyle,
-          }),
-          inlineBtn("ℹ️", `channel_info|${channel.id}`, { style: activeStyle }),
-          inlineBtn(COUNTRY_LABELS[channel.country] ?? channel.country, `channel_country|${channel.id}`, {
-            emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
-            style: activeStyle,
-          }),
-          inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 10), `channel_bank|${channel.id}`, {
-            emojiId: PREMIUM_EMOJI.openFolder,
-            style: activeStyle,
-          }),
-        ];
+  const totalPages = Math.max(1, Math.ceil(channels.length / CHANNELS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * CHANNELS_PAGE_SIZE;
+  const slice = channels.slice(start, start + CHANNELS_PAGE_SIZE);
+
+  const rows: InlineKeyboardButton[][] = slice.map((channel, offset) => {
+    const index = start + offset;
+    const activeStyle: ButtonStyle | undefined = channel.enabled ? "success" : undefined;
+    return [
+      inlineBtn(truncateLabel(`${index + 1}. ${channel.name}`, 24), `channel_toggle|${channel.id}|${safePage}`, {
+        emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+        style: activeStyle,
       }),
-      [
-        inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh }),
-        inlineBtn("Догнать чаты", "channels:catchup", {
-          emojiId: PREMIUM_EMOJI.robot,
-          style: "primary",
-        }),
-      ],
-      [
-        inlineBtn("Включить все", "channels:all_on", {
-          emojiId: PREMIUM_EMOJI.check,
-          style: "success",
-        }),
-        inlineBtn("Снять все", "channels:all_off", {
-          emojiId: PREMIUM_EMOJI.cross,
-          style: "danger",
-        }),
-      ],
-    ],
-  };
+      inlineBtn("ℹ️", `channel_info|${channel.id}`, { style: activeStyle }),
+      inlineBtn(COUNTRY_LABELS[channel.country] ?? channel.country, `channel_country|${channel.id}`, {
+        emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
+        style: activeStyle,
+      }),
+      inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 10), `channel_bank|${channel.id}`, {
+        emojiId: PREMIUM_EMOJI.openFolder,
+        style: activeStyle,
+      }),
+    ];
+  });
+
+  if (totalPages > 1) {
+    const nav: InlineKeyboardButton[] = [];
+    if (safePage > 0) {
+      nav.push(inlineBtn("◀", `channels:page:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }));
+    }
+    nav.push(inlineBtn(`${safePage + 1}/${totalPages}`, "channels:noop", { emojiId: PREMIUM_EMOJI.chart }));
+    if (safePage < totalPages - 1) {
+      nav.push(inlineBtn("▶", `channels:page:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }));
+    }
+    rows.push(nav);
+  }
+
+  rows.push([
+    inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh }),
+    inlineBtn("Догнать чаты", "channels:catchup", {
+      emojiId: PREMIUM_EMOJI.robot,
+      style: "primary",
+    }),
+  ]);
+  rows.push([
+    inlineBtn("Включить все", "channels:all_on", {
+      emojiId: PREMIUM_EMOJI.check,
+      style: "success",
+    }),
+    inlineBtn("Снять все", "channels:all_off", {
+      emojiId: PREMIUM_EMOJI.cross,
+      style: "danger",
+    }),
+  ]);
+
+  return { inline_keyboard: rows };
 }
 
 export function buildCountryKeyboard(channelId: string): ReplyMarkup {
