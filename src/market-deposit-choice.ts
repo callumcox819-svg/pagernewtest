@@ -58,7 +58,7 @@ export function isCustomMarketDepositAmount(text: string, rules: CustomDepositRu
   const bareMin = rules.bareMin ?? rules.min;
 
   const bareAmountMatch = compact.match(
-    /^(\d{1,3}(?:[.,]\d{3})*|\d+)(?:zmw|kwacha|k|clp|pesos?|cfa|frs?|f|fc)?\.?$/i,
+    /^(\d{1,3}(?:[.,]\d{3})*|\d+)(?:zmw|kwacha|k|clp|pesos?|cfa|frs?|f|fc|mga|ariary|ar)?\.?$/i,
   );
   if (bareAmountMatch) {
     const amount = parseCompactAmount(compact);
@@ -77,9 +77,12 @@ export function isCustomMarketDepositAmount(text: string, rules: CustomDepositRu
   }
 
   if (wordCount <= 14 && (hasIntent || hasCurrency) && /\d/.test(t)) {
-    const match = t.match(/\b(\d{1,3}(?:[.,]\d{3})*|\d+)\s*(?:zmw|kwacha|k|clp|pesos?|cfa|frs?|f|fc)?\b/i);
+    const match = t.match(
+      /\b(\d{1,3}(?:[.,]\d{3})*|\d+)\s*(?:zmw|kwacha|k|clp|pesos?|cfa|frs?|f|fc|mga|ariary|ar)?\b|(?:^|[^\d])(\d{3,6})(?:mga|ariary|ar)\b/i,
+    );
     if (match) {
-      const amount = parseCompactAmount(match[1].replace(/[^\d]/g, ""));
+      const rawAmount = (match[1] || match[2] || "").replace(/[^\d]/g, "");
+      const amount = parseCompactAmount(rawAmount);
       if (amount !== null && amountInRange(amount, rules)) {
         return true;
       }

@@ -27,9 +27,9 @@ export const MG_CUSTOM_DEPOSIT_RULES: CustomDepositRules = {
   min: 500,
   max: 500_000,
   bareMin: 800,
-  currencyPattern: /\b(mga|ariary|ar)\b/i,
+  currencyPattern: /(?:\b(?:mga|ariary)\b)|(?:\d\s*(?:mga|ariary|ar)\b)|(?:^|[^a-z])ar(?:[^a-z]|$)/i,
   depositIntentPattern:
-    /\b(deposit|depot|start with|begin with|invest|put in|with|can i start|want to start|ready to start|mets|mettre|investir|avec|pour|commencer)\b/i,
+    /\b(deposit|depot|start with|begin with|invest|put in|with|can i start|want to start|ready to start|mets|mettre|investir|avec|pour|commencer|prefere|choisir|maintenant)\b/i,
 };
 
 /** JS `\b` breaks on accented French (é is non-word) — always match on folded text. */
@@ -182,7 +182,7 @@ export function wantsRegistrationLink(text: string): boolean {
   return FR_LINK_ASK.test(t) || customerRequestsRegistrationMaterials(text);
 }
 
-/** Pick from 03_mga_table: «Le premier», «2», «8000 MGA», «le 3ème», etc. */
+/** Pick from 03_mga_table: «Le premier», «2», «8000 MGA», «4000ar», etc. */
 export function isMgOfferTableChoice(text: string): boolean {
   const raw = (text || "").trim();
   if (!raw) {
@@ -208,27 +208,34 @@ export function isMgOfferTableChoice(text: string): boolean {
     return true;
   }
   if (
-    /\b(je choisis|je prends|je veux|choisis|prends|celui|celle)\b/i.test(t) &&
-    /\b(1|2|3|4|premier|premiere|deuxieme|second|troisieme|quatrieme|4000|8000|15000|30000)\b/i.test(t)
+    /\b(je choisis|je prends|je veux|je prefere|prefere|choisis|prends|celui|celle)\b/i.test(t) &&
+    /(?:^|[^\d])(4000|8000|15000|30000|1|2|3|4)(?:[^\d]|$)/i.test(t)
   ) {
     return true;
   }
   return isMgDepositAmountChoice(raw);
 }
 
+/** Table amounts: «4000 MGA», «4000ar», «8 000» — glued currency OK (JS `\b` breaks on 4000ar). */
 export function isMgDepositAmountChoice(text: string): boolean {
-  const t = normalizeDepositText(text);
-  if (!t) {
+  const folded = normalizeMgText(normalizeDepositText(text));
+  if (!folded) {
     return false;
   }
-  const folded = normalizeMgText(t);
-  if (
-    /\b(4000|8000|15000|30000)\b/.test(folded) &&
-    (/\bmga\b/.test(folded) ||
-      /\b(deposit|depot|choisir|prefere|celui|celle)\b/i.test(folded) ||
-      folded.length < 40)
-  ) {
-    return true;
+  // Optional space before mga/ar/ariary; no word-boundary required after digits.
+  const hasTableAmount =
+    /(?:^|[^\d])(4\s*000|8\s*000|15\s*000|30\s*000|4000|8000|15000|30000)(?:\s*(?:mga|ariary|ar))?(?![0-9])/i.test(
+      folded,
+    );
+  if (hasTableAmount) {
+    if (
+      /(?:mga|ariary|(?:^|[^a-z])ar(?:[^a-z]|$))/i.test(folded) ||
+      /(?:4000|8000|15000|30000|4\s*000|8\s*000|15\s*000|30\s*000)\s*(?:mga|ariary|ar)/i.test(folded) ||
+      /\b(deposit|depot|choisir|prefere|celui|celle|maintenant|veux|prends|prend|mets)\b/i.test(folded) ||
+      folded.length < 56
+    ) {
+      return true;
+    }
   }
   return isCustomMarketDepositAmount(text, MG_CUSTOM_DEPOSIT_RULES);
 }
