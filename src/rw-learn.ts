@@ -113,13 +113,17 @@ export function resolveWorkerCountryForChannel(
   savedCountry?: WorkerCountry,
   yamlCountry?: WorkerCountry,
 ): WorkerCountry {
+  // Operator override always wins (e.g. Tchouameni channel set to MG manually).
+  if (savedCountry) {
+    return savedCountry;
+  }
   if (isClChannelName(channelName)) {
     return "CL";
   }
-  if (isMgChannelName(channelName) && !savedCountry) {
+  if (isMgChannelName(channelName)) {
     return "MG";
   }
-  return savedCountry ?? yamlCountry ?? defaultCountryForChannelName(channelName);
+  return yamlCountry ?? defaultCountryForChannelName(channelName);
 }
 
 export function defaultCountryForChannelName(name: string): WorkerCountry {

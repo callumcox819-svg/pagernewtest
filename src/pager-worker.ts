@@ -81,6 +81,7 @@ import {
   shouldQueueCmConversation,
   shouldQueueClConversation,
   shouldQueueZmConversation,
+  shouldQueueMgConversation,
   shouldSkipConversationBotSpokeLast,
   isCatchUpReadActive,
   shouldQueueCatchUpConversation,
@@ -1030,7 +1031,7 @@ async function buildWorkQueue(
         if (isZm && !shouldQueueZmConversation(conv)) {
           continue;
         }
-        if (isMg && !shouldQueueZmConversation(conv)) {
+        if (isMg && !shouldQueueMgConversation(conv)) {
           continue;
         }
         if (isRw && !shouldQueueZmConversation(conv)) {
@@ -1057,8 +1058,8 @@ async function buildWorkQueue(
             : isZm
               ? shouldQueueZmConversation(conv)
               : isMg
-                ? shouldQueueZmConversation(conv)
-              : isRw
+                ? shouldQueueMgConversation(conv)
+                : isRw
                 ? shouldQueueZmConversation(conv)
                 : hasUnreadMarkers(conv) ||
                 isIncomingDirection(conv.lastMessageDirection) ||
@@ -1127,7 +1128,7 @@ async function buildWorkQueue(
         continue;
       }
     } else if (runtime?.runtime.country === "MG") {
-      if (!shouldQueueZmConversation(conv) && !catchUpEligible) {
+      if (!shouldQueueMgConversation(conv) && !catchUpEligible) {
         continue;
       }
     } else if (runtime?.runtime.country === "RW") {

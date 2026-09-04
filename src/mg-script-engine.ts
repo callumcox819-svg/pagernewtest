@@ -440,13 +440,8 @@ export function resolveMgFunnelScripts(
   }
 
   if (!introSent) {
-    if (
-      intent === "interested" ||
-      signal ||
-      intent === "question" ||
-      isGreeting(t) ||
-      hasUsableFollowUp(t)
-    ) {
+    // First touch: any customer text/image starts the MG funnel (declined already returned above).
+    if (t || options?.hasImage || options?.messageReaction) {
       return ["01_intro"];
     }
     return [];

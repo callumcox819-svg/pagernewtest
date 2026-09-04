@@ -32,11 +32,11 @@ export const MG_CUSTOM_DEPOSIT_RULES: CustomDepositRules = {
 };
 
 const INTERESTED =
-  /\b(intéressé|interesse|interessé|ça m'intéresse|ca m'interesse|dis[- ]moi|explique|je veux|interested|tell me more)\b/i;
+  /\b(intéressé|interesse|interessé|intéresse|interesse|ça m'intéresse|ca m'interesse|cela m'intéresse|cela m'interesse|dis[- ]moi|explique|je veux|j'aimerais|aimerais|en savoir plus|interested|tell me more|inscri)\b/i;
 const POSITIVE =
   /\b(oui|ouais|ok|okay|okey|d'accord|daccord|dac|bien|super|parfait|merci|yes|yeah|yep|sure|continue|vas[- ]y)\b/i;
 const READY =
-  /\b(je suis prêt|je suis prete|prêt|prete|ready|on commence|allons[- ]y|je suis partant|c'est bon)\b/i;
+  /\b(je suis prêt|je suis prete|prêt|prete|ready|on commence|allons[- ]y|je suis partant|c'est bon|j'aimerais inscri)\b/i;
 const GREETING = /^(salut|bonjour|bonsoir|hey|hello|hi|yo)([\s,!.]|$)/i;
 const JOINED =
   /\b(je me suis inscrit|inscrit|inscription (faite|terminée|termine)|j'ai créé|j ai cree|account created|registered)\b/i;

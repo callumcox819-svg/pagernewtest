@@ -305,6 +305,17 @@ export function shouldQueueClConversation(conv: PagerConversation): boolean {
   return shouldQueueCmConversation(conv);
 }
 
+/** MG: prioritize «Без статусу» unread / customer-last even if ghost-badge rules would skip. */
+export function shouldQueueMgConversation(conv: PagerConversation): boolean {
+  if (
+    isNoStatusConversation(conv) &&
+    (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))
+  ) {
+    return true;
+  }
+  return shouldQueueCmConversation(conv);
+}
+
 /**
  * Thread already ends with our reply — do not run scripts/AI again until the customer writes.
  * With a stale unread badge, also skip when we already delivered after the last customer line.
