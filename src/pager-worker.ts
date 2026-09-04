@@ -3590,7 +3590,12 @@ async function processMgConversation(
   }
   }
 
-  if (!skipEarlySupportAi) {
+  // Funnel scripts own the thread until explain (+reg) are done — do not let AI fill gaps.
+  const mgFunnelBlocksEarlyAi =
+    mgScriptSentInHistory(outgoingTexts, "01_intro") &&
+    !mgExplainScriptsSentInHistory(outgoingTexts);
+
+  if (!skipEarlySupportAi && !mgFunnelBlocksEarlyAi) {
     const aiHandledEarly = await tryRunAiAgentTurn(
       deps,
       state,
@@ -3618,7 +3623,8 @@ async function processMgConversation(
   }
 
   if (
-    await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+    !mgFunnelBlocksEarlyAi &&
+    (await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
       country: "CM",
       customerText: latestCustomerText,
       recentCustomerTexts,
@@ -3627,7 +3633,7 @@ async function processMgConversation(
       intent,
       scriptKeys,
       support,
-    })
+    }))
   ) {
     return true;
   }

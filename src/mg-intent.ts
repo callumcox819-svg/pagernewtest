@@ -28,28 +28,39 @@ export const MG_CUSTOM_DEPOSIT_RULES: CustomDepositRules = {
   bareMin: 800,
   currencyPattern: /\b(mga|ariary|ar)\b/i,
   depositIntentPattern:
-    /\b(deposit|depot|dépôt|start with|begin with|invest|put in|with|can i start|want to start|ready to start|mets|mettre|investir|avec|pour|commencer)\b/i,
+    /\b(deposit|depot|start with|begin with|invest|put in|with|can i start|want to start|ready to start|mets|mettre|investir|avec|pour|commencer)\b/i,
 };
 
+/** JS `\b` breaks on accented French (é is non-word) — always match on folded text. */
+function normalizeMgText(text: string): string {
+  return (text || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/['’']/g, "'")
+    .replace(/\s+/g, " ");
+}
+
 const INTERESTED =
-  /\b(intéressé|interesse|interessé|intéresse|interesse|ça m'intéresse|ca m'interesse|cela m'intéresse|cela m'interesse|dis[- ]moi|explique|je veux|j'aimerais|aimerais|en savoir plus|interested|tell me more|inscri)\b/i;
+  /\b(interesse|interessé|ca m'interesse|cela m'interesse|dis[- ]moi|explique|je veux|j'aimerais|aimerais|en savoir plus|interested|tell me more|inscri)\b/i;
 const POSITIVE =
   /\b(oui|ouais|ok|okay|okey|d'accord|daccord|dac|bien|super|parfait|merci|yes|yeah|yep|sure|continue|vas[- ]y)\b/i;
 const READY =
-  /\b(je suis prêt|je suis prete|prêt|prete|ready|on commence|allons[- ]y|je suis partant|c'est bon|j'aimerais inscri)\b/i;
+  /\b(je suis pret|je suis prete|pret|prete|ready|on commence|allons[- ]y|je suis partant|c'est bon|j'aimerais inscri)\b/i;
 const GREETING = /^(salut|bonjour|bonsoir|hey|hello|hi|yo)([\s,!.]|$)/i;
 const JOINED =
-  /\b(je me suis inscrit|inscrit|inscription (faite|terminée|termine)|j'ai créé|j ai cree|account created|registered)\b/i;
-const DECLINED = /\b(pas intéressé|pas interesse|non merci|stop|arnaque|scam|laisse[- ]moi)\b/i;
+  /\b(je me suis inscrit|inscrit|inscription (faite|terminee|termine)|j'ai cree|j ai cree|account created|registered)\b/i;
+const DECLINED = /\b(pas interesse|non merci|stop|arnaque|scam|laisse[- ]moi)\b/i;
 const BARE_DECLINED = /^(non|nah|nope|jamais|rien|non merci)\.?!*$/i;
 const DEPOSIT_DONE =
-  /\b(j'ai (fait|déposé|depose)|dépôt (fait|terminé|termine)|deposit done|deposited|après (le )?dépôt)\b/i;
+  /\b(j'ai (fait|depose)|depot (fait|termine)|deposit done|deposited|apres (le )?depot)\b/i;
 const GAME_ID = /\b(17\d{6,}|16\d{6,}|identifiant\s*\d+|id\s*\d+)\b/i;
 const POSITIVE_EMOJI = /^[\s👍👌✅🔥❤️🙏😊🙂]+$/u;
 const FR_LINK_ASK =
-  /\b(?:envoie|envoyer|envoyez|donne|donner|besoin|veux|veut|où|ou).{0,28}\b(?:lien|link)\b|\b(?:lien|link)\b.{0,28}\b(?:svp|s'il|sil|please|inscription|register)\b|\blien\s+d['']inscription\b/i;
+  /\b(?:envoie|envoyer|envoyez|donne|donner|besoin|veux|veut|ou).{0,28}\b(?:lien|link)\b|\b(?:lien|link)\b.{0,28}\b(?:svp|s'il|sil|please|inscription|register)\b|\blien\s+d['']inscription\b/i;
 const REGISTRATION_HELP =
-  /\b(code promo|quel code|quel promo|créer (le )?compte|creer (le )?compte|comment (m')?inscri|comment s'inscri|prochaine étape|prochaine etape|quoi faire)\b/i;
+  /\b(code promo|quel code|quel promo|creer (le )?compte|comment (m')?inscri|comment s'inscri|prochaine etape|quoi faire)\b/i;
 
 export function classifyMgIntent(
   text: string,
@@ -59,7 +70,8 @@ export function classifyMgIntent(
     messageReaction?: string;
   },
 ): MgIntent {
-  const t = (text || "").trim();
+  const raw = (text || "").trim();
+  const t = normalizeMgText(raw);
   if (!t && options?.hasImage) {
     return "image_only";
   }
@@ -87,10 +99,10 @@ export function classifyMgIntent(
   if (INTERESTED.test(t)) {
     return "interested";
   }
-  if (POSITIVE.test(t) || POSITIVE_EMOJI.test(t) || isPositiveMessageReaction(options?.messageReaction)) {
+  if (POSITIVE.test(t) || POSITIVE_EMOJI.test(raw) || isPositiveMessageReaction(options?.messageReaction)) {
     return "positive";
   }
-  if (/\?/.test(t) || /^(comment|pourquoi|c'est quoi|cest quoi|quoi)/i.test(t)) {
+  if (/\?/.test(raw) || /^(comment|pourquoi|c'est quoi|cest quoi|quoi)/i.test(t)) {
     return "question";
   }
   if (GREETING.test(t)) {
@@ -100,45 +112,45 @@ export function classifyMgIntent(
 }
 
 export function isFunnelPositiveReaction(text: string, _effectiveStep: number): boolean {
-  const t = (text || "").trim();
-  return POSITIVE.test(t) || READY.test(t) || POSITIVE_EMOJI.test(t) || INTERESTED.test(t);
+  const raw = (text || "").trim();
+  const t = normalizeMgText(raw);
+  return POSITIVE.test(t) || READY.test(t) || POSITIVE_EMOJI.test(raw) || INTERESTED.test(t);
 }
 
 export function isReadyForRegistration(text: string): boolean {
-  const t = (text || "").trim();
+  const t = normalizeMgText(text);
   return (
     READY.test(t) ||
-    customerAgreedAfterOfferTable(t) ||
-    isMgDepositAmountChoice(t) ||
-    /\b(prêt|prete|ready|commencer|on y va|c'est parti)\b/i.test(t)
+    customerAgreedAfterOfferTable(text) ||
+    isMgDepositAmountChoice(text) ||
+    /\b(pret|prete|ready|commencer|on y va|c'est parti)\b/i.test(t)
   );
 }
 
 export function isRegistrationConfirmed(text: string): boolean {
-  const t = (text || "").trim().toLowerCase();
+  const t = normalizeMgText(text);
   return (
     JOINED.test(t) ||
-    /\b(déjà inscrit|deja inscrit|j'ai (fini|fait|inscrit|enregistr)|c'est (fait|bon)|je suis inscrit|terminé|termine)\b/i.test(
-      t,
-    )
+    /\b(deja inscrit|j'ai (fini|fait|inscrit|enregistr)|c'est (fait|bon)|je suis inscrit|termine)\b/i.test(t)
   );
 }
 
 export function isRegistrationHelpRequest(text: string): boolean {
-  const t = (text || "").trim();
-  return REGISTRATION_HELP.test(t) || customerRequestsRegistrationMaterials(t);
+  const t = normalizeMgText(text);
+  return REGISTRATION_HELP.test(t) || customerRequestsRegistrationMaterials(text);
 }
 
 export function isMgRegistrationAccountQuestion(text: string): boolean {
-  const t = (text || "").trim().toLowerCase();
+  const raw = (text || "").trim();
+  const t = normalizeMgText(raw);
   return (
     /\b(compte|account|inscription|register|email|e-mail|chrome|navigateur|code promo|mad778)\b/i.test(t) &&
-    (/\?/.test(t) || /\b(comment|aide|help|problème|probleme)\b/i.test(t))
+    (/\?/.test(raw) || /\b(comment|aide|help|probleme)\b/i.test(t))
   );
 }
 
 export function isBarePostLinkAcknowledgment(text: string, intent: MgIntent): boolean {
-  const t = (text || "").trim();
+  const t = normalizeMgText(text);
   if (!t) {
     return false;
   }
@@ -151,18 +163,18 @@ export function isBarePostLinkAcknowledgment(text: string, intent: MgIntent): bo
 }
 
 export function wantsDetailsAfterIntro(text: string): boolean {
-  const t = (text || "").trim();
+  const t = normalizeMgText(text);
   return (
     INTERESTED.test(t) ||
     POSITIVE.test(t) ||
     READY.test(t) ||
-    /\b(détail|detail|explique|comment|plus|suite|continue)\b/i.test(t)
+    /\b(detail|explique|comment|plus|suite|continue)\b/i.test(t)
   );
 }
 
 export function wantsRegistrationLink(text: string): boolean {
-  const t = (text || "").trim();
-  return FR_LINK_ASK.test(t) || customerRequestsRegistrationMaterials(t);
+  const t = normalizeMgText(text);
+  return FR_LINK_ASK.test(t) || customerRequestsRegistrationMaterials(text);
 }
 
 export function isMgDepositAmountChoice(text: string): boolean {

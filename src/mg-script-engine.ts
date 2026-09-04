@@ -448,7 +448,8 @@ export function resolveMgFunnelScripts(
   }
 
   if (!explainSent) {
-    if (wantsExplain(t, intent, effectiveStep) || signal || intent === "interested") {
+    // After intro, any real customer turn gets scripts 02+03 (AI must not fill this gap).
+    if (wantsExplain(t, intent, effectiveStep) || signal || t || options?.hasImage || options?.messageReaction) {
       return ["02_how_it_works", "03_mga_table"];
     }
     return [];
