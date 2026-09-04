@@ -3536,27 +3536,12 @@ async function processMgConversation(
   }
 
   const statusTarget = mgStatusMoveTarget(sentScriptKeys);
-  if (statusTarget) {
-    const statusId = findZmStatusId(currentState, statusTarget);
-    const operatorId = await client.probeOperatorUserId();
-    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
-    if (statusId && operatorId && currentStatusId !== statusId) {
-      try {
-        await client.patchConversationStatus(convId, statusId, operatorId);
-        console.log(
-          `Pager worker: MG ${convId.slice(0, 8)} status -> ${statusTarget === "registration_complete" ? "registration" : "in progress registration"}`,
-        );
-        if (statusTarget === "in_progress_registration") {
-          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
-        }
-      } catch (error) {
-        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
-      }
-    }
-  }
-
-  if (sentScriptKeys.includes("05_link") || mgRegLinkSentInHistory(coveredOutgoing)) {
-    await maybeEnsureInProgressAfterRegLink(
+  if (
+    statusTarget === "in_progress_registration" ||
+    sentScriptKeys.includes("05_link") ||
+    mgRegLinkSentInHistory(coveredOutgoing)
+  ) {
+    const moved = await tryMoveConversationToInProgressRegistration(
       deps,
       currentState,
       client,
@@ -3564,9 +3549,32 @@ async function processMgConversation(
       convId,
       runtime.channelId,
       "MG",
-      coveredOutgoing,
-      mgRegLinkSentInHistory,
     );
+    if (!moved) {
+      await maybeEnsureInProgressAfterRegLink(
+        deps,
+        currentState,
+        client,
+        conv,
+        convId,
+        runtime.channelId,
+        "MG",
+        coveredOutgoing,
+        mgRegLinkSentInHistory,
+      );
+    }
+  } else if (statusTarget === "registration_complete") {
+    const statusId = findZmStatusId(currentState, statusTarget);
+    const operatorId = await client.probeOperatorUserId();
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+    if (statusId && operatorId && currentStatusId !== statusId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(`Pager worker: MG ${convId.slice(0, 8)} status -> registration`);
+      } catch (error) {
+        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
   }
 
   await patchConversationState(deps.stateStore, state.chatId, convId, {
@@ -4441,17 +4449,20 @@ function scoreInProgressStatusFolderName(name: string): number {
   if (/чекаю\s*id|waiting.*id|жду\s*айди|attente.*id/i.test(normalized)) {
     return -1;
   }
+  if (isZmInProgressRegistrationStatusName(normalized)) {
+    return 100;
+  }
   if (
-    /в процес[се]*\s*рег|процес.*рег|in registration process|en cours.*inscri|registration process/i.test(
+    /в процес[сеіi]*\s*рег|процес.*рег|in registration process|en cours.*inscri|registration process/i.test(
       normalized,
     )
   ) {
     return 100;
   }
-  if (/^в процес[се]*$|^in progress$|^en cours$/i.test(normalized)) {
+  if (/^в процес[сеіi]*$|^in progress$|^en cours$/i.test(normalized)) {
     return 90;
   }
-  if (/в процес|у процес|процес|process|рега|реєстраці|не заверш|en cours/i.test(normalized)) {
+  if (/в процес|у процес|процес|process|рега|реєстраці|регистрац|не заверш|en cours/i.test(normalized)) {
     return 50;
   }
   return 0;
@@ -4516,7 +4527,12 @@ async function retryPendingInProgressMoves(
     if (convState.inProgressEnteredAt?.trim() || convState.pendingInProgressMoveAt?.trim()) {
       continue;
     }
-    if (convState.lastReplyRole !== "06_link" && convState.lastReplyRole !== "07_chrome") {
+    if (
+      convState.lastReplyRole !== "06_link" &&
+      convState.lastReplyRole !== "07_chrome" &&
+      convState.lastReplyRole !== "05_link" &&
+      convState.lastReplyRole !== "05_registration"
+    ) {
       continue;
     }
     const lastReplyMs = Date.parse(convState.lastReplyAt ?? "");

@@ -174,7 +174,13 @@ export function isFunnelFollowUpFolderName(name: string): boolean {
 
 export function isZmInProgressRegistrationStatusName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
-  return /в процес[сіi].*реєстраці|процес[іi].*реєстраці|in registration process/i.test(normalized);
+  // UA: «В процесі реєстрації» · RU: «В процессе регистрации» · EN
+  return (
+    /в\s*процес[сеіi]*.{0,8}ре(єстр|гистр|еєстр|г[іиi]стр)/i.test(normalized) ||
+    /у\s*процес[сеіi]*.{0,8}ре(єстр|гистр)/i.test(normalized) ||
+    /процес[сеіi]*.{0,8}ре(єстр|гистр)/i.test(normalized) ||
+    /in\s*registration\s*process|registration\s*process|en\s*cours.*inscri/i.test(normalized)
+  );
 }
 
 export function isZmRegistrationCompleteStatusName(name: string): boolean {
