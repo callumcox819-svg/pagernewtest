@@ -12,7 +12,13 @@ import {
   statusMapForCountry,
 } from "./config.js";
 import { decideNextAction } from "./decision-engine.js";
-import { runAiAgentTextTurn, runAiAgentVisionTurn, detectImageMimeType, customerWantsSupportAgentReply } from "./ai-agent.js";
+import {
+  customerWantsSupportAgentReply,
+  isComplexCustomerMessage,
+  runAiAgentTextTurn,
+  runAiAgentVisionTurn,
+  detectImageMimeType,
+} from "./ai-agent.js";
 import { RW_AI_COUNTRY } from "./ai-country-language.js";
 import {
   cmVisionExtractToCombinedText,
@@ -20,7 +26,7 @@ import {
 } from "./ai-assist.js";
 import { extractCmClientLoginId17 } from "./cm-proof.js";
 import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
-import { isLinkAccessProblemMessage, isCustomerClarificationMessage } from "./customer-clarity.js";
+import { isLinkAccessProblemMessage, isCustomerClarificationMessage, isScamOrTrustQuestion } from "./customer-clarity.js";
 import {
   defaultCountryForChannelName,
   isClChannelName,
@@ -180,6 +186,7 @@ import {
   isRegistrationHelpRequest as mgIsRegistrationHelpRequest,
   wantsRegistrationLink as mgWantsRegistrationLink,
   isMgDepositAmountChoice,
+  isMgOfferTableChoice,
 } from "./mg-intent.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
 import {
@@ -3407,7 +3414,11 @@ async function processMgConversation(
     (mgWantsRegistrationLink(latestCustomerText) ||
       mgIsRegistrationHelpRequest(latestCustomerText) ||
       customerAgreedAfterOfferTable(latestCustomerText) ||
-      isMgDepositAmountChoice(latestCustomerText))
+      isMgOfferTableChoice(latestCustomerText) ||
+      isMgDepositAmountChoice(latestCustomerText) ||
+      intent === "interested" ||
+      intent === "positive" ||
+      intent === "ready")
   ) {
     scriptKeys = ["04_registration", "05_link"];
   }
@@ -3590,10 +3601,16 @@ async function processMgConversation(
   }
   }
 
-  // Funnel scripts own the thread until explain (+reg) are done — do not let AI fill gaps.
-  const mgFunnelBlocksEarlyAi =
+  // Pre-reg funnel: templates own positive turns; AI only for complex/scam/link issues.
+  const mgPreRegFunnel =
     mgScriptSentInHistory(outgoingTexts, "01_intro") &&
-    !mgExplainScriptsSentInHistory(outgoingTexts);
+    !mgRegLinkSentInHistory(outgoingTexts);
+  const mgComplexAiOk =
+    isComplexCustomerMessage(latestCustomerText) ||
+    isScamOrTrustQuestion(latestCustomerText) ||
+    isLinkAccessProblemMessage(latestCustomerText) ||
+    isCustomerClarificationMessage(latestCustomerText);
+  const mgFunnelBlocksEarlyAi = mgPreRegFunnel && !mgComplexAiOk;
 
   if (!skipEarlySupportAi && !mgFunnelBlocksEarlyAi) {
     const aiHandledEarly = await tryRunAiAgentTurn(

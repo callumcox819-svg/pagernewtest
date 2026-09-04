@@ -18,6 +18,7 @@ import {
   isMgRegistrationAccountQuestion,
   isBarePostLinkAcknowledgment,
   isMgDepositAmountChoice,
+  isMgOfferTableChoice,
   wantsDetailsAfterIntro,
   wantsRegistrationLink,
 } from "./mg-intent.js";
@@ -353,8 +354,11 @@ function wantsRegistrationBundle(text: string, intent: MgIntent, effectiveStep: 
     wantsRegistrationLink(text) ||
     isRegistrationHelpRequest(text) ||
     customerAgreedAfterOfferTable(text) ||
+    isMgOfferTableChoice(text) ||
     isMgDepositAmountChoice(text) ||
     intent === "ready" ||
+    intent === "interested" ||
+    intent === "positive" ||
     (positiveSignal(text, intent, effectiveStep) && effectiveStep >= 2)
   );
 }
@@ -456,6 +460,7 @@ export function resolveMgFunnelScripts(
   }
 
   if (!linkSent) {
+    // After the MGA table: tier pick / oui / prêt → registration scripts (not AI).
     if (wantsRegistrationBundle(t, intent, effectiveStep)) {
       return ["04_registration", "05_link"];
     }

@@ -16,6 +16,8 @@ import {
 import { isTrollDetectionCountry, shouldIgnoreTrollCustomer } from "./customer-troll.js";
 import { explainScriptsSentInHistory as zmExplainScriptsSentInHistory } from "./zm-script-engine.js";
 import { isZmDepositAmountChoice } from "./zm-intent.js";
+import { explainScriptsSentInHistory as mgExplainScriptsSentInHistory } from "./mg-script-engine.js";
+import { isMgOfferTableChoice } from "./mg-intent.js";
 import {
   customerAgreedAfterOfferTable,
   customerRequestsRegistrationMaterials,
@@ -201,6 +203,26 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
     !ctx.support?.active &&
     isZmDepositAmountChoice(ctx.customerText.trim()) &&
     zmExplainScriptsSentInHistory(ctx.recentOutgoingTexts ?? [])
+  ) {
+    return false;
+  }
+  // MG uses CM language routing; block AI on table picks after the MGA offer.
+  if (
+    ctx.country === "CM" &&
+    !ctx.support?.active &&
+    (isMgOfferTableChoice(ctx.customerText.trim()) || isDepositTierChoice(ctx.customerText.trim())) &&
+    mgExplainScriptsSentInHistory(ctx.recentOutgoingTexts ?? [])
+  ) {
+    return false;
+  }
+  // Pre-support: positive / interested funnel replies are scripts, not the agent.
+  if (
+    !ctx.support?.active &&
+    ["interested", "positive", "ready"].includes(ctx.intent) &&
+    !isComplexCustomerMessage(text) &&
+    !isScamOrTrustQuestion(text) &&
+    !isLinkAccessProblemMessage(text) &&
+    !isCustomerClarificationMessage(text)
   ) {
     return false;
   }
