@@ -24,6 +24,7 @@ import { isLinkAccessProblemMessage, isCustomerClarificationMessage } from "./cu
 import {
   defaultCountryForChannelName,
   isClChannelName,
+  isMgChannelName,
   resolveWorkerCountryForChannel,
   type WorkerCountry,
 } from "./rw-learn.js";
@@ -159,6 +160,26 @@ import {
   depositSentInHistory as zmDepositSentInHistory,
   gameIdSentInHistory,
 } from "./zm-script-engine.js";
+import {
+  classifyMgMessage,
+  collectOutgoingTexts as collectMgOutgoingTexts,
+  explainScriptsSentInHistory as mgExplainScriptsSentInHistory,
+  funnelStepFromScriptGaps as mgFunnelStepFromScriptGaps,
+  inferStepFromThread as mgInferStepFromThread,
+  limitMgScriptsForCustomerTurn,
+  mgAllowsMultiSend,
+  MG_FOLDER_NAME_HINTS,
+  mgScriptSentInHistory,
+  mgStatusMoveTarget,
+  regLinkSentInHistory as mgRegLinkSentInHistory,
+  depositSentInHistory as mgDepositSentInHistory,
+  resolveMgFunnelScripts,
+} from "./mg-script-engine.js";
+import {
+  isRegistrationHelpRequest as mgIsRegistrationHelpRequest,
+  wantsRegistrationLink as mgWantsRegistrationLink,
+  isMgDepositAmountChoice,
+} from "./mg-intent.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
 import {
   looksLikeZmDepositBalanceScreenshot,
@@ -224,6 +245,7 @@ import {
 import { buildEgLinkOnlyMessage, buildEgRegistrationOnlyMessage, loadLocalEgScript, shouldBlockEgBareLinkSend } from "./eg-local-scripts.js";
 import { getDeployLabel } from "./telegram-api.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
+import { loadLocalMgScript, mgDefaultRegistrationLink } from "./mg-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveRwTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
 import { customerAgreedAfterOfferTable } from "./funnel-common.js";
@@ -514,7 +536,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
     const country = runtime?.runtime.country;
     const folderIds =
-      country === "EG" || country === "CM" || country === "ZM" || country === "RW" || country === "CL"
+      country === "EG" || country === "CM" || country === "ZM" || country === "RW" || country === "CL" || country === "MG"
         ? resolveChannelEnabledFolderIds(
             enabledFolderIds,
             country,
@@ -546,7 +568,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       item.runtime.country === "CM" ||
       item.runtime.country === "ZM" ||
       item.runtime.country === "RW" ||
-      item.runtime.country === "CL",
+      item.runtime.country === "CL" ||
+      item.runtime.country === "MG",
   )
     ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_UNREAD + INBOX_TOP_CM_FOLLOWUP)
     : 150;
@@ -867,7 +890,8 @@ async function buildWorkQueue(
           runtime.runtime.country !== "EG" &&
           runtime.runtime.country !== "ZM" &&
           runtime.runtime.country !== "RW" &&
-          runtime.runtime.country !== "CL")
+          runtime.runtime.country !== "CL" &&
+          runtime.runtime.country !== "MG")
       ) {
         continue;
       }
@@ -900,7 +924,8 @@ async function buildWorkQueue(
       channel.runtime.country !== "EG" &&
       channel.runtime.country !== "ZM" &&
       channel.runtime.country !== "RW" &&
-      channel.runtime.country !== "CL"
+      channel.runtime.country !== "CL" &&
+      channel.runtime.country !== "MG"
     ) {
       continue;
     }
@@ -908,6 +933,7 @@ async function buildWorkQueue(
     const isCm = channel.runtime.country === "CM";
     const isCl = channel.runtime.country === "CL";
     const isZm = channel.runtime.country === "ZM";
+    const isMg = channel.runtime.country === "MG";
     const isRw = channel.runtime.country === "RW";
     const channelFolderIds = resolveChannelEnabledFolderIds(
       enabledFolderIds,
@@ -946,7 +972,7 @@ async function buildWorkQueue(
         }
 
         if (
-          (isCm || isCl || isZm || isRw || isEg) &&
+          (isCm || isCl || isZm || isMg || isRw || isEg) &&
           isInProgressStatusConversation(conv)
         ) {
           const statusFolders = chatState.operatorSettings?.statusFolders ?? chatState.statusFolders;
@@ -979,7 +1005,7 @@ async function buildWorkQueue(
         if (
           catchUpActive &&
           catchUpAdded < CATCH_UP_INBOX_CAP &&
-          (isCm || isCl || isZm || isRw || isEg) &&
+          (isCm || isCl || isZm || isMg || isRw || isEg) &&
           shouldQueueCatchUpConversation(conv)
         ) {
           if (!selected.has(conv.id)) {
@@ -1004,11 +1030,14 @@ async function buildWorkQueue(
         if (isZm && !shouldQueueZmConversation(conv)) {
           continue;
         }
+        if (isMg && !shouldQueueZmConversation(conv)) {
+          continue;
+        }
         if (isRw && !shouldQueueZmConversation(conv)) {
           continue;
         }
         if (
-          (isCm || isCl || isZm || isEg || isRw) &&
+          (isCm || isCl || isZm || isMg || isEg || isRw) &&
           isOutgoingDirection(conv.lastMessageDirection) &&
           !hasUnreadMarkers(conv)
         ) {
@@ -1027,6 +1056,8 @@ async function buildWorkQueue(
             ? shouldQueueCmConversation(conv)
             : isZm
               ? shouldQueueZmConversation(conv)
+              : isMg
+                ? shouldQueueZmConversation(conv)
               : isRw
                 ? shouldQueueZmConversation(conv)
                 : hasUnreadMarkers(conv) ||
@@ -1043,7 +1074,7 @@ async function buildWorkQueue(
           continue;
         }
 
-        if ((isCm || isCl || isZm || isRw) && followUpAdded < followUpCap) {
+        if ((isCm || isCl || isZm || isMg || isRw) && followUpAdded < followUpCap) {
           const lastAt = resolveLastMessageAt(conv);
           if (
             !isInProgressStatusConversation(conv) ||
@@ -1092,6 +1123,10 @@ async function buildWorkQueue(
         continue;
       }
     } else if (runtime?.runtime.country === "ZM") {
+      if (!shouldQueueZmConversation(conv) && !catchUpEligible) {
+        continue;
+      }
+    } else if (runtime?.runtime.country === "MG") {
       if (!shouldQueueZmConversation(conv) && !catchUpEligible) {
         continue;
       }
@@ -1319,6 +1354,8 @@ async function trySendInProgressRegistrationFollowUp(
         ? collectClOutgoingTexts(messages)
         : country === "ZM"
           ? collectZmOutgoingTexts(messages)
+          : country === "MG"
+            ? collectMgOutgoingTexts(messages)
           : country === "EG"
             ? collectEgOutgoingTexts(messages)
             : collectRwOutgoingTexts(messages);
@@ -1562,6 +1599,15 @@ async function processConversation(
       `Pager worker: ${runtime.channelName} is a Chile channel but country=${workerCountry} — routing CL`,
     );
     return processClConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (workerCountry === "MG") {
+    return processMgConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (isMgChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: ${runtime.channelName} is a Madagascar channel but country=${workerCountry} — routing MG`,
+    );
+    return processMgConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (channel.country === "CM") {
     return processCmConversation(deps, state, client, workingConv, runtime, channel);
@@ -1889,6 +1935,12 @@ async function processCmConversation(
       `Pager worker: CM handler blocked for Chile channel ${runtime.channelName} — routing CL`,
     );
     return processClConversation(deps, state, client, conv, runtime, channel);
+  }
+  if (isMgChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: CM handler blocked for Madagascar channel ${runtime.channelName} — routing MG`,
+    );
+    return processMgConversation(deps, state, client, conv, runtime, channel);
   }
   const convId = conv.id;
 
@@ -3169,6 +3221,417 @@ async function processZmConversation(
   }
   console.log(
     `Pager worker: skip ${convId.slice(0, 8)} ZM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+  );
+  return false;
+}
+
+/** MG: авто-воронка (локальные скрипты, как ZM). */
+async function processMgConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
+  const convId = conv.id;
+
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  if (!messages.length) {
+    return false;
+  }
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, "CM");
+  if (!lastIncoming) {
+    return false;
+  }
+
+  const operatorUserIdEarly = await client.probeOperatorUserId();
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId: operatorUserIdEarly,
+      country: "CM",
+      catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
+    })
+  ) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} MG — bot_spoke_last (awaiting_customer)`,
+    );
+    return false;
+  }
+
+  const outgoingTexts = collectMgOutgoingTexts(messages);
+  const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const mgNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !mgScriptSentInHistory(outgoingTexts, "01_intro") &&
+    Boolean(latestCustomerText);
+
+  const operatorUserId = operatorUserIdEarly;
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    currentState,
+  );
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const support = buildSupportSnapshot("MG", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: aiFolderEnabled,
+  });
+  const mgInProgressBypass =
+    inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
+    isCustomerClarificationMessage(latestCustomerText);
+
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      client,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      {
+        bypass: mgNewLeadBypass || mgInProgressBypass,
+        operatorUserId,
+        countryLabel: "MG",
+        country: "MG",
+        catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
+      },
+    ))
+  ) {
+    return false;
+  }
+
+  const threadStep = mgInferStepFromThread(messages);
+  const gapStep = mgFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
+  const messageReaction = resolveMessageReaction(lastIncoming);
+  const playbook = getPlaybook(deps.config, channel.country);
+
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
+  if (imageUrl && (mgDepositSentInHistory(outgoingTexts) || mgRegLinkSentInHistory(outgoingTexts))) {
+    const imageHandled = await tryHandleCustomerImage(deps, {
+      state,
+      client,
+      conv,
+      runtime,
+      channel,
+      convState,
+      convId,
+      lastIncoming,
+      text: latestCustomerText,
+      imageUrl,
+      playbook,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      sortedMessages: sorted,
+      operatorUserId,
+    });
+    if (imageHandled) {
+      return true;
+    }
+  }
+
+  let proofKind: import("./config.js").ProofKind | undefined;
+  let proofText = "";
+  if (imageUrl) {
+    try {
+      const image = await client.downloadAttachment(imageUrl);
+      const classification = await classifyProofFromImage(playbook, image, {
+        caption: latestCustomerText,
+        ocrEnabled: deps.env.OCR_ENABLED,
+        ocrLang: ocrLangForCountry(channel.country),
+        country: "CM",
+      });
+      proofKind = classification.proofKind;
+      proofText = classification.combinedText;
+    } catch (error) {
+      console.warn(`MG OCR failed ${convId.slice(0, 8)}:`, formatError(error));
+    }
+  }
+
+  const intent = classifyMgMessage(latestCustomerText, {
+    hasImage: Boolean(imageUrl),
+    funnelStep: effectiveStep,
+    messageReaction,
+  });
+
+  let scriptKeys = resolveMgFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    {
+      hasImage: Boolean(imageUrl),
+      messageReaction,
+      recentCustomerTexts,
+      proofKind,
+      proofText,
+    },
+  );
+  scriptKeys = limitMgScriptsForCustomerTurn(scriptKeys, outgoingTexts);
+  scriptKeys = filterDisabledScriptKeys(scriptKeys);
+  scriptKeys = filterScriptKeysForSupportAgent("MG", scriptKeys, latestCustomerText, support);
+  const skipEarlySupportAi = supportAgentSkipsEarlyAi("MG", scriptKeys, support);
+
+  if (
+    !scriptKeys.length &&
+    mgExplainScriptsSentInHistory(outgoingTexts) &&
+    !mgRegLinkSentInHistory(outgoingTexts) &&
+    (mgWantsRegistrationLink(latestCustomerText) ||
+      mgIsRegistrationHelpRequest(latestCustomerText) ||
+      customerAgreedAfterOfferTable(latestCustomerText) ||
+      isMgDepositAmountChoice(latestCustomerText))
+  ) {
+    scriptKeys = ["04_registration", "05_link"];
+  }
+
+  if (scriptKeys.length) {
+  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "MG", scriptKeys);
+  if (!scriptKeys.length) {
+    console.log(`Pager worker: MG ${convId.slice(0, 8)} — scripts already in thread`);
+  } else {
+  await tryTakeConversationForProcessing(client, convId, "MG");
+
+  console.log(
+    `Pager worker: MG ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+  );
+
+  let sentAny = false;
+  const sentScriptKeys: string[] = [];
+  const allowMultiSend = mgAllowsMultiSend(scriptKeys);
+  const coveredOutgoing = [...outgoingTexts];
+  for (const scriptKey of scriptKeys) {
+    if (mgScriptSentInHistory(coveredOutgoing, scriptKey)) {
+      console.log(
+        `Pager worker: MG ${convId.slice(0, 8)} skip duplicate key=${scriptKey} (already in thread/batch)`,
+      );
+      continue;
+    }
+    let replyText = loadLocalMgScript(scriptKey)?.trim();
+    if (!replyText) {
+      if (scriptKey === "04_registration") {
+        const fallbackText = loadLocalMgScript("04_registration")?.trim();
+        if (fallbackText) {
+          const sent = await client.sendMessageReliable(convId, fallbackText, {
+            channelId: runtime.channelId,
+            conv,
+          });
+          if (sent) {
+            sentAny = true;
+            sentScriptKeys.push(scriptKey);
+            coveredOutgoing.push(fallbackText);
+            await patchConversationState(deps.stateStore, state.chatId, convId, {
+              conversationId: convId,
+              channelId: runtime.channelId,
+              lastCustomerMessageId: lastIncoming.id,
+              lastCustomerMessageAt: lastIncoming.createdAt,
+              lastReplyAt: new Date().toISOString(),
+              lastReplyRole: scriptKey,
+              sendFailures: 0,
+            });
+            await sleep(500);
+          }
+        } else {
+          console.warn(`MG script missing ${convId.slice(0, 8)}: ${scriptKey}`);
+        }
+        continue;
+      }
+      if (scriptKey === "05_link") {
+        const fallbackLink = mgDefaultRegistrationLink();
+        const sent = await client.sendMessageReliable(convId, fallbackLink, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          sentScriptKeys.push(scriptKey);
+          coveredOutgoing.push(fallbackLink);
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            conversationId: convId,
+            channelId: runtime.channelId,
+            lastCustomerMessageId: lastIncoming.id,
+            lastCustomerMessageAt: lastIncoming.createdAt,
+            lastReplyAt: new Date().toISOString(),
+            lastReplyRole: scriptKey,
+            sendFailures: 0,
+          });
+          await sleep(500);
+        }
+        continue;
+      }
+      console.warn(`MG script missing ${convId.slice(0, 8)}: ${scriptKey}`);
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText.trim(), {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      const failures = (convState.sendFailures ?? 0) + 1;
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: failures,
+      });
+      console.error(`Pager worker: MG send failed ${convId.slice(0, 8)} key=${scriptKey}`);
+      return sentAny;
+    }
+    sentAny = true;
+    sentScriptKeys.push(scriptKey);
+    coveredOutgoing.push(replyText.trim());
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
+    await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  const statusTarget = mgStatusMoveTarget(sentScriptKeys);
+  if (statusTarget) {
+    const statusId = findZmStatusId(currentState, statusTarget);
+    const operatorId = await client.probeOperatorUserId();
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+    if (statusId && operatorId && currentStatusId !== statusId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(
+          `Pager worker: MG ${convId.slice(0, 8)} status -> ${statusTarget === "registration_complete" ? "registration" : "in progress registration"}`,
+        );
+        if (statusTarget === "in_progress_registration") {
+          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
+        }
+      } catch (error) {
+        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+
+  if (sentScriptKeys.includes("05_link") || mgRegLinkSentInHistory(coveredOutgoing)) {
+    await maybeEnsureInProgressAfterRegLink(
+      deps,
+      currentState,
+      client,
+      conv,
+      convId,
+      runtime.channelId,
+      "MG",
+      coveredOutgoing,
+      mgRegLinkSentInHistory,
+    );
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
+    funnelStep: Math.max(effectiveStep, scriptKeys.includes("06_deposit") ? 6 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1] ?? scriptKeys[scriptKeys.length - 1],
+    sendFailures: 0,
+  });
+
+  if (
+    await trySupportAgentAfterScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "CM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      sentScriptKeys,
+      support,
+      skipEarlySupportAi,
+    })
+  ) {
+    return true;
+  }
+
+  return true;
+  }
+  }
+
+  if (!skipEarlySupportAi) {
+    const aiHandledEarly = await tryRunAiAgentTurn(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "CM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+        aiFolderEnabled,
+      },
+    );
+    if (aiHandledEarly) {
+      return true;
+    }
+  }
+
+  if (
+    await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "CM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      scriptKeys,
+      support,
+    })
+  ) {
+    return true;
+  }
+  console.log(
+    `Pager worker: skip ${convId.slice(0, 8)} MG — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
   );
   return false;
 }
@@ -4570,7 +5033,7 @@ async function refreshLiveChannelsFromApi(
   }
 }
 
-type FunnelSendCountry = "CM" | "ZM" | "EG" | "RW" | "CL";
+type FunnelSendCountry = "CM" | "ZM" | "EG" | "RW" | "CL" | "MG";
 
 /** Re-read thread before send — avoids duplicate scripts when two cycles race (e.g. catch-up kick). */
 async function dropScriptKeysAlreadyInThread(
@@ -4596,6 +5059,10 @@ async function dropScriptKeysAlreadyInThread(
   if (country === "ZM") {
     const out = collectZmOutgoingTexts(messages);
     return unique.filter((key) => !zmScriptSentInHistory(out, key));
+  }
+  if (country === "MG") {
+    const out = collectMgOutgoingTexts(messages);
+    return unique.filter((key) => !mgScriptSentInHistory(out, key));
   }
   if (country === "RW") {
     const out = collectRwOutgoingTexts(messages);
@@ -4753,14 +5220,14 @@ async function ensureCustomerMessageEligible(
     bypass?: boolean;
     operatorUserId?: string;
     countryLabel?: string;
-    country?: "ZM" | "CM" | "EG" | "CL";
+    country?: "ZM" | "CM" | "EG" | "CL" | "MG";
     catchUpRead?: boolean;
   },
 ): Promise<boolean> {
-  const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | "CL" | undefined);
+  const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | "CL" | "MG" | undefined);
   const catchUpRead = Boolean(options?.catchUpRead);
   const threadCountry: CountryCode | undefined =
-    country === "CL" ? "CM" : (country as CountryCode | undefined);
+    country === "CL" || country === "MG" ? "CM" : (country as CountryCode | undefined);
   const customerText = (lastIncoming.text || "").trim();
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
   const alreadyRepliedInState =
@@ -4913,6 +5380,7 @@ function pickLiveTemplateBank(
     CM: ["камер", "cameroon", "cameroun"],
     RW: ["ruand", "rwand", "rw"],
     CL: ["chile", "chili", "чили", "cl"],
+    MG: MG_FOLDER_NAME_HINTS,
   };
   const matched = banks.find((bank) => {
     const normalized = bank.name.toLowerCase();
@@ -4975,7 +5443,7 @@ function buildRuntimeChannelConfig(
   const mapped = getChannelConfig(config, runtime.channelId);
   const country = runtime.runtime.country;
   const templateBank = resolveYamlTemplateBankName(config, country, runtime.channelId);
-  const yamlCountry = (country === "RW" || country === "CL" ? "CM" : country) as CountryCode;
+  const yamlCountry = (country === "RW" || country === "CL" || country === "MG" ? "CM" : country) as CountryCode;
 
   return {
     id: runtime.channelId,

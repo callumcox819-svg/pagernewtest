@@ -18,6 +18,11 @@ import {
   gameIdSentInHistory as zmGameIdSent,
   regLinkSentInHistory as zmRegLinkSent,
 } from "./zm-script-engine.js";
+import {
+  depositSentInHistory as mgDepositSent,
+  gameIdSentInHistory as mgGameIdSent,
+  regLinkSentInHistory as mgRegLinkSent,
+} from "./mg-script-engine.js";
 
 export type SupportPhase =
   | "off"
@@ -25,8 +30,10 @@ export type SupportPhase =
   | "awaiting_deposit_proof"
   | "awaiting_game_id";
 
+export type SupportCountry = CountryCode | "MG";
+
 export type SupportSnapshot = {
-  country: CountryCode;
+  country: SupportCountry;
   /** Post-funnel support agent (folder «в процессе» + reg link sent). */
   active: boolean;
   phase: SupportPhase;
@@ -46,7 +53,7 @@ type FunnelHistorySignals = {
   gameIdScriptKeys: string[];
 };
 
-const SUPPORT_FUNNEL: Record<CountryCode, FunnelHistorySignals> = {
+const SUPPORT_FUNNEL: Record<SupportCountry, FunnelHistorySignals> = {
   CM: {
     regLinkSent: cmRegLinkSent,
     depositSent: cmDepositSent,
@@ -81,14 +88,23 @@ const SUPPORT_FUNNEL: Record<CountryCode, FunnelHistorySignals> = {
     depositScriptKeys: ["06_deposit"],
     gameIdScriptKeys: ["07_game_id"],
   },
+  MG: {
+    regLinkSent: mgRegLinkSent,
+    depositSent: mgDepositSent,
+    gameIdSent: mgGameIdSent,
+    introScriptKeys: ["01_intro", "02_how_it_works", "03_mga_table", "04_registration"],
+    linkResendScriptKeys: ["05_link"],
+    depositScriptKeys: ["06_deposit"],
+    gameIdScriptKeys: ["07_game_id"],
+  },
 };
 
-export function getSupportFunnelConfig(country: CountryCode): FunnelHistorySignals {
+export function getSupportFunnelConfig(country: SupportCountry): FunnelHistorySignals {
   return SUPPORT_FUNNEL[country];
 }
 
 export function buildSupportSnapshot(
-  country: CountryCode,
+  country: SupportCountry,
   inProgressFolder: boolean,
   outgoingTexts: string[],
   options?: { operatorFolderEnabled?: boolean },
@@ -134,7 +150,7 @@ export function describeSupportPhase(support: SupportSnapshot): string {
   if (!support.active) {
     return "";
   }
-  const base = `Country ${support.country}; reply ONLY in ${describeAiMarketLanguage(support.country)}. Folder «в процессе регистрации» — scripts already sent link and steps.`;
+  const base = `Country ${support.country}; reply ONLY in ${describeAiMarketLanguage(support.country === "MG" ? "CM" : support.country)}. Folder «в процессе регистрации» — scripts already sent link and steps.`;
   switch (support.phase) {
     case "pre_deposit":
       return `${base} Coach first deposit on the official app/site, payment method for this market, ask for balance screenshot when done. If the customer says they have NO account yet / not registered — do NOT ask for account ID or deposit; scripts resend the registration link.`;
@@ -148,7 +164,7 @@ export function describeSupportPhase(support: SupportSnapshot): string {
 }
 
 export function filterScriptKeysForSupportAgent(
-  country: CountryCode,
+  country: SupportCountry,
   scriptKeys: string[],
   customerText: string,
   support: SupportSnapshot,
@@ -171,7 +187,7 @@ export function filterScriptKeysForSupportAgent(
 }
 
 export function supportAgentSkipsEarlyAi(
-  country: CountryCode,
+  country: SupportCountry,
   scriptKeys: string[],
   support: SupportSnapshot,
 ): boolean {
@@ -179,17 +195,18 @@ export function supportAgentSkipsEarlyAi(
     return false;
   }
   const cfg = getSupportFunnelConfig(country);
+  const helpCountry = country === "MG" ? "ZM" : country;
   const mechanical = new Set([
     ...cfg.depositScriptKeys,
     ...cfg.gameIdScriptKeys,
     ...cfg.linkResendScriptKeys,
-    ...registrationHelpScriptKeys(country),
+    ...registrationHelpScriptKeys(helpCountry),
   ]);
   return scriptKeys.some((key) => mechanical.has(key));
 }
 
 export function scriptKeysIncludeDeposit(
-  country: CountryCode,
+  country: SupportCountry,
   scriptKeys: string[],
 ): boolean {
   const cfg = getSupportFunnelConfig(country);
@@ -199,7 +216,7 @@ export function scriptKeysIncludeDeposit(
 
 /** Pre-«в процессе»: queued funnel scripts must run before the AI agent. */
 export function hasPreSupportFunnelScripts(
-  country: CountryCode,
+  country: SupportCountry,
   scriptKeys: string[],
 ): boolean {
   if (!scriptKeys.length) {

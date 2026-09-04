@@ -369,6 +369,7 @@ const COUNTRY_LABELS: Record<string, string> = {
   CM: "CM",
   RW: "RW",
   CL: "CL",
+  MG: "MG",
 };
 
 function truncateLabel(value: string, max = 14): string {
@@ -465,6 +466,10 @@ export function buildCountryKeyboard(channelId: string): ReplyMarkup {
       ],
       [
         inlineBtn("Чили", `country_pick|${channelId}|CL`, {
+          emojiId: PREMIUM_EMOJI.globe,
+          style: "primary",
+        }),
+        inlineBtn("Мадагаскар", `country_pick|${channelId}|MG`, {
           emojiId: PREMIUM_EMOJI.globe,
           style: "primary",
         }),

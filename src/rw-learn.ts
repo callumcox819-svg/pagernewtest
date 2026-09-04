@@ -19,7 +19,7 @@ export const RW_LEARN_CHANNEL_HINTS = [
   "patrick uwimana",
 ] as const;
 
-export type WorkerCountry = "ZM" | "CM" | "EG" | "RW" | "CL";
+export type WorkerCountry = "ZM" | "CM" | "EG" | "RW" | "CL" | "MG";
 
 export type RwLearningEventKind =
   | "no_status_lead"
@@ -83,6 +83,9 @@ export function isRwLearnChannelName(name: string): boolean {
 /** Live Pager channels that run the Chile funnel (local scripts/cl, not CM Pager bank). */
 const CL_CHANNEL_HINTS = ["javier soto"];
 
+/** Madagascar funnel — French local scripts/mg. */
+const MG_CHANNEL_HINTS = ["madagascar", "madagasikara"];
+
 export function isClChannelName(name: string): boolean {
   const normalized = name.toLowerCase();
   if (/\bchile\b|\bchili\b|\bcl\b/.test(normalized)) {
@@ -97,6 +100,14 @@ export function isClChannelName(name: string): boolean {
   });
 }
 
+export function isMgChannelName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  if (/\bmadagascar\b|\bmadagasikara\b|\bmdg\b|\bmga\b/.test(normalized)) {
+    return true;
+  }
+  return MG_CHANNEL_HINTS.some((hint) => normalized.includes(hint));
+}
+
 export function resolveWorkerCountryForChannel(
   channelName: string,
   savedCountry?: WorkerCountry,
@@ -104,6 +115,9 @@ export function resolveWorkerCountryForChannel(
 ): WorkerCountry {
   if (isClChannelName(channelName)) {
     return "CL";
+  }
+  if (isMgChannelName(channelName) && !savedCountry) {
+    return "MG";
   }
   return savedCountry ?? yamlCountry ?? defaultCountryForChannelName(channelName);
 }
@@ -114,6 +128,9 @@ export function defaultCountryForChannelName(name: string): WorkerCountry {
   }
   if (isClChannelName(name)) {
     return "CL";
+  }
+  if (isMgChannelName(name)) {
+    return "MG";
   }
   const normalized = name.toLowerCase();
   if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {
