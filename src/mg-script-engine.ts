@@ -101,6 +101,17 @@ export function explainScriptsSentInHistory(outgoingTexts: string[]): boolean {
   );
 }
 
+/** One explain bubble per customer turn (02, then 03) — never both at once. */
+export function nextMgExplainScript(outgoingTexts: string[]): string | null {
+  if (!mgScriptSentInHistory(outgoingTexts, "02_how_it_works")) {
+    return "02_how_it_works";
+  }
+  if (!mgScriptSentInHistory(outgoingTexts, "03_mga_table")) {
+    return "03_mga_table";
+  }
+  return null;
+}
+
 export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
   if (mgScriptSentInHistory(outgoingTexts, "05_link")) {
     return true;
@@ -266,7 +277,8 @@ export function limitMgScriptsForCustomerTurn(
     scriptKeys.some((key) => MG_EXPLAIN_SEND_KEYS.has(key)) &&
     !explainScriptsSentInHistory(outgoingTexts)
   ) {
-    return ["02_how_it_works", "03_mga_table"];
+    const next = nextMgExplainScript(outgoingTexts);
+    return next ? [next] : [];
   }
   if (scriptKeys.some((key) => MG_REG_SEND_KEYS.has(key))) {
     const instructionsSent = mgRegistrationInstructionsSentInHistory(outgoingTexts);
@@ -286,8 +298,9 @@ export function mgAllowsMultiSend(scriptKeys: string[]): boolean {
   if (scriptKeys.includes("01_intro")) {
     return true;
   }
+  // 02 and 03 are always one-per-turn — never batch them.
   if (scriptKeys.some((key) => MG_EXPLAIN_SEND_KEYS.has(key))) {
-    return true;
+    return false;
   }
   return scriptKeys.some((key) => MG_REG_SEND_KEYS.has(key));
 }
@@ -400,7 +413,8 @@ export function resolveMgFunnelScripts(
       return ["01_intro"];
     }
     if (!explainSent) {
-      return ["02_how_it_works", "03_mga_table"];
+      const next = nextMgExplainScript(out);
+      return next ? [next] : [];
     }
     if (
       linkSent &&
@@ -425,7 +439,8 @@ export function resolveMgFunnelScripts(
       return ["01_intro"];
     }
     if (!explainSent) {
-      return ["02_how_it_works", "03_mga_table"];
+      const next = nextMgExplainScript(out);
+      return next ? [next] : [];
     }
     if (!linkSent) {
       return ["04_registration", "05_link"];
@@ -452,9 +467,10 @@ export function resolveMgFunnelScripts(
   }
 
   if (!explainSent) {
-    // After intro, any real customer turn gets scripts 02+03 (AI must not fill this gap).
+    // One explain bubble per turn: 02, then wait; next turn 03.
     if (wantsExplain(t, intent, effectiveStep) || signal || t || options?.hasImage || options?.messageReaction) {
-      return ["02_how_it_works", "03_mga_table"];
+      const next = nextMgExplainScript(out);
+      return next ? [next] : [];
     }
     return [];
   }
