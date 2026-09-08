@@ -11,7 +11,7 @@ import {
 import type { CountryCode } from "./config.js";
 
 /** Markets that get delayed «в процессе» check-ins (each in its own language). */
-export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW" | "CL" | "MG";
+export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW" | "CL" | "MG" | "DJ";
 
 export const IN_PROGRESS_FOLLOWUP_MIN_MS = 20 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_MAX_MS = 22 * 60 * 1000;
@@ -19,12 +19,13 @@ export const IN_PROGRESS_FOLLOWUP_MAX_MS = 22 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_ATTEMPT_COOLDOWN_MS = 60 * 60 * 1000;
 
-/** ZM/RW English, CM/MG French, CL Spanish, EG Arabic — aligned with AI market languages. */
+/** ZM/RW English, CM/MG/DJ French, CL Spanish, EG Arabic — aligned with AI market languages. */
 const FOLLOWUP_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   ZM: ["have you already registered", "when will you complete registration"],
   RW: ["have you already registered", "when will you complete registration"],
   CM: ["déjà inscrit", "terminer l'inscription", "terminer votre inscription"],
   MG: ["déjà inscrit", "terminer l'inscription", "terminer votre inscription"],
+  DJ: ["déjà inscrit", "terminer l'inscription", "terminer votre inscription"],
   CL: ["ya te registraste", "terminarás el registro", "terminaras el registro"],
   EG: ["هل قمت بالتسجيل", "متى ستنهي التسجيل", "متى ستكمل التسجيل"],
 };
@@ -34,6 +35,7 @@ const FOLLOWUP_MESSAGES: Record<InProgressFollowUpCountry, [string, string]> = {
   RW: ["Have you already registered?", "When will you complete registration?"],
   CM: ["Vous êtes déjà inscrit(e) ?", "Quand allez-vous terminer l'inscription ?"],
   MG: ["Vous êtes déjà inscrit(e) ?", "Quand allez-vous terminer l'inscription ?"],
+  DJ: ["Vous êtes déjà inscrit(e) ?", "Quand allez-vous terminer l'inscription ?"],
   CL: ["¿Ya te registraste?", "¿Cuándo terminarás el registro?"],
   EG: ["هل قمت بالتسجيل بالفعل؟", "متى ستنهي التسجيل؟"],
 };
@@ -43,6 +45,7 @@ const PLAN_ASK_MESSAGES: Record<InProgressFollowUpCountry, string> = {
   RW: "When do you plan to register?",
   CM: "Quand comptez-vous vous enregistrer ?",
   MG: "Quand comptez-vous vous enregistrer ?",
+  DJ: "Quand comptez-vous vous enregistrer ?",
   CL: "¿Cuándo planeas registrarte?",
   EG: "متى تخطط للتسجيل؟",
 };
@@ -52,6 +55,7 @@ const PLAN_ASK_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   RW: ["when do you plan to register"],
   CM: ["comptez-vous vous enregistrer", "comptez-vous terminer votre inscription"],
   MG: ["comptez-vous vous enregistrer", "comptez-vous terminer votre inscription"],
+  DJ: ["comptez-vous vous enregistrer", "comptez-vous terminer votre inscription"],
   CL: ["cuándo planeas registrarte", "cuando planeas registrarte"],
   EG: ["متى تخطط للتسجيل"],
 };
@@ -296,7 +300,7 @@ export function isWeakInProgressSilenceReply(
   if (country === "EG") {
     return /^(تمام|طيب|حاضر|اوك|أوك|ماشي|ماشى|نعم)[.!\s]*$/u.test(trimmed);
   }
-  if (country === "CM" || country === "MG") {
+  if (country === "CM" || country === "MG" || country === "DJ") {
     return /^(ok|okay|okey|oui|d'accord|d accord|dac|dacc|bien|super|parfait|merci|thanks|thank you|salut|bonjour|bonsoir|yes|yeah|yep|hum+|hm+|mhm+)[.!\s]*$/i.test(
       trimmed,
     );
@@ -395,7 +399,7 @@ export function classifyInProgressRegistrationReply(
     return "other";
   }
 
-  if (country === "CM" || country === "MG" || country === "CL") {
+  if (country === "CM" || country === "MG" || country === "DJ" || country === "CL") {
     if (
       /\b(pas encore|non|encore non|je (vais|m[' ]?occupe|m[' ]?en occupe|travaille|suis en train)|bientôt|bientot|en cours|plus tard|après|apres|je m[' ]?en occupe|j[' ]?y travaille|ocupo|todavía no|todavia no|aún no|aun no)\b/.test(
         t,
@@ -464,7 +468,8 @@ export function isInProgressFollowUpCountry(
     country === "EG" ||
     country === "RW" ||
     country === "CL" ||
-    country === "MG"
+    country === "MG" ||
+    country === "DJ"
   );
 }
 

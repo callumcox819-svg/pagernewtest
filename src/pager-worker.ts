@@ -30,6 +30,7 @@ import { isLinkAccessProblemMessage, isCustomerClarificationMessage, isScamOrTru
 import {
   defaultCountryForChannelName,
   isClChannelName,
+  isDjChannelName,
   isMgChannelName,
   resolveWorkerCountryForChannel,
   type WorkerCountry,
@@ -88,6 +89,7 @@ import {
   shouldQueueClConversation,
   shouldQueueZmConversation,
   shouldQueueMgConversation,
+  shouldQueueDjConversation,
   shouldSkipConversationBotSpokeLast,
   isCatchUpReadActive,
   shouldQueueCatchUpConversation,
@@ -188,6 +190,26 @@ import {
   isMgDepositAmountChoice,
   isMgOfferTableChoice,
 } from "./mg-intent.js";
+import {
+  classifyDjMessage,
+  collectDjOutgoingTexts,
+  DJ_FOLDER_NAME_HINTS,
+  djAllowsMultiSend,
+  djFunnelStepFromScriptGaps,
+  djInferStepFromThread,
+  djScriptSentInHistory,
+  djStatusMoveTarget,
+  limitDjScriptsForCustomerTurn,
+  offerScriptsSentInHistory as djOfferScriptsSentInHistory,
+  regLinkSentInHistory as djRegLinkSentInHistory,
+  resolveDjFunnelScripts,
+} from "./dj-script-engine.js";
+import {
+  isRegistrationHelpRequest as djIsRegistrationHelpRequest,
+  wantsRegistrationLink as djWantsRegistrationLink,
+  isDjDepositAmountChoice,
+  isDjOfferTableChoice,
+} from "./dj-intent.js";
 import { resolveScriptAttachment } from "./zm-script-assets.js";
 import {
   looksLikeZmDepositBalanceScreenshot,
@@ -254,6 +276,7 @@ import { buildEgLinkOnlyMessage, buildEgRegistrationOnlyMessage, loadLocalEgScri
 import { getDeployLabel } from "./telegram-api.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { loadLocalMgScript, mgDefaultRegistrationLink } from "./mg-local-scripts.js";
+import { loadLocalDjScript, djDefaultRegistrationLink } from "./dj-local-scripts.js";
 import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveRwTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
 import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
 import { customerAgreedAfterOfferTable } from "./funnel-common.js";
@@ -544,7 +567,7 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
     const country = runtime?.runtime.country;
     const folderIds =
-      country === "EG" || country === "CM" || country === "ZM" || country === "RW" || country === "CL" || country === "MG"
+      country === "EG" || country === "CM" || country === "ZM" || country === "RW" || country === "CL" || country === "MG" || country === "DJ"
         ? resolveChannelEnabledFolderIds(
             enabledFolderIds,
             country,
@@ -577,7 +600,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       item.runtime.country === "ZM" ||
       item.runtime.country === "RW" ||
       item.runtime.country === "CL" ||
-      item.runtime.country === "MG",
+      item.runtime.country === "MG" ||
+      item.runtime.country === "DJ",
   )
     ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_UNREAD + INBOX_TOP_CM_FOLLOWUP)
     : 150;
@@ -899,7 +923,8 @@ async function buildWorkQueue(
           runtime.runtime.country !== "ZM" &&
           runtime.runtime.country !== "RW" &&
           runtime.runtime.country !== "CL" &&
-          runtime.runtime.country !== "MG")
+          runtime.runtime.country !== "MG" &&
+          runtime.runtime.country !== "DJ")
       ) {
         continue;
       }
@@ -933,7 +958,8 @@ async function buildWorkQueue(
       channel.runtime.country !== "ZM" &&
       channel.runtime.country !== "RW" &&
       channel.runtime.country !== "CL" &&
-      channel.runtime.country !== "MG"
+      channel.runtime.country !== "MG" &&
+      channel.runtime.country !== "DJ"
     ) {
       continue;
     }
@@ -942,6 +968,7 @@ async function buildWorkQueue(
     const isCl = channel.runtime.country === "CL";
     const isZm = channel.runtime.country === "ZM";
     const isMg = channel.runtime.country === "MG";
+    const isDj = channel.runtime.country === "DJ";
     const isRw = channel.runtime.country === "RW";
     const channelFolderIds = resolveChannelEnabledFolderIds(
       enabledFolderIds,
@@ -980,7 +1007,7 @@ async function buildWorkQueue(
         }
 
         if (
-          (isCm || isCl || isZm || isMg || isRw || isEg) &&
+          (isCm || isCl || isZm || isMg || isDj || isRw || isEg) &&
           isInProgressStatusConversation(conv)
         ) {
           const statusFolders = chatState.operatorSettings?.statusFolders ?? chatState.statusFolders;
@@ -1013,7 +1040,7 @@ async function buildWorkQueue(
         if (
           catchUpActive &&
           catchUpAdded < CATCH_UP_INBOX_CAP &&
-          (isCm || isCl || isZm || isMg || isRw || isEg) &&
+          (isCm || isCl || isZm || isMg || isDj || isRw || isEg) &&
           shouldQueueCatchUpConversation(conv)
         ) {
           if (!selected.has(conv.id)) {
@@ -1041,11 +1068,14 @@ async function buildWorkQueue(
         if (isMg && !shouldQueueMgConversation(conv)) {
           continue;
         }
+        if (isDj && !shouldQueueDjConversation(conv)) {
+          continue;
+        }
         if (isRw && !shouldQueueZmConversation(conv)) {
           continue;
         }
         if (
-          (isCm || isCl || isZm || isMg || isEg || isRw) &&
+          (isCm || isCl || isZm || isMg || isDj || isEg || isRw) &&
           isOutgoingDirection(conv.lastMessageDirection) &&
           !hasUnreadMarkers(conv)
         ) {
@@ -1066,6 +1096,8 @@ async function buildWorkQueue(
               ? shouldQueueZmConversation(conv)
               : isMg
                 ? shouldQueueMgConversation(conv)
+                : isDj
+                  ? shouldQueueDjConversation(conv)
                 : isRw
                 ? shouldQueueZmConversation(conv)
                 : hasUnreadMarkers(conv) ||
@@ -1082,7 +1114,7 @@ async function buildWorkQueue(
           continue;
         }
 
-        if ((isCm || isCl || isZm || isMg || isRw) && followUpAdded < followUpCap) {
+        if ((isCm || isCl || isZm || isMg || isDj || isRw) && followUpAdded < followUpCap) {
           const lastAt = resolveLastMessageAt(conv);
           if (
             !isInProgressStatusConversation(conv) ||
@@ -1136,6 +1168,10 @@ async function buildWorkQueue(
       }
     } else if (runtime?.runtime.country === "MG") {
       if (!shouldQueueMgConversation(conv) && !catchUpEligible) {
+        continue;
+      }
+    } else if (runtime?.runtime.country === "DJ") {
+      if (!shouldQueueDjConversation(conv) && !catchUpEligible) {
         continue;
       }
     } else if (runtime?.runtime.country === "RW") {
@@ -1364,6 +1400,8 @@ async function trySendInProgressRegistrationFollowUp(
           ? collectZmOutgoingTexts(messages)
           : country === "MG"
             ? collectMgOutgoingTexts(messages)
+          : country === "DJ"
+            ? collectDjOutgoingTexts(messages)
           : country === "EG"
             ? collectEgOutgoingTexts(messages)
             : collectRwOutgoingTexts(messages);
@@ -1616,6 +1654,15 @@ async function processConversation(
       `Pager worker: ${runtime.channelName} is a Madagascar channel but country=${workerCountry} — routing MG`,
     );
     return processMgConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (workerCountry === "DJ") {
+    return processDjConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (isDjChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: ${runtime.channelName} is a Djibouti channel but country=${workerCountry} — routing DJ`,
+    );
+    return processDjConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (channel.country === "CM") {
     return processCmConversation(deps, state, client, workingConv, runtime, channel);
@@ -1949,6 +1996,12 @@ async function processCmConversation(
       `Pager worker: CM handler blocked for Madagascar channel ${runtime.channelName} — routing MG`,
     );
     return processMgConversation(deps, state, client, conv, runtime, channel);
+  }
+  if (isDjChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: CM handler blocked for Djibouti channel ${runtime.channelName} — routing DJ`,
+    );
+    return processDjConversation(deps, state, client, conv, runtime, channel);
   }
   const convId = conv.id;
 
@@ -3668,6 +3721,441 @@ async function processMgConversation(
   return false;
 }
 
+/** DJ: авто-воронка (локальные скрипты, как MG). */
+async function processDjConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
+  const convId = conv.id;
+
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  if (!messages.length) {
+    return false;
+  }
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, "CM");
+  if (!lastIncoming) {
+    return false;
+  }
+
+  const operatorUserIdEarly = await client.probeOperatorUserId();
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId: operatorUserIdEarly,
+      country: "CM",
+      catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
+    })
+  ) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} DJ — bot_spoke_last (awaiting_customer)`,
+    );
+    return false;
+  }
+
+  const outgoingTexts = collectDjOutgoingTexts(messages);
+  const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const djNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !djScriptSentInHistory(outgoingTexts, "01_intro") &&
+    Boolean(latestCustomerText);
+
+  const operatorUserId = operatorUserIdEarly;
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    currentState,
+  );
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const support = buildSupportSnapshot("DJ", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: aiFolderEnabled,
+  });
+  const djInProgressBypass =
+    inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
+    isCustomerClarificationMessage(latestCustomerText);
+
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      client,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      {
+        bypass: djNewLeadBypass || djInProgressBypass,
+        operatorUserId,
+        countryLabel: "DJ",
+        country: "DJ",
+        catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
+      },
+    ))
+  ) {
+    return false;
+  }
+
+  const threadStep = djInferStepFromThread(messages);
+  const gapStep = djFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
+  const messageReaction = resolveMessageReaction(lastIncoming);
+  const playbook = getPlaybook(deps.config, channel.country);
+
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
+  if (imageUrl && djRegLinkSentInHistory(outgoingTexts)) {
+    const imageHandled = await tryHandleCustomerImage(deps, {
+      state,
+      client,
+      conv,
+      runtime,
+      channel,
+      convState,
+      convId,
+      lastIncoming,
+      text: latestCustomerText,
+      imageUrl,
+      playbook,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      sortedMessages: sorted,
+      operatorUserId,
+    });
+    if (imageHandled) {
+      return true;
+    }
+  }
+
+  let proofKind: import("./config.js").ProofKind | undefined;
+  let proofText = "";
+  if (imageUrl) {
+    try {
+      const image = await client.downloadAttachment(imageUrl);
+      const classification = await classifyProofFromImage(playbook, image, {
+        caption: latestCustomerText,
+        ocrEnabled: deps.env.OCR_ENABLED,
+        ocrLang: ocrLangForCountry(channel.country),
+        country: "CM",
+      });
+      proofKind = classification.proofKind;
+      proofText = classification.combinedText;
+    } catch (error) {
+      console.warn(`DJ OCR failed ${convId.slice(0, 8)}:`, formatError(error));
+    }
+  }
+
+  const intent = classifyDjMessage(latestCustomerText, {
+    hasImage: Boolean(imageUrl),
+    funnelStep: effectiveStep,
+    messageReaction,
+  });
+
+  let scriptKeys = resolveDjFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    {
+      hasImage: Boolean(imageUrl),
+      messageReaction,
+      recentCustomerTexts,
+      proofKind,
+      proofText,
+    },
+  );
+  scriptKeys = limitDjScriptsForCustomerTurn(scriptKeys, outgoingTexts);
+  scriptKeys = filterDisabledScriptKeys(scriptKeys);
+  scriptKeys = filterScriptKeysForSupportAgent("DJ", scriptKeys, latestCustomerText, support);
+  const skipEarlySupportAi = supportAgentSkipsEarlyAi("DJ", scriptKeys, support);
+
+  if (
+    !scriptKeys.length &&
+    djOfferScriptsSentInHistory(outgoingTexts) &&
+    !djRegLinkSentInHistory(outgoingTexts) &&
+    (djWantsRegistrationLink(latestCustomerText) ||
+      djIsRegistrationHelpRequest(latestCustomerText) ||
+      customerAgreedAfterOfferTable(latestCustomerText) ||
+      isDjOfferTableChoice(latestCustomerText) ||
+      isDjDepositAmountChoice(latestCustomerText) ||
+      intent === "interested" ||
+      intent === "positive" ||
+      intent === "ready")
+  ) {
+    scriptKeys = ["05_registration", "06_link", "07_promo"];
+  }
+
+  if (scriptKeys.length) {
+  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "DJ", scriptKeys);
+  if (!scriptKeys.length) {
+    console.log(`Pager worker: DJ ${convId.slice(0, 8)} — scripts already in thread`);
+  } else {
+  await tryTakeConversationForProcessing(client, convId, "DJ");
+
+  console.log(
+    `Pager worker: DJ ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+  );
+
+  let sentAny = false;
+  const sentScriptKeys: string[] = [];
+  const allowMultiSend = djAllowsMultiSend(scriptKeys);
+  const coveredOutgoing = [...outgoingTexts];
+  for (const scriptKey of scriptKeys) {
+    if (djScriptSentInHistory(coveredOutgoing, scriptKey)) {
+      console.log(
+        `Pager worker: DJ ${convId.slice(0, 8)} skip duplicate key=${scriptKey} (already in thread/batch)`,
+      );
+      continue;
+    }
+    let replyText = loadLocalDjScript(scriptKey)?.trim();
+    if (!replyText) {
+      if (scriptKey === "05_registration") {
+        const fallbackText = loadLocalDjScript("05_registration")?.trim();
+        if (fallbackText) {
+          const sent = await client.sendMessageReliable(convId, fallbackText, {
+            channelId: runtime.channelId,
+            conv,
+          });
+          if (sent) {
+            sentAny = true;
+            sentScriptKeys.push(scriptKey);
+            coveredOutgoing.push(fallbackText);
+            await patchConversationState(deps.stateStore, state.chatId, convId, {
+              conversationId: convId,
+              channelId: runtime.channelId,
+              lastCustomerMessageId: lastIncoming.id,
+              lastCustomerMessageAt: lastIncoming.createdAt,
+              lastReplyAt: new Date().toISOString(),
+              lastReplyRole: scriptKey,
+              sendFailures: 0,
+            });
+            await sleep(500);
+          }
+        } else {
+          console.warn(`DJ script missing ${convId.slice(0, 8)}: ${scriptKey}`);
+        }
+        continue;
+      }
+      if (scriptKey === "06_link") {
+        const fallbackLink = djDefaultRegistrationLink();
+        const sent = await client.sendMessageReliable(convId, fallbackLink, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          sentScriptKeys.push(scriptKey);
+          coveredOutgoing.push(fallbackLink);
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            conversationId: convId,
+            channelId: runtime.channelId,
+            lastCustomerMessageId: lastIncoming.id,
+            lastCustomerMessageAt: lastIncoming.createdAt,
+            lastReplyAt: new Date().toISOString(),
+            lastReplyRole: scriptKey,
+            sendFailures: 0,
+          });
+          await sleep(500);
+        }
+        continue;
+      }
+      console.warn(`DJ script missing ${convId.slice(0, 8)}: ${scriptKey}`);
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText.trim(), {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      const failures = (convState.sendFailures ?? 0) + 1;
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: failures,
+      });
+      console.error(`Pager worker: DJ send failed ${convId.slice(0, 8)} key=${scriptKey}`);
+      return sentAny;
+    }
+    sentAny = true;
+    sentScriptKeys.push(scriptKey);
+    coveredOutgoing.push(replyText.trim());
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
+    await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  const statusTarget = djStatusMoveTarget(sentScriptKeys);
+  if (
+    statusTarget === "in_progress_registration" ||
+    sentScriptKeys.includes("06_link") ||
+    djRegLinkSentInHistory(coveredOutgoing)
+  ) {
+    const moved = await tryMoveConversationToInProgressRegistration(
+      deps,
+      currentState,
+      client,
+      conv,
+      convId,
+      runtime.channelId,
+      "DJ",
+    );
+    if (!moved) {
+      await maybeEnsureInProgressAfterRegLink(
+        deps,
+        currentState,
+        client,
+        conv,
+        convId,
+        runtime.channelId,
+        "DJ",
+        coveredOutgoing,
+        djRegLinkSentInHistory,
+      );
+    }
+  } else if (statusTarget === "registration_complete") {
+    const statusId = findZmStatusId(currentState, statusTarget);
+    const operatorId = await client.probeOperatorUserId();
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+    if (statusId && operatorId && currentStatusId !== statusId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(`Pager worker: DJ ${convId.slice(0, 8)} status -> registration`);
+      } catch (error) {
+        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
+    funnelStep: Math.max(effectiveStep, scriptKeys.includes("06_link") ? 5 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1] ?? scriptKeys[scriptKeys.length - 1],
+    sendFailures: 0,
+  });
+
+  if (
+    await trySupportAgentAfterScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "CM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      sentScriptKeys,
+      support,
+      skipEarlySupportAi,
+    })
+  ) {
+    return true;
+  }
+
+  return true;
+  }
+  }
+
+  // Pre-reg funnel: templates own positive turns; AI only for complex/scam/link issues.
+  const djPreRegFunnel =
+    djScriptSentInHistory(outgoingTexts, "01_intro") &&
+    !djRegLinkSentInHistory(outgoingTexts);
+  const djComplexAiOk =
+    isComplexCustomerMessage(latestCustomerText) ||
+    isScamOrTrustQuestion(latestCustomerText) ||
+    isLinkAccessProblemMessage(latestCustomerText) ||
+    isCustomerClarificationMessage(latestCustomerText);
+  const djFunnelBlocksEarlyAi = djPreRegFunnel && !djComplexAiOk;
+
+  if (!skipEarlySupportAi && !djFunnelBlocksEarlyAi) {
+    const aiHandledEarly = await tryRunAiAgentTurn(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "CM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+        aiFolderEnabled,
+      },
+    );
+    if (aiHandledEarly) {
+      return true;
+    }
+  }
+
+  if (
+    !djFunnelBlocksEarlyAi &&
+    (await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "CM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      scriptKeys,
+      support,
+    }))
+  ) {
+    return true;
+  }
+  console.log(
+    `Pager worker: skip ${convId.slice(0, 8)} DJ — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+  );
+  return false;
+}
+
 async function sendEgRegistrationThenLink(
   client: PagerClient,
   convId: string,
@@ -5073,7 +5561,7 @@ async function refreshLiveChannelsFromApi(
   }
 }
 
-type FunnelSendCountry = "CM" | "ZM" | "EG" | "RW" | "CL" | "MG";
+type FunnelSendCountry = "CM" | "ZM" | "EG" | "RW" | "CL" | "MG" | "DJ";
 
 /** Re-read thread before send — avoids duplicate scripts when two cycles race (e.g. catch-up kick). */
 async function dropScriptKeysAlreadyInThread(
@@ -5103,6 +5591,10 @@ async function dropScriptKeysAlreadyInThread(
   if (country === "MG") {
     const out = collectMgOutgoingTexts(messages);
     return unique.filter((key) => !mgScriptSentInHistory(out, key));
+  }
+  if (country === "DJ") {
+    const out = collectDjOutgoingTexts(messages);
+    return unique.filter((key) => !djScriptSentInHistory(out, key));
   }
   if (country === "RW") {
     const out = collectRwOutgoingTexts(messages);
@@ -5260,14 +5752,14 @@ async function ensureCustomerMessageEligible(
     bypass?: boolean;
     operatorUserId?: string;
     countryLabel?: string;
-    country?: "ZM" | "CM" | "EG" | "CL" | "MG";
+    country?: "ZM" | "CM" | "EG" | "CL" | "MG" | "DJ";
     catchUpRead?: boolean;
   },
 ): Promise<boolean> {
-  const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | "CL" | "MG" | undefined);
+  const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | "CL" | "MG" | "DJ" | undefined);
   const catchUpRead = Boolean(options?.catchUpRead);
   const threadCountry: CountryCode | undefined =
-    country === "CL" || country === "MG" ? "CM" : (country as CountryCode | undefined);
+    country === "CL" || country === "MG" || country === "DJ" ? "CM" : (country as CountryCode | undefined);
   const customerText = (lastIncoming.text || "").trim();
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
   const alreadyRepliedInState =
@@ -5421,6 +5913,7 @@ function pickLiveTemplateBank(
     RW: ["ruand", "rwand", "rw"],
     CL: ["chile", "chili", "чили", "cl"],
     MG: MG_FOLDER_NAME_HINTS,
+    DJ: DJ_FOLDER_NAME_HINTS,
   };
   const matched = banks.find((bank) => {
     const normalized = bank.name.toLowerCase();
@@ -5483,7 +5976,7 @@ function buildRuntimeChannelConfig(
   const mapped = getChannelConfig(config, runtime.channelId);
   const country = runtime.runtime.country;
   const templateBank = resolveYamlTemplateBankName(config, country, runtime.channelId);
-  const yamlCountry = (country === "RW" || country === "CL" || country === "MG" ? "CM" : country) as CountryCode;
+  const yamlCountry = (country === "RW" || country === "CL" || country === "MG" || country === "DJ" ? "CM" : country) as CountryCode;
 
   return {
     id: runtime.channelId,

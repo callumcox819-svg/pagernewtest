@@ -104,9 +104,10 @@ const COUNTRY_FOLDER_HINTS: Record<WorkerCountry, string[]> = {
   RW: ["ruand", "rwand", "rw"],
   CL: ["chile", "chili", "чили", "cl"],
   MG: ["мадаг", "madag", "madagascar", "mg", "mdg"],
+  DJ: ["джибут", "djibouti", "djib", "djf", "bji"],
 };
 
-const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>(["ZM", "CM", "EG", "RW", "CL", "MG"]);
+const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>(["ZM", "CM", "EG", "RW", "CL", "MG", "DJ"]);
 
 const CHANNEL_COUNTRY_DISPLAY: Record<string, string> = {
   CM: "Камерун",
@@ -115,6 +116,7 @@ const CHANNEL_COUNTRY_DISPLAY: Record<string, string> = {
   RW: "Руанда",
   CL: "Чили",
   MG: "Мадагаскар",
+  DJ: "Джибути",
 };
 
 function formatChannelIdSuffix(id: string): string {
@@ -466,6 +468,8 @@ async function handleCallback(
           ? "Чили · локальные скрипты ES/EN/FR"
           : country === "MG"
             ? "Мадагаскар · FR · MAD778"
+            : country === "DJ"
+              ? "Джибути · FR · BJI777"
             : `Страна: ${country}`,
     );
     await showChannelsMenu(chatId, nextState, messageId);
@@ -816,7 +820,8 @@ async function handleMessage(message: TelegramMessage) {
   const playbookCountry =
     effectiveChannel.country === "RW" ||
     effectiveChannel.country === "CL" ||
-    effectiveChannel.country === "MG"
+    effectiveChannel.country === "MG" ||
+    effectiveChannel.country === "DJ"
       ? "CM"
       : effectiveChannel.country;
   const playbook = getPlaybook(config, playbookCountry);
@@ -824,7 +829,8 @@ async function handleMessage(message: TelegramMessage) {
     ...effectiveChannel,
     country: (effectiveChannel.country === "RW" ||
     effectiveChannel.country === "CL" ||
-    effectiveChannel.country === "MG"
+    effectiveChannel.country === "MG" ||
+    effectiveChannel.country === "DJ"
       ? "CM"
       : effectiveChannel.country) as "ZM" | "CM" | "EG",
   };

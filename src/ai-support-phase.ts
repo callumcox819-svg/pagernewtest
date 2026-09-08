@@ -23,6 +23,9 @@ import {
   gameIdSentInHistory as mgGameIdSent,
   regLinkSentInHistory as mgRegLinkSent,
 } from "./mg-script-engine.js";
+import {
+  regLinkSentInHistory as djRegLinkSent,
+} from "./dj-script-engine.js";
 
 export type SupportPhase =
   | "off"
@@ -30,7 +33,7 @@ export type SupportPhase =
   | "awaiting_deposit_proof"
   | "awaiting_game_id";
 
-export type SupportCountry = CountryCode | "MG";
+export type SupportCountry = CountryCode | "MG" | "DJ";
 
 export type SupportSnapshot = {
   country: SupportCountry;
@@ -97,6 +100,21 @@ const SUPPORT_FUNNEL: Record<SupportCountry, FunnelHistorySignals> = {
     depositScriptKeys: ["06_deposit"],
     gameIdScriptKeys: ["07_game_id"],
   },
+  DJ: {
+    regLinkSent: djRegLinkSent,
+    depositSent: () => false,
+    gameIdSent: () => false,
+    introScriptKeys: [
+      "01_intro",
+      "02_how_it_works",
+      "03_djf_table",
+      "04_ready_ask",
+      "05_registration",
+    ],
+    linkResendScriptKeys: ["06_link", "07_promo"],
+    depositScriptKeys: [],
+    gameIdScriptKeys: [],
+  },
 };
 
 export function getSupportFunnelConfig(country: SupportCountry): FunnelHistorySignals {
@@ -150,7 +168,7 @@ export function describeSupportPhase(support: SupportSnapshot): string {
   if (!support.active) {
     return "";
   }
-  const base = `Country ${support.country}; reply ONLY in ${describeAiMarketLanguage(support.country === "MG" ? "CM" : support.country)}. Folder «в процессе регистрации» — scripts already sent link and steps.`;
+  const base = `Country ${support.country}; reply ONLY in ${describeAiMarketLanguage(support.country === "MG" || support.country === "DJ" ? "CM" : support.country)}. Folder «в процессе регистрации» — scripts already sent link and steps.`;
   switch (support.phase) {
     case "pre_deposit":
       return `${base} Coach first deposit on the official app/site, payment method for this market, ask for balance screenshot when done. If the customer says they have NO account yet / not registered — do NOT ask for account ID or deposit; scripts resend the registration link.`;
@@ -195,7 +213,7 @@ export function supportAgentSkipsEarlyAi(
     return false;
   }
   const cfg = getSupportFunnelConfig(country);
-  const helpCountry = country === "MG" ? "ZM" : country;
+  const helpCountry = country === "MG" || country === "DJ" ? "ZM" : country;
   const mechanical = new Set([
     ...cfg.depositScriptKeys,
     ...cfg.gameIdScriptKeys,

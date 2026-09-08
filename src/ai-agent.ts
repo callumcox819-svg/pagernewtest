@@ -18,6 +18,8 @@ import { explainScriptsSentInHistory as zmExplainScriptsSentInHistory } from "./
 import { isZmDepositAmountChoice } from "./zm-intent.js";
 import { explainScriptsSentInHistory as mgExplainScriptsSentInHistory } from "./mg-script-engine.js";
 import { isMgOfferTableChoice } from "./mg-intent.js";
+import { offerScriptsSentInHistory as djOfferScriptsSentInHistory } from "./dj-script-engine.js";
+import { isDjOfferTableChoice } from "./dj-intent.js";
 import {
   customerAgreedAfterOfferTable,
   customerRequestsRegistrationMaterials,
@@ -206,12 +208,15 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
   ) {
     return false;
   }
-  // MG uses CM language routing; block AI on table picks after the MGA offer.
+  // MG/DJ use CM language routing; block AI on table picks after the offer.
   if (
     ctx.country === "CM" &&
     !ctx.support?.active &&
-    (isMgOfferTableChoice(ctx.customerText.trim()) || isDepositTierChoice(ctx.customerText.trim())) &&
-    mgExplainScriptsSentInHistory(ctx.recentOutgoingTexts ?? [])
+    (isMgOfferTableChoice(ctx.customerText.trim()) ||
+      isDjOfferTableChoice(ctx.customerText.trim()) ||
+      isDepositTierChoice(ctx.customerText.trim())) &&
+    (mgExplainScriptsSentInHistory(ctx.recentOutgoingTexts ?? []) ||
+      djOfferScriptsSentInHistory(ctx.recentOutgoingTexts ?? []))
   ) {
     return false;
   }
