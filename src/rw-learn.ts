@@ -19,7 +19,7 @@ export const RW_LEARN_CHANNEL_HINTS = [
   "patrick uwimana",
 ] as const;
 
-export type WorkerCountry = "ZM" | "CM" | "EG" | "RW" | "CL" | "MG" | "DJ";
+export type WorkerCountry = "ZM" | "CM" | "EG" | "RW" | "CL" | "MG" | "DJ" | "JO";
 
 export type RwLearningEventKind =
   | "no_status_lead"
@@ -89,6 +89,9 @@ const MG_CHANNEL_HINTS = ["madagascar", "madagasikara"];
 /** Djibouti funnel — French local scripts/dj. */
 const DJ_CHANNEL_HINTS = ["djibouti", "djibout"];
 
+/** Jordan funnel — Arabic local scripts/jo. */
+const JO_CHANNEL_HINTS = ["jordan", "الأردن", "الاردن"];
+
 export function isClChannelName(name: string): boolean {
   const normalized = name.toLowerCase();
   if (/\bchile\b|\bchili\b|\bcl\b/.test(normalized)) {
@@ -119,6 +122,17 @@ export function isDjChannelName(name: string): boolean {
   return DJ_CHANNEL_HINTS.some((hint) => normalized.includes(hint));
 }
 
+export function isJoChannelName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  if (/\bjordan\b|\bjod\b|\bjor\b|\bamman\b/.test(normalized)) {
+    return true;
+  }
+  if (/الأردن|الاردن|اردن/.test(name)) {
+    return true;
+  }
+  return JO_CHANNEL_HINTS.some((hint) => normalized.includes(hint) || name.includes(hint));
+}
+
 export function resolveWorkerCountryForChannel(
   channelName: string,
   savedCountry?: WorkerCountry,
@@ -137,6 +151,9 @@ export function resolveWorkerCountryForChannel(
   if (isDjChannelName(channelName)) {
     return "DJ";
   }
+  if (isJoChannelName(channelName)) {
+    return "JO";
+  }
   return yamlCountry ?? defaultCountryForChannelName(channelName);
 }
 
@@ -152,6 +169,9 @@ export function defaultCountryForChannelName(name: string): WorkerCountry {
   }
   if (isDjChannelName(name)) {
     return "DJ";
+  }
+  if (isJoChannelName(name)) {
+    return "JO";
   }
   const normalized = name.toLowerCase();
   if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {

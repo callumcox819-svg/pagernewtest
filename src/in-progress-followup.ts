@@ -11,7 +11,7 @@ import {
 import type { CountryCode } from "./config.js";
 
 /** Markets that get delayed «в процессе» check-ins (each in its own language). */
-export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW" | "CL" | "MG" | "DJ";
+export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW" | "CL" | "MG" | "DJ" | "JO";
 
 export const IN_PROGRESS_FOLLOWUP_MIN_MS = 20 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_MAX_MS = 22 * 60 * 1000;
@@ -19,7 +19,7 @@ export const IN_PROGRESS_FOLLOWUP_MAX_MS = 22 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_ATTEMPT_COOLDOWN_MS = 60 * 60 * 1000;
 
-/** ZM/RW English, CM/MG/DJ French, CL Spanish, EG Arabic — aligned with AI market languages. */
+/** ZM/RW English, CM/MG/DJ French, CL Spanish, EG/JO Arabic. */
 const FOLLOWUP_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   ZM: ["have you already registered", "when will you complete registration"],
   RW: ["have you already registered", "when will you complete registration"],
@@ -28,6 +28,7 @@ const FOLLOWUP_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   DJ: ["déjà inscrit", "terminer l'inscription", "terminer votre inscription"],
   CL: ["ya te registraste", "terminarás el registro", "terminaras el registro"],
   EG: ["هل قمت بالتسجيل", "متى ستنهي التسجيل", "متى ستكمل التسجيل"],
+  JO: ["هل قمت بالتسجيل", "متى ستنهي التسجيل", "متى ستكمل التسجيل"],
 };
 
 const FOLLOWUP_MESSAGES: Record<InProgressFollowUpCountry, [string, string]> = {
@@ -38,6 +39,7 @@ const FOLLOWUP_MESSAGES: Record<InProgressFollowUpCountry, [string, string]> = {
   DJ: ["Vous êtes déjà inscrit(e) ?", "Quand allez-vous terminer l'inscription ?"],
   CL: ["¿Ya te registraste?", "¿Cuándo terminarás el registro?"],
   EG: ["هل قمت بالتسجيل بالفعل؟", "متى ستنهي التسجيل؟"],
+  JO: ["هل قمت بالتسجيل بالفعل؟", "متى ستنهي التسجيل؟"],
 };
 
 const PLAN_ASK_MESSAGES: Record<InProgressFollowUpCountry, string> = {
@@ -48,6 +50,7 @@ const PLAN_ASK_MESSAGES: Record<InProgressFollowUpCountry, string> = {
   DJ: "Quand comptez-vous vous enregistrer ?",
   CL: "¿Cuándo planeas registrarte?",
   EG: "متى تخطط للتسجيل؟",
+  JO: "متى تخطط للتسجيل؟",
 };
 
 const PLAN_ASK_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
@@ -58,6 +61,7 @@ const PLAN_ASK_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   DJ: ["comptez-vous vous enregistrer", "comptez-vous terminer votre inscription"],
   CL: ["cuándo planeas registrarte", "cuando planeas registrarte"],
   EG: ["متى تخطط للتسجيل"],
+  JO: ["متى تخطط للتسجيل"],
 };
 
 function stableHash(value: string): number {
@@ -98,7 +102,7 @@ export function inProgressFollowUpAlreadySent(
 ): boolean {
   const blob = outgoingTexts.join("\n");
   const needles = FOLLOWUP_NEEDLES[country];
-  if (country === "EG") {
+  if (country === "EG" || country === "JO") {
     return needles.some((needle) => blob.includes(needle));
   }
   const lower = blob.toLowerCase();
@@ -111,7 +115,7 @@ export function inProgressPlanAskAlreadySent(
 ): boolean {
   const blob = outgoingTexts.join("\n");
   const needles = PLAN_ASK_NEEDLES[country];
-  if (country === "EG") {
+  if (country === "EG" || country === "JO") {
     return needles.some((needle) => blob.includes(needle));
   }
   const lower = blob.toLowerCase();
@@ -131,7 +135,7 @@ export function isInProgressBotAutomatedText(
   }
   const lower = t.toLowerCase();
   const needles = [...FOLLOWUP_NEEDLES[country], ...PLAN_ASK_NEEDLES[country]];
-  if (country === "EG") {
+  if (country === "EG" || country === "JO") {
     return needles.some((needle) => t.includes(needle));
   }
   return needles.some((needle) => lower.includes(needle.toLowerCase()));
@@ -297,7 +301,7 @@ export function isWeakInProgressSilenceReply(
   if (/^(👍|👌|✅|🙏|🤝|🔥)[\s!]*$/u.test(trimmed)) {
     return true;
   }
-  if (country === "EG") {
+  if (country === "EG" || country === "JO") {
     return /^(تمام|طيب|حاضر|اوك|أوك|ماشي|ماشى|نعم)[.!\s]*$/u.test(trimmed);
   }
   if (country === "CM" || country === "MG" || country === "DJ") {
@@ -420,7 +424,7 @@ export function classifyInProgressRegistrationReply(
     return "other";
   }
 
-  if (country === "EG") {
+  if (country === "EG" || country === "JO") {
     if (/لسه|ليس بعد|بعدين|قريب|هسجل|أسجل/.test(text)) {
       return "not_yet";
     }
@@ -469,7 +473,8 @@ export function isInProgressFollowUpCountry(
     country === "RW" ||
     country === "CL" ||
     country === "MG" ||
-    country === "DJ"
+    country === "DJ" ||
+    country === "JO"
   );
 }
 

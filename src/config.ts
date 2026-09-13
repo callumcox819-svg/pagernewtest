@@ -147,7 +147,7 @@ export function getTemplateBank(
 
 export function resolveYamlTemplateBankName(
   config: BotConfig,
-  country: CountryCode | "RW" | "CL" | "MG" | "DJ",
+  country: CountryCode | "RW" | "CL" | "MG" | "DJ" | "JO",
   channelId?: string,
 ): string {
   if (country === "RW") {
@@ -186,6 +186,15 @@ export function resolveYamlTemplateBankName(
     }
     return "dj-default";
   }
+  if (country === "JO") {
+    if (channelId) {
+      const channel = getChannelConfig(config, channelId);
+      if (channel?.templateBank) {
+        return channel.templateBank;
+      }
+    }
+    return "jo-default";
+  }
   if (channelId) {
     const channel = getChannelConfig(config, channelId);
     if (channel?.templateBank) {
@@ -205,10 +214,13 @@ export function isChannelConfigured(config: BotConfig, channelId: string): boole
 
 export function statusMapForCountry(
   config: BotConfig,
-  country: CountryCode | "RW" | "CL" | "MG" | "DJ",
+  country: CountryCode | "RW" | "CL" | "MG" | "DJ" | "JO",
 ): ChannelConfig["statusMap"] {
   if (country === "RW" || country === "CL" || country === "MG" || country === "DJ") {
     return statusMapForCountry(config, "CM");
+  }
+  if (country === "JO") {
+    return statusMapForCountry(config, "EG");
   }
   const channel = config.channels.find((item) => item.country === country);
   if (channel) {

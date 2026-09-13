@@ -321,6 +321,11 @@ export function shouldQueueDjConversation(conv: PagerConversation): boolean {
   return shouldQueueMgConversation(conv);
 }
 
+/** JO: Arabic no-status leads — same bias as MG/DJ. */
+export function shouldQueueJoConversation(conv: PagerConversation): boolean {
+  return shouldQueueMgConversation(conv);
+}
+
 /**
  * Thread already ends with our reply — do not run scripts/AI again until the customer writes.
  * With a stale unread badge, also skip when we already delivered after the last customer line.
