@@ -206,6 +206,7 @@ import {
   offerScriptsSentInHistory as djOfferScriptsSentInHistory,
   regLinkSentInHistory as djRegLinkSentInHistory,
   resolveDjFunnelScripts,
+  nextDjRegScripts,
 } from "./dj-script-engine.js";
 import {
   isRegistrationHelpRequest as djIsRegistrationHelpRequest,
@@ -3981,7 +3982,16 @@ async function processDjConversation(
   const sentScriptKeys: string[] = [];
   const allowMultiSend = djAllowsMultiSend(scriptKeys);
   const coveredOutgoing = [...outgoingTexts];
-  for (const scriptKey of scriptKeys) {
+
+  // Reg bundle must always finish as separate bubbles: 05 → 06 → 07 (never stop after reg).
+  const sendingRegBundle = scriptKeys.some((key) =>
+    key === "05_registration" || key === "06_link" || key === "07_promo",
+  );
+  const keysToSend = sendingRegBundle
+    ? [...new Set([...scriptKeys.filter((key) => !["05_registration", "06_link", "07_promo"].includes(key)), ...nextDjRegScripts(coveredOutgoing)])]
+    : scriptKeys;
+
+  for (const scriptKey of keysToSend) {
     if (djScriptSentInHistory(coveredOutgoing, scriptKey)) {
       console.log(
         `Pager worker: DJ ${convId.slice(0, 8)} skip duplicate key=${scriptKey} (already in thread/batch)`,
@@ -3989,29 +3999,43 @@ async function processDjConversation(
       continue;
     }
     let replyText = loadLocalDjScript(scriptKey)?.trim();
-    if (!replyText && scriptKey === "06_link") {
-      replyText = djDefaultRegistrationLink();
+    if (scriptKey === "06_link") {
+      replyText = replyText || djDefaultRegistrationLink();
     }
     if (!replyText) {
       console.warn(`DJ script missing ${convId.slice(0, 8)}: ${scriptKey}`);
       continue;
     }
 
-    const sent = await client.sendMessageReliable(convId, replyText.trim(), {
-      channelId: runtime.channelId,
-      conv,
-    });
+    let sent = false;
+    const attempts = scriptKey === "06_link" || scriptKey === "07_promo" ? 3 : 2;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      sent = await client.sendMessageReliable(convId, replyText.trim(), {
+        channelId: runtime.channelId,
+        conv,
+      });
+      if (sent) {
+        break;
+      }
+      console.warn(
+        `Pager worker: DJ send retry ${attempt}/${attempts} ${convId.slice(0, 8)} key=${scriptKey}`,
+      );
+      await sleep(600 * attempt);
+    }
     if (!sent) {
       const failures = (convState.sendFailures ?? 0) + 1;
       await patchConversationState(deps.stateStore, state.chatId, convId, {
         sendFailures: failures,
       });
       console.error(`Pager worker: DJ send failed ${convId.slice(0, 8)} key=${scriptKey}`);
-      // Keep trying link/promo — bare-URL / transient failures must not abort the bundle.
-      if (scriptKey === "06_link" || scriptKey === "07_promo" || scriptKeys.includes("06_link")) {
+      // Never abort the reg bundle before the link — keep going to 06/07.
+      if (sendingRegBundle && (scriptKey === "05_registration" || scriptKey === "06_link")) {
         continue;
       }
-      break;
+      if (!sendingRegBundle) {
+        break;
+      }
+      continue;
     }
     sentAny = true;
     sentScriptKeys.push(scriptKey);
@@ -4025,27 +4049,34 @@ async function processDjConversation(
       lastReplyRole: scriptKey,
       sendFailures: 0,
     });
-    await sleep(700);
-    if (!allowMultiSend) {
+    await sleep(sendingRegBundle ? 900 : 700);
+    if (!allowMultiSend && !sendingRegBundle) {
       break;
     }
   }
 
-  // Safety net: reg instructions without URL in thread → force the link bubble once.
+  // Absolute safety: reg without separate link bubble → send 06 alone (retries).
   if (
     djRegistrationInstructionsSentInHistory(coveredOutgoing) &&
     !djRegLinkSentInHistory(coveredOutgoing)
   ) {
     const linkText = djDefaultRegistrationLink();
-    const sentLink = await client.sendMessageReliable(convId, linkText, {
-      channelId: runtime.channelId,
-      conv,
-    });
+    let sentLink = false;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      sentLink = await client.sendMessageReliable(convId, linkText, {
+        channelId: runtime.channelId,
+        conv,
+      });
+      if (sentLink) {
+        break;
+      }
+      await sleep(700 * attempt);
+    }
     if (sentLink) {
       sentAny = true;
       sentScriptKeys.push("06_link");
       coveredOutgoing.push(linkText);
-      console.log(`Pager worker: DJ ${convId.slice(0, 8)} force-sent missing reg link`);
+      console.log(`Pager worker: DJ ${convId.slice(0, 8)} force-sent separate reg link`);
       await patchConversationState(deps.stateStore, state.chatId, convId, {
         conversationId: convId,
         channelId: runtime.channelId,
@@ -4056,7 +4087,35 @@ async function processDjConversation(
         sendFailures: 0,
       });
     } else {
-      console.error(`Pager worker: DJ ${convId.slice(0, 8)} force link send failed`);
+      console.error(`Pager worker: DJ ${convId.slice(0, 8)} separate link send failed after retries`);
+    }
+  }
+
+  // Promo still missing after link → send 07 separately.
+  if (
+    djRegLinkSentInHistory(coveredOutgoing) &&
+    !djScriptSentInHistory(coveredOutgoing, "07_promo")
+  ) {
+    const promoText = loadLocalDjScript("07_promo")?.trim();
+    if (promoText) {
+      const sentPromo = await client.sendMessageReliable(convId, promoText, {
+        channelId: runtime.channelId,
+        conv,
+      });
+      if (sentPromo) {
+        sentAny = true;
+        sentScriptKeys.push("07_promo");
+        coveredOutgoing.push(promoText);
+        await patchConversationState(deps.stateStore, state.chatId, convId, {
+          conversationId: convId,
+          channelId: runtime.channelId,
+          lastCustomerMessageId: lastIncoming.id,
+          lastCustomerMessageAt: lastIncoming.createdAt,
+          lastReplyAt: new Date().toISOString(),
+          lastReplyRole: "07_promo",
+          sendFailures: 0,
+        });
+      }
     }
   }
 
