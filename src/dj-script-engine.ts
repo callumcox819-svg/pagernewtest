@@ -75,8 +75,19 @@ export function scriptSentInHistory(outgoingTexts: string[], snippet: string): b
     return false;
   }
   return outgoingTexts.some((text) => {
-    const body = text.toLowerCase();
-    return body.includes(needle) || needle.includes(body.slice(0, 80));
+    const body = (text || "").trim().toLowerCase();
+    if (!body) {
+      return false;
+    }
+    if (body.includes(needle)) {
+      return true;
+    }
+    // Reverse match only for substantial bodies — empty/short strings made
+    // `needle.includes("")` / `includes("bji777")` falsely mark the link as sent.
+    if (body.length >= 20 && needle.includes(body.slice(0, 80))) {
+      return true;
+    }
+    return false;
   });
 }
 
@@ -407,6 +418,10 @@ export function resolveDjFunnelScripts(
   }
 
   if (!linkSent) {
+    // Reg already went out without URL — always finish with link+promo (even «Dsl» / short replies).
+    if (djRegistrationInstructionsSentInHistory(out)) {
+      return nextDjRegScripts(out);
+    }
     if (wantsRegistrationBundle(t, intent, effectiveStep)) {
       return [...DJ_REG_BUNDLE];
     }

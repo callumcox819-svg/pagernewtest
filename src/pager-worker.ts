@@ -199,6 +199,7 @@ import {
   djAllowsMultiSend,
   djFunnelStepFromScriptGaps,
   djInferStepFromThread,
+  djRegistrationInstructionsSentInHistory,
   djScriptSentInHistory,
   djStatusMoveTarget,
   limitDjScriptsForCustomerTurn,
@@ -3988,57 +3989,10 @@ async function processDjConversation(
       continue;
     }
     let replyText = loadLocalDjScript(scriptKey)?.trim();
+    if (!replyText && scriptKey === "06_link") {
+      replyText = djDefaultRegistrationLink();
+    }
     if (!replyText) {
-      if (scriptKey === "05_registration") {
-        const fallbackText = loadLocalDjScript("05_registration")?.trim();
-        if (fallbackText) {
-          const sent = await client.sendMessageReliable(convId, fallbackText, {
-            channelId: runtime.channelId,
-            conv,
-          });
-          if (sent) {
-            sentAny = true;
-            sentScriptKeys.push(scriptKey);
-            coveredOutgoing.push(fallbackText);
-            await patchConversationState(deps.stateStore, state.chatId, convId, {
-              conversationId: convId,
-              channelId: runtime.channelId,
-              lastCustomerMessageId: lastIncoming.id,
-              lastCustomerMessageAt: lastIncoming.createdAt,
-              lastReplyAt: new Date().toISOString(),
-              lastReplyRole: scriptKey,
-              sendFailures: 0,
-            });
-            await sleep(500);
-          }
-        } else {
-          console.warn(`DJ script missing ${convId.slice(0, 8)}: ${scriptKey}`);
-        }
-        continue;
-      }
-      if (scriptKey === "06_link") {
-        const fallbackLink = djDefaultRegistrationLink();
-        const sent = await client.sendMessageReliable(convId, fallbackLink, {
-          channelId: runtime.channelId,
-          conv,
-        });
-        if (sent) {
-          sentAny = true;
-          sentScriptKeys.push(scriptKey);
-          coveredOutgoing.push(fallbackLink);
-          await patchConversationState(deps.stateStore, state.chatId, convId, {
-            conversationId: convId,
-            channelId: runtime.channelId,
-            lastCustomerMessageId: lastIncoming.id,
-            lastCustomerMessageAt: lastIncoming.createdAt,
-            lastReplyAt: new Date().toISOString(),
-            lastReplyRole: scriptKey,
-            sendFailures: 0,
-          });
-          await sleep(500);
-        }
-        continue;
-      }
       console.warn(`DJ script missing ${convId.slice(0, 8)}: ${scriptKey}`);
       continue;
     }
@@ -4053,7 +4007,11 @@ async function processDjConversation(
         sendFailures: failures,
       });
       console.error(`Pager worker: DJ send failed ${convId.slice(0, 8)} key=${scriptKey}`);
-      return sentAny;
+      // Keep trying link/promo — bare-URL / transient failures must not abort the bundle.
+      if (scriptKey === "06_link" || scriptKey === "07_promo" || scriptKeys.includes("06_link")) {
+        continue;
+      }
+      break;
     }
     sentAny = true;
     sentScriptKeys.push(scriptKey);
@@ -4067,9 +4025,38 @@ async function processDjConversation(
       lastReplyRole: scriptKey,
       sendFailures: 0,
     });
-    await sleep(500);
+    await sleep(700);
     if (!allowMultiSend) {
       break;
+    }
+  }
+
+  // Safety net: reg instructions without URL in thread → force the link bubble once.
+  if (
+    djRegistrationInstructionsSentInHistory(coveredOutgoing) &&
+    !djRegLinkSentInHistory(coveredOutgoing)
+  ) {
+    const linkText = djDefaultRegistrationLink();
+    const sentLink = await client.sendMessageReliable(convId, linkText, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (sentLink) {
+      sentAny = true;
+      sentScriptKeys.push("06_link");
+      coveredOutgoing.push(linkText);
+      console.log(`Pager worker: DJ ${convId.slice(0, 8)} force-sent missing reg link`);
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: "06_link",
+        sendFailures: 0,
+      });
+    } else {
+      console.error(`Pager worker: DJ ${convId.slice(0, 8)} force link send failed`);
     }
   }
 

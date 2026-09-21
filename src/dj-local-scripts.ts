@@ -35,8 +35,10 @@ Tu peux t'inscrire en un seul clic ou par e-mail.
 Lors de ton inscription, sélectionne ton pays et ta devise.
 Utilise le code promo BJI777
 Une fois inscrit, envoie-moi un message ici.
-Voici le lien :`,
-  "06_link": DEFAULT_DJ_LINK,
+Voici le lien :
+https://tinyurl.com/BJI777`,
+  "06_link": `Voici le lien :
+https://tinyurl.com/BJI777`,
   "07_promo": `code promo
 BJI777`,
 };
@@ -83,7 +85,12 @@ export function loadLocalDjScript(scriptKey: string): string | undefined {
 }
 
 export function djDefaultRegistrationLink(): string {
-  return loadLocalDjScript("06_link")?.trim() || DEFAULT_DJ_LINK;
+  return loadLocalDjScript("06_link")?.trim() || `Voici le lien :\n${DEFAULT_DJ_LINK}`;
+}
+
+/** Bare URL only — for status/needle checks. */
+export function djRegistrationUrl(): string {
+  return DEFAULT_DJ_LINK;
 }
 
 export function djEmbeddedScriptKeys(): string[] {
