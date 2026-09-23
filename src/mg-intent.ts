@@ -182,7 +182,7 @@ export function wantsRegistrationLink(text: string): boolean {
   return FR_LINK_ASK.test(t) || customerRequestsRegistrationMaterials(text);
 }
 
-/** Pick from 03_mga_table: «Le premier», «2», «8000 MGA», «4000ar», etc. */
+/** Pick from 03_mga_table: «Le premier», «2», «8000 MGA», «5000ar», etc. */
 export function isMgOfferTableChoice(text: string): boolean {
   const raw = (text || "").trim();
   if (!raw) {
@@ -209,14 +209,14 @@ export function isMgOfferTableChoice(text: string): boolean {
   }
   if (
     /\b(je choisis|je prends|je veux|je prefere|prefere|choisis|prends|celui|celle)\b/i.test(t) &&
-    /(?:^|[^\d])(4000|8000|15000|30000|1|2|3|4)(?:[^\d]|$)/i.test(t)
+    /(?:^|[^\d])(5000|4000|8000|15000|30000|1|2|3|4)(?:[^\d]|$)/i.test(t)
   ) {
     return true;
   }
   return isMgDepositAmountChoice(raw);
 }
 
-/** Table amounts: «4000 MGA», «4000ar», «8 000» — glued currency OK (JS `\b` breaks on 4000ar). */
+/** Table amounts: «5000 MGA», «5000ar», «8 000» — glued currency OK (JS `\b` breaks on 5000ar). */
 export function isMgDepositAmountChoice(text: string): boolean {
   const folded = normalizeMgText(normalizeDepositText(text));
   if (!folded) {
@@ -224,13 +224,15 @@ export function isMgDepositAmountChoice(text: string): boolean {
   }
   // Optional space before mga/ar/ariary; no word-boundary required after digits.
   const hasTableAmount =
-    /(?:^|[^\d])(4\s*000|8\s*000|15\s*000|30\s*000|4000|8000|15000|30000)(?:\s*(?:mga|ariary|ar))?(?![0-9])/i.test(
+    /(?:^|[^\d])(5\s*000|4\s*000|8\s*000|15\s*000|30\s*000|5000|4000|8000|15000|30000)(?:\s*(?:mga|ariary|ar))?(?![0-9])/i.test(
       folded,
     );
   if (hasTableAmount) {
     if (
       /(?:mga|ariary|(?:^|[^a-z])ar(?:[^a-z]|$))/i.test(folded) ||
-      /(?:4000|8000|15000|30000|4\s*000|8\s*000|15\s*000|30\s*000)\s*(?:mga|ariary|ar)/i.test(folded) ||
+      /(?:5000|4000|8000|15000|30000|5\s*000|4\s*000|8\s*000|15\s*000|30\s*000)\s*(?:mga|ariary|ar)/i.test(
+        folded,
+      ) ||
       /\b(deposit|depot|choisir|prefere|celui|celle|maintenant|veux|prends|prend|mets)\b/i.test(folded) ||
       folded.length < 56
     ) {

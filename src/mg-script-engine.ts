@@ -28,7 +28,7 @@ const MG_GAME_ID_RE = /\b(17\d{6,}|16\d{6,})\b/;
 export const MG_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "augmenter vos revenus",
   "02_how_it_works": "Comment ça marche",
-  "03_mga_table": "4000 MGA - 20000 MGA",
+  "03_mga_table": "5000 MGA - 20000 MGA",
   "04_registration": "code promo MAD778",
   "05_link": "tinyurl.com/mdg56",
   "06_deposit": "bouton vert",
@@ -41,9 +41,9 @@ export const MG_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
     "plateformes de casino",
     "intelligence artificielle analyse",
   ],
-  "02_how_it_works": ["comment ça marche", "dépôt minimum", "800 mga"],
+  "02_how_it_works": ["comment ça marche", "dépôt minimum", "5000 mga"],
   "03_mga_table": [
-    "4000 mga - 20000 mga",
+    "5000 mga - 20000 mga",
     "8000 mga - 40000 mga",
     "15000 mga - 120000 mga",
     "30000 mga - 240000 mga",
@@ -183,7 +183,11 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("tinyurl.com/mdg56") || t.includes("code promo mad778")) {
     return 4;
   }
-  if (t.includes("4000 mga") || t.includes("lequel préférez-vous")) {
+  if (
+    t.includes("5000 mga") ||
+    t.includes("4000 mga") ||
+    t.includes("lequel préférez-vous")
+  ) {
     return 3;
   }
   if (t.includes("comment ça marche") && (t.includes("1.") || t.includes("1)"))) {
