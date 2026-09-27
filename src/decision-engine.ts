@@ -65,15 +65,18 @@ export function decideNextAction(
   }
 
   const text = event.latestCustomerText ?? "";
-  const special = classifySpecialCustomerIntent(playbook, text);
-  const specialRole = specialIntentTemplateRole(special);
-  if (specialRole) {
-    return sanitizeDecision({
-      nextStage: special === "deferral" ? "not_ready" : "no_money",
-      templateRole: specialRole,
-      templateToSend: templateBank.roles[specialRole],
-      reason: `Special intent ${special}`,
-    });
+  // First touch (new_lead): never divert to no_money/deferral — intro script must go first.
+  if (event.currentStage !== "new_lead") {
+    const special = classifySpecialCustomerIntent(playbook, text);
+    const specialRole = specialIntentTemplateRole(special);
+    if (specialRole) {
+      return sanitizeDecision({
+        nextStage: special === "deferral" ? "not_ready" : "no_money",
+        templateRole: specialRole,
+        templateToSend: templateBank.roles[specialRole],
+        reason: `Special intent ${special}`,
+      });
+    }
   }
 
   const normalizedText = normalizeCustomerText(text);

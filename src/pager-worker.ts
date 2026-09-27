@@ -1839,6 +1839,7 @@ async function processRwFunnelConversation(
     lastIncoming,
     text: latestCustomerText,
     playbook,
+    outgoingTexts,
   });
   if (specialHandled) {
     return true;
@@ -2207,6 +2208,7 @@ async function processCmConversation(
     lastIncoming,
     text: latestCustomerText,
     playbook,
+    outgoingTexts,
   });
   if (specialHandled) {
     return true;
@@ -2755,6 +2757,7 @@ async function processClConversation(
     lastIncoming,
     text: latestCustomerText,
     playbook,
+    outgoingTexts,
   });
   if (specialHandled) {
     return true;
@@ -3008,6 +3011,7 @@ async function processZmConversation(
     lastIncoming,
     text: latestCustomerText,
     playbook,
+    outgoingTexts,
   });
   if (specialHandled) {
     return true;
@@ -3446,6 +3450,7 @@ async function processMgConversation(
     lastIncoming,
     text: latestCustomerText,
     playbook,
+    outgoingTexts,
   });
   if (specialHandled) {
     return true;
@@ -3881,6 +3886,7 @@ async function processDjConversation(
     lastIncoming,
     text: latestCustomerText,
     playbook,
+    outgoingTexts,
   });
   if (specialHandled) {
     return true;
@@ -4359,6 +4365,7 @@ async function processJoConversation(
     lastIncoming,
     text: latestCustomerText,
     playbook,
+    outgoingTexts,
   });
   if (specialHandled) {
     return true;
@@ -4982,6 +4989,7 @@ async function processEgConversation(
     lastIncoming,
     text: latestCustomerText,
     playbook,
+    outgoingTexts,
   });
   if (specialHandled) {
     return true;
@@ -5359,6 +5367,12 @@ async function processGenericConversation(
   const playbook = getPlaybook(deps.config, channel.country);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const imageUrl = extractProofImageUrl(lastIncoming);
+  const outgoingTexts = messages
+    .filter((message) => {
+      const direction = (message.messageDirection ?? "").toLowerCase();
+      return (direction === "outgoing" || direction === "out") && Boolean((message.text || "").trim());
+    })
+    .map((message) => (message.text || "").trim());
 
   const specialHandled = await trySendSpecialCustomerResponse(deps, {
     state,
@@ -5371,6 +5385,7 @@ async function processGenericConversation(
     lastIncoming,
     text: latestCustomerText,
     playbook,
+    outgoingTexts,
   });
   if (specialHandled) {
     return true;
@@ -6576,13 +6591,70 @@ type SpecialResponseContext = {
   lastIncoming: PagerMessage;
   text: string;
   playbook: ReturnType<typeof getPlaybook>;
+  /** Outgoing bot texts already in the thread (preferred). */
+  outgoingTexts?: string[];
 };
+
+/** True once a real funnel script went out — not money/phone refusals. */
+function specialFunnelAlreadyStarted(ctx: SpecialResponseContext): boolean {
+  if ((ctx.convState.funnelStep ?? 0) > 0) {
+    return true;
+  }
+  const role = (ctx.convState.lastReplyRole || "").toLowerCase();
+  if (
+    role &&
+    !["money_request", "phone_request", "no_money", "deferral", "declined", "scam_accusation"].includes(
+      role,
+    )
+  ) {
+    return true;
+  }
+  const out = ctx.outgoingTexts ?? [];
+  if (out.length === 0) {
+    return false;
+  }
+  return out.some((text) => !isSpecialRefusalOutgoing(text));
+}
+
+function isSpecialRefusalOutgoing(text: string): boolean {
+  const t = (text || "").trim().toLowerCase();
+  if (!t) {
+    return true;
+  }
+  return (
+    t.includes("don't give money") ||
+    t.includes("do not give money") ||
+    t.includes("ne donnons pas d'argent") ||
+    t.includes("ne donnons pas d’argent") ||
+    t.includes("no damos dinero") ||
+    t.includes("لا نُعطي") ||
+    t.includes("لا نعطي") ||
+    t.includes("only communicate online") ||
+    t.includes("uniquement en ligne") ||
+    t.includes("solo en línea") ||
+    t.includes("solo en linea") ||
+    t.includes("نتواصل فقط")
+  );
+}
 
 async function trySendSpecialCustomerResponse(
   deps: WorkerDeps,
   ctx: SpecialResponseContext,
 ): Promise<boolean> {
   const special = classifySpecialCustomerIntent(ctx.playbook, ctx.text);
+  if (special === "none") {
+    return false;
+  }
+
+  // First SMS in a thread: ALWAYS run country scripts (01_intro). Never money-refusal /
+  // phone / no_money templates before the funnel has started.
+  if (!specialFunnelAlreadyStarted(ctx)) {
+    console.log(
+      `Pager worker: defer special=${special} ${ctx.channel.country} ${ctx.convId.slice(0, 8)} — first touch, script 1 first (text=${truncate(ctx.text)})`,
+    );
+    return false;
+  }
+
   if (special === "declined" || special === "scam_accusation") {
     console.log(
       `Pager worker: skip ${ctx.convId.slice(0, 8)} ${ctx.channel.country} — ${special} (text=${truncate(ctx.text)})`,

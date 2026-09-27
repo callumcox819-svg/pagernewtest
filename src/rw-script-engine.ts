@@ -326,13 +326,8 @@ export function resolveRwFunnelScripts(
   }
 
   if (!introSent) {
-    if (
-      intent === "interested" ||
-      signal ||
-      intent === "question" ||
-      isGreeting(t) ||
-      hasUsableFollowUp(t)
-    ) {
+    // First SMS: always script 1 — any text (money ask, hello, etc.).
+    if (t) {
       return ["01_intro"];
     }
     return [];

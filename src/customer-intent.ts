@@ -110,23 +110,35 @@ export function specialIntentTemplateRole(intent: SpecialCustomerIntent): Templa
   }
 }
 
-export function moneyRefusalText(country: CountryCode): string {
+/** Localized "we don't give money" — only after funnel script 1 already went out. */
+export function moneyRefusalText(country: CountryCode | string): string {
   switch (country) {
     case "CM":
+    case "MG":
+    case "DJ":
       return "Nous ne donnons pas d'argent — nous vous aidons seulement à gagner avec nos tactiques. Quand vous serez prêt à investir, écrivez-moi.";
     case "EG":
+    case "JO":
       return "نحن لا نُعطي أموالاً، بل نساعدك فقط على الكسب بالتكتيكات. عندما تكون جاهزاً للاستثمار، راسلني.";
+    case "CL":
+      return "No damos dinero — solo te ayudamos a ganar con nuestras tácticas. Cuando estés listo para invertir, escríbeme.";
     default:
+      // ZM, RW, and other English markets
       return "We don't give money — we only help you earn with our tactics. Message me when you're ready to invest.";
   }
 }
 
-export function phoneChatOnlyText(country: CountryCode): string {
+export function phoneChatOnlyText(country: CountryCode | string): string {
   switch (country) {
     case "CM":
+    case "MG":
+    case "DJ":
       return "Nous communiquons uniquement en ligne dans ce chat. Si vous êtes intéressé, écrivez-moi ici et on continue.";
     case "EG":
+    case "JO":
       return "نتواصل فقط أونلاين داخل هذه المحادثة. إذا كنت مهتماً، اكتب لي هنا ونكمل.";
+    case "CL":
+      return "Nos comunicamos solo en línea en este chat. Si te interesa, escríbeme aquí y seguimos.";
     default:
       return "We only communicate online in this chat. If you're interested, text me here and we'll continue.";
   }
