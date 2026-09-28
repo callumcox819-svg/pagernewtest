@@ -12,41 +12,14 @@ export function pagerOrganizationKey(state: ChatState): string | undefined {
   return undefined;
 }
 
-function sharesPagerLogin(left: ChatState, right: ChatState): boolean {
-  const leftKey = pagerOrganizationKey(left);
-  const rightKey = pagerOrganizationKey(right);
-  if (leftKey && rightKey) {
-    return leftKey === rightKey;
-  }
-  return left.chatId === right.chatId;
-}
-
+/** Pause / unpause only this Telegram operator — never mirror across the Pager org. */
 export async function applyPagerPause(
   store: StateStore,
   source: ChatState,
   paused: boolean,
 ): Promise<ChatState[]> {
-  const all = await store.listAll();
-  const touched: ChatState[] = [];
-
-  for (const state of all) {
-    if (!sharesPagerLogin(source, state)) {
-      continue;
-    }
-    const next = await store.patch(state.chatId, { paused });
-    if (next) {
-      touched.push(next);
-    }
-  }
-
-  if (!touched.length) {
-    const fallback = await store.patch(source.chatId, { paused });
-    if (fallback) {
-      touched.push(fallback);
-    }
-  }
-
-  return touched;
+  const next = await store.patch(source.chatId, { paused });
+  return next ? [next] : [];
 }
 
 export function describePagerAccount(state: ChatState): string {
