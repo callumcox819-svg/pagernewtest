@@ -201,11 +201,17 @@ export function isConversationInOperatorEnabledFolders(
     operatorSettings?: { statusFolders?: StatusFolderState[] };
   },
 ): boolean {
-  const enabled = getEnabledFolderIds(state);
-  if (!enabled || enabled.size === 0) {
-    return true;
+  const folders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  // Folders configured but none enabled → process nothing (never fall back to all inbox).
+  if (folders?.length) {
+    const enabled = getEnabledFolderIds(state);
+    if (!enabled || enabled.size === 0) {
+      return false;
+    }
+    return conversationAllowedInFolders(conv, enabled);
   }
-  return conversationAllowedInFolders(conv, enabled);
+  // No folder menu yet — do not process until the operator picks folders.
+  return false;
 }
 
 /** «Завершено» / completed — эталонные чаты с депозитом для RW-обучения. */

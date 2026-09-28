@@ -530,20 +530,24 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const enabledFolderIds = resolveEnabledFolderIds(freshState, enabledChannels);
   const hasCmChannel = enabledChannels.some((item) => item.runtime.country === "CM");
   const hasEgChannel = enabledChannels.some((item) => item.runtime.country === "EG");
-  if (enabledFolderIds && enabledFolderIds.size === 0) {
+  if (!enabledFolderIds || enabledFolderIds.size === 0) {
     console.warn(
-      `Pager worker: chat ${freshState.chatId} — no status folders enabled; falling back to all inbox`,
+      `Pager worker: chat ${freshState.chatId} — no personal status folders enabled; skip poll (enable folders in «Папки»)`,
     );
+    return;
   }
 
   if (enabledFolderIds) {
-    const folderNames = (freshState.statusFolders ?? [])
+    const folderNames = (
+      freshState.operatorSettings?.statusFolders ??
+      freshState.statusFolders ??
+      []
+    )
       .filter((folder) => folder.enabled)
       .map((folder) => folder.name)
       .join(", ");
-    const folderMode = hasEgChannel && hasCmChannel ? "cm+eg" : "strict";
     console.log(
-      `Pager worker: chat ${freshState.chatId} — folders=[${folderNames || "all"}] (${folderMode})`,
+      `Pager worker: chat ${freshState.chatId} — personal folders=[${folderNames}]`,
     );
   }
 
@@ -586,23 +590,23 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   }
 
   const folderScopedConversations = conversations.filter((conv) => {
-    if (!enabledFolderIds || enabledFolderIds.size === 0) {
-      return true;
-    }
     const channelId = conv.channelId || conv.channel?.id || "";
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
     const country = runtime?.runtime.country;
-    const folderIds =
-      country === "EG" || country === "CM" || country === "ZM" || country === "RW" || country === "CL" || country === "MG" || country === "DJ" || country === "JO"
-        ? resolveChannelEnabledFolderIds(
-            enabledFolderIds,
-            country,
-            hasCmChannel,
-            hasEgChannel,
-          )
-        : enabledFolderIds;
+    const folderIds = resolveChannelEnabledFolderIds(
+      enabledFolderIds,
+      country,
+      hasCmChannel,
+      hasEgChannel,
+    );
     if (!folderIds || folderIds.size === 0) {
-      return true;
+      return false;
+    }
+    // «В процесі» — only if THIS operator enabled that folder (not via «Всі»).
+    if (isInProgressStatusConversation(conv)) {
+      const statusFolders =
+        freshState.operatorSettings?.statusFolders ?? freshState.statusFolders;
+      return isInProgressFollowUpFolderEnabled(conv, statusFolders);
     }
     return conversationAllowedInFolders(conv, folderIds);
   });
@@ -890,30 +894,22 @@ function inboxConversationEligible(
   conv: PagerConversation,
   enabledFolderIds: Set<string> | null,
 ): boolean {
-  // Strict folder gate: only operator-enabled folders (e.g. «Без статусу»).
-  // Unread in «чекаю ID» / «В процесі» must NEVER be touched unless that folder is enabled.
-  if (enabledFolderIds && enabledFolderIds.size > 0) {
-    return conversationAllowedInFolders(conv, enabledFolderIds);
+  // Strict personal folder gate — never fall back to "any unread in org".
+  if (!enabledFolderIds || enabledFolderIds.size === 0) {
+    return false;
   }
-  return (
-    hasUnreadMarkers(conv) ||
-    isIncomingDirection(conv.lastMessageDirection) ||
-    isNewLeadConversation(conv)
-  );
+  return conversationAllowedInFolders(conv, enabledFolderIds);
 }
 
 function resolveChannelEnabledFolderIds(
   enabledFolderIds: Set<string> | null,
-  country: WorkerCountry,
-  hasCmChannel: boolean,
-  hasEgChannel: boolean,
+  _country: WorkerCountry | undefined,
+  _hasCmChannel: boolean,
+  _hasEgChannel: boolean,
 ): Set<string> | null {
+  // Personal settings only — do not auto-widen EG to «Всі».
   if (!enabledFolderIds || enabledFolderIds.size === 0) {
     return null;
-  }
-  // Shared CM+EG account: Egypt unread often sits outside CM's «Без статусу» filter.
-  if (country === "EG" && hasCmChannel && hasEgChannel && !enabledFolderIds.has(ALL_INBOX_FOLDER_ID)) {
-    return new Set([...enabledFolderIds, ALL_INBOX_FOLDER_ID]);
   }
   return enabledFolderIds;
 }
@@ -1256,7 +1252,16 @@ async function buildWorkQueue(
       );
       let addedForChannel = 0;
       for (const conv of inboxTop) {
-        if (enabledFolderIds && !conversationAllowedInFolders(conv, enabledFolderIds)) {
+        if (!enabledFolderIds || enabledFolderIds.size === 0) {
+          continue;
+        }
+        if (isInProgressStatusConversation(conv)) {
+          const statusFolders =
+            chatState.operatorSettings?.statusFolders ?? chatState.statusFolders;
+          if (!isInProgressFollowUpFolderEnabled(conv, statusFolders)) {
+            continue;
+          }
+        } else if (!conversationAllowedInFolders(conv, enabledFolderIds)) {
           continue;
         }
         if (selected.has(conv.id)) {
@@ -1618,14 +1623,26 @@ async function processConversation(
   }
 
   if (
-    channelFolderIds &&
-    channelFolderIds.size > 0 &&
+    !channelFolderIds ||
+    channelFolderIds.size === 0 ||
     !conversationAllowedInFolders(workingConv, channelFolderIds)
   ) {
-    console.log(
-      `Pager worker: skip ${conv.id.slice(0, 8)} — outside enabled folders (status=${workingConv.status?.name || "none"})`,
-    );
-    return false;
+    // «В процесі» may still be allowed when that folder is explicitly enabled even if
+    // «Всі» is off — conversationAllowedInFolders already checks status id.
+    if (
+      !(
+        isInProgressStatusConversation(workingConv) &&
+        isInProgressFollowUpFolderEnabled(
+          workingConv,
+          state.operatorSettings?.statusFolders ?? state.statusFolders,
+        )
+      )
+    ) {
+      console.log(
+        `Pager worker: skip ${conv.id.slice(0, 8)} chat=${state.chatId} — outside YOUR folders (status=${workingConv.status?.name || "none"})`,
+      );
+      return false;
+    }
   }
 
   if (isIgnoreStatusConversation(workingConv)) {
@@ -1641,21 +1658,15 @@ async function processConversation(
     return false;
   }
 
-  // Strict: in-progress follow-up only when that folder is explicitly enabled (not «Всі» alone).
+  // Strict: in-progress follow-up only when THAT operator enabled the folder (not «Всі»).
   const statusFolders = state.operatorSettings?.statusFolders ?? state.statusFolders;
   if (
     isInProgressStatusConversation(workingConv) &&
     !isInProgressFollowUpFolderEnabled(workingConv, statusFolders)
   ) {
-    return false;
-  }
-
-  if (
-    isInProgressStatusConversation(workingConv) &&
-    channelFolderIds &&
-    channelFolderIds.size > 0 &&
-    !conversationAllowedInFolders(workingConv, channelFolderIds)
-  ) {
+    console.log(
+      `Pager worker: skip ${conv.id.slice(0, 8)} chat=${state.chatId} — «в процесі» not enabled for this operator`,
+    );
     return false;
   }
 
