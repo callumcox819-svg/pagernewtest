@@ -1694,19 +1694,62 @@ async function processConversation(
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
   const workerCountry = runtime.runtime.country;
-  if (!isFolderMarket(workerCountry)) {
-    console.log(
-      `Pager worker: skip ${workingConv.id.slice(0, 8)} country=${workerCountry} — Melbet saved replies only, 1xbet scripts disabled`,
+  // Melbet guard still blocks 1xbet text on send; do NOT skip whole countries here.
+  if (workerCountry === "RW") {
+    return processRwConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (workerCountry === "CL") {
+    return processClConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (isClChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: ${runtime.channelName} is a Chile channel but country=${workerCountry} — routing CL`,
     );
-    return false;
+    return processClConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (workerCountry === "MG") {
+    return processMgConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (isMgChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: ${runtime.channelName} is a Madagascar channel but country=${workerCountry} — routing MG`,
+    );
+    return processMgConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (workerCountry === "DJ") {
     return processDjConversation(deps, state, client, workingConv, runtime, channel);
   }
-  if (workerCountry === "CM") {
+  if (isDjChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: ${runtime.channelName} is a Djibouti channel but country=${workerCountry} — routing DJ`,
+    );
+    return processDjConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (workerCountry === "JO") {
+    return processJoConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (isFolderOnlyCountry(workerCountry)) {
+    return processFolderMarketConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (isJoChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: ${runtime.channelName} is a Jordan channel but country=${workerCountry} — routing JO`,
+    );
+    return processJoConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (channel.country === "CM" || workerCountry === "CM") {
     return processCmConversation(deps, state, client, workingConv, runtime, channel);
   }
-  return processFolderMarketConversation(deps, state, client, workingConv, runtime, channel);
+  if (channel.country === "ZM" || workerCountry === "ZM") {
+    return processZmConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (channel.country === "EG" || workerCountry === "EG") {
+    return processEgConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (isFolderMarket(workerCountry)) {
+    return processFolderMarketConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  return processGenericConversation(deps, state, client, workingConv, runtime, channel);
   } finally {
     conversationsInFlight.delete(conv.id);
   }
