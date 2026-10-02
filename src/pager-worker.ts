@@ -1694,7 +1694,7 @@ async function processConversation(
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
   const workerCountry = runtime.runtime.country;
-  // Melbet guard still blocks 1xbet text on send; do NOT skip whole countries here.
+  // Pagertestbot = 1xBET funnel. Melbet branding belongs on autostaff only.
   if (workerCountry === "RW") {
     return processRwConversation(deps, state, client, workingConv, runtime, channel);
   }
