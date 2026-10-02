@@ -122,6 +122,7 @@ import {
   cmAllowsMultiSend,
   CM_REG_SEND_KEYS,
   tierSentInHistory,
+  stepsSentInHistory,
   depositSentInHistory as cmDepositSentInHistory,
 } from "./cm-script-engine.js";
 import {
@@ -248,6 +249,7 @@ import {
 } from "./zm-proof.js";
 import { extractProofImageUrl, resolveMessageReaction } from "./message-attachments.js";
 import {
+  isAgeAnswer,
   isDepositTierChoice,
   isCmRegistrationHelpRequest,
   isRegistrationAccountQuestion,
@@ -2369,6 +2371,23 @@ async function processCmConversation(
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
+  // Hard guarantee after age: never stall on «Quel âge» → always send 03_steps.
+  const ageAsked =
+    cmScriptSentInHistory(outgoingTexts, "02_age") ||
+    /quel âge|quel age|age avez-vous|age as-tu/i.test(outgoingTexts.join("\n"));
+  const stepsAlready = stepsSentInHistory(outgoingTexts);
+  if (
+    ageAsked &&
+    !stepsAlready &&
+    !cmRegLinkSentInHistory(outgoingTexts) &&
+    (isAgeAnswer(latestCustomerText) ||
+      intent === "positive" ||
+      intent === "ready" ||
+      intent === "interested" ||
+      /^\d{1,2}\s*ans?\b/i.test(latestCustomerText.trim()))
+  ) {
+    scriptKeys = ["03_steps"];
+  }
   if (
     tierSentInHistory(outgoingTexts) &&
     !cmRegLinkSentInHistory(outgoingTexts) &&
@@ -2524,6 +2543,39 @@ async function processCmConversation(
       if (scriptKey === "01_intro_2" || scriptKey === "01_intro_3") {
         console.warn(`CM script optional miss ${convId.slice(0, 8)}: ${scriptKey}`);
         continue;
+      }
+      if (scriptKey === "02_age" || scriptKey === "03_steps" || scriptKey === "04_tier") {
+        const fallbackText = loadLocalCmScript(scriptKey)?.trim();
+        if (fallbackText) {
+          const sent = await client.sendMessageReliable(convId, fallbackText, {
+            channelId: runtime.channelId,
+            conv,
+          });
+          if (sent) {
+            sentAny = true;
+            sentScriptKeys.push(scriptKey);
+            coveredOutgoing.push(fallbackText);
+            await patchConversationState(deps.stateStore, state.chatId, convId, {
+              conversationId: convId,
+              channelId: runtime.channelId,
+              lastCustomerMessageId: lastIncoming.id,
+              lastCustomerMessageAt: lastIncoming.createdAt,
+              lastReplyAt: new Date().toISOString(),
+              lastReplyRole: scriptKey,
+              funnelStep: Math.max(convState.funnelStep ?? 0, scriptKey === "02_age" ? 2 : scriptKey === "03_steps" ? 3 : 4),
+              sendFailures: 0,
+            });
+            try {
+              await client.acknowledgeConversation(convId);
+            } catch {
+              // non-fatal
+            }
+            await sleep(500);
+          } else {
+            console.warn(`CM script local send failed ${convId.slice(0, 8)}: ${scriptKey}`);
+          }
+          continue;
+        }
       }
       if (scriptKey === "05_registration") {
         const fallbackText = loadLocalCmScript("05_registration")?.trim();
@@ -5439,8 +5491,13 @@ async function trySendFolderPreset(
   outgoingTexts: string[],
   customerText: string,
 ): Promise<boolean> {
+  // 1xBET: CM/DJ have full script engines. Melbet-style folder presets must NOT
+  // intercept them — age answers like "20" were treated as table picks → hold → silence.
+  if (!isFolderOnlyCountry(runtime.runtime.country)) {
+    return false;
+  }
   const language = folderMarketLanguage(runtime.runtime.country);
-  if (!language || !isFolderMarket(runtime.runtime.country)) {
+  if (!language) {
     return false;
   }
   const folderId =
@@ -5464,10 +5521,11 @@ async function trySendFolderPreset(
     return false;
   }
   if (plan.action === "hold") {
+    // Do not swallow the turn — fall through so scripts/AI can still reply.
     console.log(
-      `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} preset hold (${plan.reason}), no AI`,
+      `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} preset hold (${plan.reason}), fall through`,
     );
-    return true;
+    return false;
   }
 
   console.log(
@@ -5489,7 +5547,7 @@ async function trySendFolderPreset(
       sendFailures: (convState.sendFailures ?? 0) + 1,
     });
     console.error(`Pager worker: preset send failed ${convId.slice(0, 8)} ${plan.role}`);
-    return true;
+    return false;
   }
   await patchConversationState(deps.stateStore, state.chatId, convId, {
     conversationId: convId,
@@ -5501,6 +5559,11 @@ async function trySendFolderPreset(
     funnelStep: plan.index + 1,
     sendFailures: 0,
   });
+  try {
+    await client.acknowledgeConversation(convId);
+  } catch {
+    // non-fatal
+  }
   return true;
 }
 

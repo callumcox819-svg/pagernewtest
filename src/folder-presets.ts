@@ -133,6 +133,13 @@ function isTableAmountChoice(text: string): boolean {
   if (!folded || folded.length > 40 || text.includes("?")) {
     return false;
   }
+  // Age answers ("20", "20 ans") must never be treated as deposit-table picks.
+  if (/^\d{1,2}$/.test(folded) || /^\d{1,2}\s*ans?$/.test(folded)) {
+    return false;
+  }
+  if (/\b\d{1,2}\s*ans?\b/.test(folded) && !/-|–|—/.test(folded)) {
+    return false;
+  }
   return /\d/.test(folded);
 }
 

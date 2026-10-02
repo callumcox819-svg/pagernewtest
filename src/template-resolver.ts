@@ -174,6 +174,18 @@ export async function resolveScriptTextByKey(
       return localTier;
     }
   }
+  if (country === "CM" && options.scriptKey === "03_steps") {
+    const localSteps = loadLocalCmScript("03_steps");
+    if (localSteps?.trim()) {
+      return localSteps.trim();
+    }
+  }
+  if (country === "CM" && options.scriptKey === "02_age") {
+    const localAge = loadLocalCmScript("02_age");
+    if (localAge?.trim()) {
+      return localAge.trim();
+    }
+  }
   if (country === "CM" && options.scriptKey === "05_registration") {
     const localReg = loadLocalCmScript("05_registration");
     if (localReg?.trim()) {
