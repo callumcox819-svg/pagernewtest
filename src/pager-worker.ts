@@ -1694,7 +1694,6 @@ async function processConversation(
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
   const workerCountry = runtime.runtime.country;
-  // Pagertestbot = 1xBET funnel. Melbet branding belongs on autostaff only.
   if (workerCountry === "RW") {
     return processRwConversation(deps, state, client, workingConv, runtime, channel);
   }
@@ -2064,25 +2063,25 @@ async function processCmConversation(
 ): Promise<boolean> {
   if (isClChannelName(runtime.channelName)) {
     console.warn(
-      `Pager worker: CM handler blocked for Chile channel ${runtime.channelName} вЂ” routing CL`,
+      `Pager worker: CM handler blocked for Chile channel ${runtime.channelName} — routing CL`,
     );
     return processClConversation(deps, state, client, conv, runtime, channel);
   }
   if (isMgChannelName(runtime.channelName)) {
     console.warn(
-      `Pager worker: CM handler blocked for Madagascar channel ${runtime.channelName} вЂ” routing MG`,
+      `Pager worker: CM handler blocked for Madagascar channel ${runtime.channelName} — routing MG`,
     );
     return processMgConversation(deps, state, client, conv, runtime, channel);
   }
   if (isDjChannelName(runtime.channelName)) {
     console.warn(
-      `Pager worker: CM handler blocked for Djibouti channel ${runtime.channelName} вЂ” routing DJ`,
+      `Pager worker: CM handler blocked for Djibouti channel ${runtime.channelName} — routing DJ`,
     );
     return processDjConversation(deps, state, client, conv, runtime, channel);
   }
   if (isJoChannelName(runtime.channelName)) {
     console.warn(
-      `Pager worker: CM handler blocked for Jordan channel ${runtime.channelName} вЂ” routing JO`,
+      `Pager worker: CM handler blocked for Jordan channel ${runtime.channelName} — routing JO`,
     );
     return processJoConversation(deps, state, client, conv, runtime, channel);
   }
@@ -2115,13 +2114,13 @@ async function processCmConversation(
     cmRegLinkSentInHistory,
   );
 
-  // Operator enabled В«Р‘РµР· СЃС‚Р°С‚СѓСЃСѓВ» only в†’ never script/AI chats already in В«РІ РїСЂРѕС†РµСЃСЃРµВ».
+  // Operator enabled «Без статусу» only → never script/AI chats already in «в процессе».
   if (
     !isNoStatusConversation(conv) &&
     !isConversationInOperatorEnabledFolders(conv, currentState)
   ) {
     console.log(
-      `Pager worker: skip ${convId.slice(0, 8)} CM вЂ” folder not enabled (status=${conv.status?.name || "none"})`,
+      `Pager worker: skip ${convId.slice(0, 8)} CM — folder not enabled (status=${conv.status?.name || "none"})`,
     );
     return false;
   }
@@ -2140,7 +2139,7 @@ async function processCmConversation(
     })
   ) {
     console.log(
-      `Pager worker: skip ${convId.slice(0, 8)} CM вЂ” bot_spoke_last (awaiting_customer)`,
+      `Pager worker: skip ${convId.slice(0, 8)} CM — bot_spoke_last (awaiting_customer)`,
     );
     return false;
   }
@@ -2412,7 +2411,7 @@ async function processCmConversation(
       return true;
     }
     console.log(
-      `Pager worker: skip ${convId.slice(0, 8)} CM вЂ” no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+      `Pager worker: skip ${convId.slice(0, 8)} CM — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
     );
     if (intent === "declined" && hasUnreadMarkers(conv)) {
       try {
@@ -2437,7 +2436,7 @@ async function processCmConversation(
       outgoingTexts,
       cmRegLinkSentInHistory,
     );
-    console.log(`Pager worker: CM ${convId.slice(0, 8)} вЂ” scripts already in thread`);
+    console.log(`Pager worker: CM ${convId.slice(0, 8)} — scripts already in thread`);
     return false;
   }
 
@@ -2533,7 +2532,7 @@ async function processCmConversation(
             outAfterLink,
             cmRegLinkSentInHistory,
           );
-          // After link + folder move: stop. No chrome / WiвЂ‘Fi tips.
+          // After link + folder move: stop. No chrome / Wi‑Fi tips.
           break;
         }
         continue;
@@ -2592,7 +2591,7 @@ async function processCmConversation(
           outAfterLink,
           cmRegLinkSentInHistory,
         );
-        // After link + folder move: stop. No chrome / WiвЂ‘Fi tips in the same turn.
+        // After link + folder move: stop. No chrome / Wi‑Fi tips in the same turn.
         if (scriptKey === "06_link") {
           break;
         }
@@ -3864,7 +3863,7 @@ async function processDjConversation(
     })
   ) {
     console.log(
-      `Pager worker: skip ${convId.slice(0, 8)} DJ вЂ” bot_spoke_last (awaiting_customer)`,
+      `Pager worker: skip ${convId.slice(0, 8)} DJ — bot_spoke_last (awaiting_customer)`,
     );
     return false;
   }
@@ -4036,7 +4035,7 @@ async function processDjConversation(
   if (scriptKeys.length) {
   scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "DJ", scriptKeys);
   if (!scriptKeys.length) {
-    console.log(`Pager worker: DJ ${convId.slice(0, 8)} вЂ” scripts already in thread`);
+    console.log(`Pager worker: DJ ${convId.slice(0, 8)} — scripts already in thread`);
   } else {
   await tryTakeConversationForProcessing(client, convId, "DJ");
 
@@ -4049,7 +4048,7 @@ async function processDjConversation(
   const allowMultiSend = djAllowsMultiSend(scriptKeys);
   const coveredOutgoing = [...outgoingTexts];
 
-  // Reg bundle must always finish as separate bubbles: 05 в†’ 06 в†’ 07 (never stop after reg).
+  // Reg bundle must always finish as separate bubbles: 05 → 06 → 07 (never stop after reg).
   const sendingRegBundle = scriptKeys.some((key) =>
     key === "05_registration" || key === "06_link" || key === "07_promo",
   );
@@ -4094,7 +4093,7 @@ async function processDjConversation(
         sendFailures: failures,
       });
       console.error(`Pager worker: DJ send failed ${convId.slice(0, 8)} key=${scriptKey}`);
-      // Never abort the reg bundle before the link вЂ” keep going to 06/07.
+      // Never abort the reg bundle before the link — keep going to 06/07.
       if (sendingRegBundle && (scriptKey === "05_registration" || scriptKey === "06_link")) {
         continue;
       }
@@ -4121,7 +4120,7 @@ async function processDjConversation(
     }
   }
 
-  // Absolute safety: reg without separate link bubble в†’ send 06 alone (retries).
+  // Absolute safety: reg without separate link bubble → send 06 alone (retries).
   if (
     djRegistrationInstructionsSentInHistory(coveredOutgoing) &&
     !djRegLinkSentInHistory(coveredOutgoing)
@@ -4157,7 +4156,7 @@ async function processDjConversation(
     }
   }
 
-  // Promo still missing after link в†’ send 07 separately.
+  // Promo still missing after link → send 07 separately.
   if (
     djRegLinkSentInHistory(coveredOutgoing) &&
     !djScriptSentInHistory(coveredOutgoing, "07_promo")
@@ -4317,7 +4316,7 @@ async function processDjConversation(
     return true;
   }
   console.log(
-    `Pager worker: skip ${convId.slice(0, 8)} DJ вЂ” no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+    `Pager worker: skip ${convId.slice(0, 8)} DJ — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
   );
   return false;
 }

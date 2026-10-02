@@ -98,7 +98,7 @@ import {
   type WorkerCountry,
 } from "./rw-learn.js";
 
-const COUNTRY_FOLDER_HINTS: Record<WorkerCountry, string[]> = {
+const COUNTRY_FOLDER_HINTS: Record<string, string[]> = {
   ZM: ["замб", "zamb", "zambia"],
   EG: ["егип", "egypt", "hapka"],
   CM: ["камер", "cameroon", "cameroun"],
@@ -107,11 +107,6 @@ const COUNTRY_FOLDER_HINTS: Record<WorkerCountry, string[]> = {
   MG: ["мадаг", "madag", "madagascar", "mg", "mdg"],
   DJ: ["джибут", "djibouti", "djib", "djf", "bji"],
   JO: ["йордан", "jordan", "jo", "jod", "jor"],
-  MR: ["мавритан", "mauritan"],
-  BF: ["буркина", "burkina"],
-  BJ: ["бенін", "бенин", "benin", "bénin"],
-  CR: ["коста", "costa"],
-  SN: ["сенегал", "senegal", "sénégal"],
 };
 
 const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>([
@@ -123,11 +118,6 @@ const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>([
   "MG",
   "DJ",
   "JO",
-  "MR",
-  "BF",
-  "BJ",
-  "CR",
-  "SN",
 ]);
 
 const CHANNEL_COUNTRY_DISPLAY: Record<string, string> = {
@@ -139,11 +129,6 @@ const CHANNEL_COUNTRY_DISPLAY: Record<string, string> = {
   MG: "Мадагаскар",
   DJ: "Джибути",
   JO: "Йордания",
-  MR: "Мавритания",
-  BF: "Буркина-Фасо",
-  BJ: "Бенин",
-  CR: "Коста-Рика",
-  SN: "Сенегал",
 };
 
 function formatChannelIdSuffix(id: string): string {
