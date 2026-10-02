@@ -1040,7 +1040,7 @@ async function buildWorkQueue(
           continue;
         }
 
-        if (
+          if (
           (isCm || isCl || isZm || isMg || isDj || isJo || isRw || isEg) &&
           isInProgressStatusConversation(conv)
         ) {
@@ -1053,21 +1053,25 @@ async function buildWorkQueue(
             continue;
           }
           const followUpState = chatState.conversations?.[conv.id];
-          if (followUpState && isInProgressBotMuted(followUpState)) {
+          const customerWaiting =
+            hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection);
+          // Soft-unmute path: still queue muted chats when the customer is waiting.
+          if (followUpState && isInProgressBotMuted(followUpState) && !customerWaiting) {
             continue;
           }
           const dueFollowUp = shouldQueueInProgressFollowUp(followUpState);
           const needsCustomerReply =
             followUpState &&
             shouldHandleInProgressFollowUpCustomerReply(followUpState) &&
-            (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection));
-          if (dueFollowUp || needsCustomerReply) {
+            customerWaiting;
+          // Also queue when the customer wrote in «в процесі» — AI/support must answer
+          // (age, oui, questions). Previously only delayed pings were selected → silence.
+          if (dueFollowUp || needsCustomerReply || customerWaiting) {
             if (!selected.has(conv.id)) {
               selected.set(conv.id, conv);
               addedThisPage += 1;
             }
           }
-          // Never fall through to early-funnel processing for in-progress via inbox scan.
           continue;
         }
 
@@ -1416,13 +1420,34 @@ async function trySendInProgressRegistrationFollowUp(
   const enteredAt = convState.inProgressEnteredAt?.trim();
   const enteredMs = enteredAt ? Date.parse(enteredAt) : Number.NaN;
   if (Number.isFinite(enteredMs) && hasCustomerIncomingAfter(messages, enteredMs, country)) {
-    await patchConversationState(deps.stateStore, state.chatId, convId, {
-      conversationId: convId,
-      channelId: runtime.channelId,
-      inProgressMutedAt: new Date().toISOString(),
-    });
+    // Customer already wrote — do NOT mute. Handle ping reply or let CM/AI fall through.
+    if (shouldHandleInProgressFollowUpCustomerReply(convState)) {
+      return tryHandleInProgressFollowUpCustomerReply(
+        deps,
+        state,
+        client,
+        conv,
+        runtime,
+        messages,
+        country === "CM"
+          ? collectCmOutgoingTexts(messages)
+          : country === "CL"
+            ? collectClOutgoingTexts(messages)
+            : country === "ZM"
+              ? collectZmOutgoingTexts(messages)
+              : country === "MG"
+                ? collectMgOutgoingTexts(messages)
+              : country === "DJ"
+                ? collectDjOutgoingTexts(messages)
+              : country === "JO"
+                ? collectJoOutgoingTexts(messages)
+              : country === "EG"
+                ? collectEgOutgoingTexts(messages)
+                : collectRwOutgoingTexts(messages),
+      );
+    }
     console.log(
-      `Pager worker: ${country} ${convId.slice(0, 8)} in-progress follow-up skipped — customer already replied`,
+      `Pager worker: ${country} ${convId.slice(0, 8)} in-progress — customer replied, defer to funnel/AI`,
     );
     return false;
   }
@@ -1584,14 +1609,22 @@ async function tryHandleInProgressFollowUpCustomerReply(
     return true;
   }
 
-  // YES or other → mute, no more bot messages.
-  await patchConversationState(deps.stateStore, state.chatId, convId, {
-    conversationId: convId,
-    channelId: runtime.channelId,
-    inProgressMutedAt: new Date().toISOString(),
-  });
+  if (kind === "yes") {
+    // Already registered — stop automation pings.
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      inProgressMutedAt: new Date().toISOString(),
+    });
+    console.log(
+      `Pager worker: ${country} ${convId.slice(0, 8)} in-progress muted after reply kind=yes`,
+    );
+    return false;
+  }
+
+  // "other" (age, questions, random text) — do not mute; let CM/AI support answer.
   console.log(
-    `Pager worker: ${country} ${convId.slice(0, 8)} in-progress muted after reply kind=${kind}`,
+    `Pager worker: ${country} ${convId.slice(0, 8)} in-progress reply kind=other — defer to funnel/AI text=${truncate(customerText)}`,
   );
   return false;
 }
@@ -1683,14 +1716,31 @@ async function processConversation(
   }
 
   // In-progress muted / operator-owned — never run scripts or AI.
-  const mutedState = getConversationState(state, workingConv.id, runtime.channelId);
+  let mutedState = getConversationState(state, workingConv.id, runtime.channelId);
+  if (isInProgressStatusConversation(workingConv) && isInProgressBotMuted(mutedState)) {
+    // Recover chats muted by the old "any customer reply → mute" bug when the
+    // customer is still waiting (unread / last message incoming).
+    const waiting =
+      hasUnreadMarkers(workingConv) || isIncomingDirection(workingConv.lastMessageDirection);
+    if (waiting) {
+      await patchConversationState(deps.stateStore, state.chatId, workingConv.id, {
+        conversationId: workingConv.id,
+        channelId: runtime.channelId,
+        inProgressMutedAt: undefined,
+      });
+      mutedState = { ...mutedState, inProgressMutedAt: undefined };
+      console.log(
+        `Pager worker: ${workingConv.id.slice(0, 8)} in-progress unmute — customer waiting after mute`,
+      );
+    } else {
+      return false;
+    }
+  }
   if (isInProgressStatusConversation(workingConv) && isInProgressBotMuted(mutedState)) {
     return false;
   }
-  if (isInProgressStatusConversation(workingConv)) {
-    // Stay in follow-up lane only — no early funnel / AI while folder is «в процессе».
-    return false;
-  }
+  // In-progress with customer message: continue into country handlers (AI/support).
+  // Early intro/age scripts are still filtered inside processCmConversation when reg link was sent.
 
   const channel = buildRuntimeChannelConfig(deps.config, state, runtime);
   const workerCountry = runtime.runtime.country;
@@ -2338,8 +2388,9 @@ async function processCmConversation(
     scriptKeys = ["05_registration", "06_link"];
   }
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
-  // After reg link / in-progress: never re-send intro/age/steps/tier.
-  if (cmRegLinkSentInHistory(outgoingTexts) || isInProgressStatusConversation(conv)) {
+  // After reg link: never re-send intro/age/steps/tier.
+  // If chat sits in «в процесі» without a reg link (manual move / bug), keep early scripts.
+  if (cmRegLinkSentInHistory(outgoingTexts)) {
     const early = new Set([
       "01_intro",
       "01_intro_2",
