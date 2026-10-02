@@ -102,11 +102,11 @@ const COUNTRY_FOLDER_HINTS: Record<string, string[]> = {
   ZM: ["замб", "zamb", "zambia"],
   EG: ["егип", "egypt", "hapka"],
   CM: ["камер", "cameroon", "cameroun"],
-  RW: ["ruand", "rwand", "rw"],
-  CL: ["chile", "chili", "чили", "cl"],
-  MG: ["мадаг", "madag", "madagascar", "mg", "mdg"],
+  RW: ["ruand", "rwand", "rwanda", "руанд"],
+  CL: ["chile", "chili", "чили"],
+  MG: ["мадаг", "madag", "madagascar", "mdg"],
   DJ: ["джибут", "djibouti", "djib", "djf", "bji"],
-  JO: ["йордан", "jordan", "jo", "jod", "jor"],
+  JO: ["йордан", "jordan", "jod", "jor"],
 };
 
 const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>([
@@ -354,44 +354,76 @@ async function handleCallback(
       }
 
       const { client } = sessionResult;
-      const convs = await client.listConversations({ channelId: channel.id, pageSize: 10 });
+      let convs = await client.listConversations({ channelId: channel.id, pageSize: 50 });
+      if (!convs.length) {
+        // Fallback: org inbox can still have this channel's chats when channel filter is empty.
+        const inbox = await client.listConversations({ page: 1, pageSize: 100 });
+        convs = inbox.filter(
+          (conv) => (conv.channelId || conv.channel?.id || "") === channel.id,
+        );
+      }
+      if (!convs.length) {
+        try {
+          convs = await client.collectConversationsForChannels([channel.id], 3);
+        } catch {
+          // keep empty — show clear message below
+        }
+      }
       const sorted = [...convs].sort((a, b) => {
         const ta = Date.parse(a.lastMessageAt ?? "") || 0;
         const tb = Date.parse(b.lastMessageAt ?? "") || 0;
         return tb - ta;
       });
       const latest = sorted[0];
-      let preview = "Нет чатов на этом канале.";
+      let preview = "Нет чатов на этом канале (Pager не отдал conversations).";
       let lastAt = "";
       if (latest) {
-        const msgs = await client.listMessages(latest.id, 1, 20);
-        const customerMsg = [...msgs].reverse().find((message) =>
-          isIncomingDirection(message.messageDirection),
-        );
+        const msgs = await client.listMessages(latest.id, 1, 40);
+        const incoming = [...msgs]
+          .reverse()
+          .filter((message) => isIncomingDirection(message.messageDirection))
+          .slice(0, 3)
+          .map((message) => (message.text ?? "").trim().slice(0, 120))
+          .filter(Boolean);
         const fallback = msgs[msgs.length - 1];
-        const snippet = (customerMsg?.text ?? fallback?.text ?? "").trim().slice(0, 160);
+        const fallbackText = (fallback?.text ?? "").trim().slice(0, 160);
         lastAt = latest.lastMessageAt
           ? new Date(latest.lastMessageAt).toLocaleString("ru-RU")
           : "";
-        preview = snippet || "(без текста — возможно фото или стикер)";
+        if (incoming.length) {
+          preview = incoming.map((text, index) => `${index + 1}) ${text}`).join("\n");
+        } else {
+          preview = fallbackText || "(без текста — возможно фото или стикер)";
+        }
       }
 
       const suffix = formatChannelIdSuffix(channel.id);
-      const source = row?.channelSource ? `\nFB page: ${row.channelSource}` : "";
-      const countryLabel = CHANNEL_COUNTRY_DISPLAY[row?.country ?? channel.country] ?? row?.country;
+      const source = row?.channelSource ? `\nИсточник: ${row.channelSource}` : "";
+      const country = row?.country ?? channel.country;
+      const countryLabel = CHANNEL_COUNTRY_DISPLAY[country] ?? country;
+      const bank = row?.templateBank ?? "?";
+      const hints = COUNTRY_FOLDER_HINTS[country] ?? [];
+      const bankMismatch =
+        bank !== "?" &&
+        hints.length > 0 &&
+        !hints.some((hint) => bank.toLowerCase().includes(hint));
+      const mismatchLine = bankMismatch
+        ? `\n⚠️ Страна ${countryLabel}, а папка «${bank}» — выбери папку под ${country} или смени страну.`
+        : "";
+
       await telegram.sendMessage(
         chatId,
         [
           `Канал #${channelNum}: ${channel.name}`,
           `ID …${suffix}${source}`,
           `Страна в боте: ${countryLabel}`,
-          `Шаблоны: ${row?.templateBank ?? "?"}`,
+          `Шаблоны: ${bank}${mismatchLine}`,
           "",
           `Последний чат${lastAt ? ` (${lastAt})` : ""}:`,
           preview,
           "",
-          "Сверь с Pager/Facebook — какая страница даёт такой лид.",
-          "Если страна неверна — жми кнопку страны (CM/EG/…) у этого канала.",
+          "Сверь текст с Pager/Facebook — у одинаковых имён разный ID …xxxx.",
+          "Если страна неверна — жми кнопку страны (ZM/EG/CM/RW/…) у этого канала.",
         ].join("\n"),
       );
     } catch (error) {
@@ -460,14 +492,18 @@ async function handleCallback(
     }
     const runtime = getChannelRuntime(state, channel.id, country);
     const bank = pickTemplateBankFromLiveBanks(getLiveTemplateBanks(state), country);
+    const hints = COUNTRY_FOLDER_HINTS[country] ?? [];
+    const previousBankOk =
+      Boolean(runtime.templateBank) &&
+      hints.some((hint) => (runtime.templateBank ?? "").toLowerCase().includes(hint));
     await stateStore.patch(chatId, {
       channels: {
         ...(state.channels ?? {}),
         [channel.id]: {
           ...runtime,
           country,
-          templateBank: bank?.name ?? runtime.templateBank,
-          templateBankId: bank?.id ?? runtime.templateBankId,
+          templateBank: bank?.name ?? (previousBankOk ? runtime.templateBank : undefined),
+          templateBankId: bank?.id ?? (previousBankOk ? runtime.templateBankId : undefined),
         },
       },
     });
@@ -1339,7 +1375,7 @@ function pickTemplateBankFromLiveBanks(
     return undefined;
   }
 
-  const hints = COUNTRY_FOLDER_HINTS[country];
+  const hints = COUNTRY_FOLDER_HINTS[country] ?? [];
   const matched = banks.find((bank) => {
     const normalized = bank.name.toLowerCase();
     return hints.some((hint) => normalized.includes(hint));
@@ -1347,10 +1383,8 @@ function pickTemplateBankFromLiveBanks(
   if (matched) {
     return matched;
   }
-  if (isFolderOnlyCountry(country)) {
-    return undefined;
-  }
-  return banks[0];
+  // Never fall back to banks[0] — that assigned «Бенин» to Rwanda channels.
+  return undefined;
 }
 
 function buildChannelRuntimeMap(

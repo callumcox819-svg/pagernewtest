@@ -564,7 +564,25 @@ export class PagerClient {
       ? payload.map((item) => normalizePagerConversation(item))
       : [];
     if (options?.channelId) {
-      return conversations.filter((conv) => conv.channelId === options.channelId);
+      const wanted = options.channelId;
+      const matched = conversations.filter((conv) => {
+        const id = (conv.channelId || conv.channel?.id || "").trim();
+        return id === wanted;
+      });
+      // Channel-scoped API responses sometimes omit channelId — do not wipe them.
+      if (!matched.length && conversations.length) {
+        const allMissingChannel = conversations.every(
+          (conv) => !(conv.channelId || conv.channel?.id),
+        );
+        if (allMissingChannel) {
+          return conversations.map((conv) => ({
+            ...conv,
+            channelId: conv.channelId || wanted,
+            channel: conv.channel ?? { id: wanted },
+          }));
+        }
+      }
+      return matched;
     }
     return conversations;
   }
