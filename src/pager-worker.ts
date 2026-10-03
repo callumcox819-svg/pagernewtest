@@ -26,7 +26,12 @@ import {
 } from "./ai-assist.js";
 import { extractCmClientLoginId17 } from "./cm-proof.js";
 import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
-import { isLinkAccessProblemMessage, isCustomerClarificationMessage, isScamOrTrustQuestion } from "./customer-clarity.js";
+import {
+  isLinkAccessProblemMessage,
+  isCustomerClarificationMessage,
+  isScamOrTrustQuestion,
+  looksLikeBrokenLinkScreenshot,
+} from "./customer-clarity.js";
 import {
   folderMarketLanguage,
   isFolderMarket,
@@ -121,9 +126,9 @@ import {
   resolveCmFunnelScripts,
   limitCmScriptsForCustomerTurn,
   cmAllowsMultiSend,
+  cmLinkTroubleHelpScripts,
   CM_REG_SEND_KEYS,
   tierSentInHistory,
-  stepsSentInHistory,
   depositSentInHistory as cmDepositSentInHistory,
 } from "./cm-script-engine.js";
 import {
@@ -2372,22 +2377,18 @@ async function processCmConversation(
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
-  // Hard guarantee after age: never stall on «Quel âge» → always send 03_steps.
+  // Hard guarantee after age answer: never stall on «Quel âge» → send money table.
   const ageAsked =
     cmScriptSentInHistory(outgoingTexts, "02_age") ||
     /quel âge|quel age|age avez-vous|age as-tu/i.test(outgoingTexts.join("\n"));
-  const stepsAlready = stepsSentInHistory(outgoingTexts);
   if (
     ageAsked &&
-    !stepsAlready &&
+    !tierSentInHistory(outgoingTexts) &&
     !cmRegLinkSentInHistory(outgoingTexts) &&
     (isAgeAnswer(latestCustomerText) ||
-      intent === "positive" ||
-      intent === "ready" ||
-      intent === "interested" ||
       /^\d{1,2}\s*ans?\b/i.test(latestCustomerText.trim()))
   ) {
-    scriptKeys = ["03_steps"];
+    scriptKeys = ["04_tier"];
   }
   if (
     tierSentInHistory(outgoingTexts) &&
@@ -2421,8 +2422,14 @@ async function processCmConversation(
     ]);
     scriptKeys = scriptKeys.filter((key) => !early.has(key));
   }
+  const cmLinkHelpBatch =
+    scriptKeys.includes("07_chrome") || scriptKeys.includes("07_mtn_tip");
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
   scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support);
+  // Keep Chrome/Wi‑Fi help intact — support filter must not strip the rescue bundle.
+  if (cmLinkHelpBatch) {
+    scriptKeys = cmLinkTroubleHelpScripts(true);
+  }
   const skipEarlySupportAi = supportAgentSkipsEarlyAi("CM", scriptKeys, support);
 
   if (!skipEarlySupportAi) {
@@ -2494,7 +2501,12 @@ async function processCmConversation(
     return false;
   }
 
-  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "CM", scriptKeys);
+  if (cmLinkHelpBatch) {
+    // Broken-link rescue: always re-send link + Chrome + Wi‑Fi even if already in thread.
+    scriptKeys = cmLinkTroubleHelpScripts(true);
+  } else {
+    scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "CM", scriptKeys);
+  }
   if (!scriptKeys.length) {
     await maybeEnsureInProgressAfterRegLink(
       deps,
@@ -2604,9 +2616,14 @@ async function processCmConversation(
         }
         continue;
       }
-      if (scriptKey === "06_link") {
+      if (scriptKey === "06_link" || scriptKey === "07_chrome" || scriptKey === "07_mtn_tip") {
         const fallbackText =
-          loadLocalCmScript("06_link")?.trim() || "https://tinyurl.com/CMR056";
+          loadLocalCmScript(scriptKey)?.trim() ||
+          (scriptKey === "06_link" ? "https://tinyurl.com/CMR056" : "");
+        if (!fallbackText) {
+          console.warn(`CM script local miss ${convId.slice(0, 8)}: ${scriptKey}`);
+          continue;
+        }
         const sent = await client.sendMessageReliable(convId, fallbackText, {
           channelId: runtime.channelId,
           conv,
@@ -2614,6 +2631,7 @@ async function processCmConversation(
         if (sent) {
           sentAny = true;
           sentScriptKeys.push(scriptKey);
+          coveredOutgoing.push(fallbackText);
           await patchConversationState(deps.stateStore, state.chatId, convId, {
             conversationId: convId,
             channelId: runtime.channelId,
@@ -2624,20 +2642,24 @@ async function processCmConversation(
             sendFailures: 0,
           });
           await sleep(500);
-          const outAfterLink = collectCmOutgoingTexts(await client.listMessages(convId, 1, 80));
-          await maybeEnsureInProgressAfterRegLink(
-            deps,
-            currentState,
-            client,
-            conv,
-            convId,
-            runtime.channelId,
-            "CM",
-            outAfterLink,
-            cmRegLinkSentInHistory,
-          );
-          // After link + folder move: stop. No chrome / Wi‑Fi tips.
-          break;
+          if (scriptKey === "06_link") {
+            const outAfterLink = collectCmOutgoingTexts(await client.listMessages(convId, 1, 80));
+            await maybeEnsureInProgressAfterRegLink(
+              deps,
+              currentState,
+              client,
+              conv,
+              convId,
+              runtime.channelId,
+              "CM",
+              outAfterLink,
+              cmRegLinkSentInHistory,
+            );
+            // Initial reg: stop after link. Link-trouble batch continues with Chrome/Wi‑Fi.
+            if (!cmLinkHelpBatch) {
+              break;
+            }
+          }
         }
         continue;
       }
@@ -2648,7 +2670,13 @@ async function processCmConversation(
     }
 
     const trimmedReply = replyText.trim();
-    if (cmOutgoingAlreadyContainsText(coveredOutgoing, trimmedReply)) {
+    if (
+      cmOutgoingAlreadyContainsText(coveredOutgoing, trimmedReply) &&
+      !(
+        cmLinkHelpBatch &&
+        (scriptKey === "06_link" || scriptKey === "07_chrome" || scriptKey === "07_mtn_tip")
+      )
+    ) {
       console.log(
         `Pager worker: CM ${convId.slice(0, 8)} skip duplicate text key=${scriptKey}`,
       );
@@ -2695,8 +2723,8 @@ async function processCmConversation(
           outAfterLink,
           cmRegLinkSentInHistory,
         );
-        // After link + folder move: stop. No chrome / Wi‑Fi tips in the same turn.
-        if (scriptKey === "06_link") {
+        // After first-time link: stop. Link-trouble batch continues with Chrome/Wi‑Fi.
+        if (scriptKey === "06_link" && !cmLinkHelpBatch) {
           break;
         }
       }
@@ -7071,6 +7099,65 @@ async function trySendSpecialCustomerResponse(
   return true;
 }
 
+async function trySendCmLinkTroubleHelp(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext & { outgoingTexts: string[] },
+): Promise<boolean> {
+  if (ctx.channel.country !== "CM" || !cmRegLinkSentInHistory(ctx.outgoingTexts)) {
+    return false;
+  }
+  const currentState = (await deps.stateStore.get(ctx.state.chatId)) ?? ctx.state;
+  const folderId = await resolveCmTemplateFolderId(
+    ctx.client,
+    ctx.runtime.runtime.templateBankId,
+    currentState.pagerAccount?.liveTemplateBanks,
+  );
+  await tryTakeConversationForProcessing(ctx.client, ctx.convId, "CM");
+  let sentAny = false;
+  let lastKey = "07_mtn_tip";
+  for (const scriptKey of cmLinkTroubleHelpScripts(true)) {
+    const replyText = await resolveScriptTextByKey(ctx.client, {
+      folderId,
+      liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+      scriptKey,
+      country: "CM",
+    });
+    const body =
+      replyText?.trim() ||
+      loadLocalCmScript(scriptKey)?.trim() ||
+      (scriptKey === "06_link" ? "https://tinyurl.com/CMR056" : "");
+    if (!body) {
+      continue;
+    }
+    const sent = await ctx.client.sendMessageReliable(ctx.convId, body, {
+      channelId: ctx.runtime.channelId,
+      conv: ctx.conv,
+    });
+    if (!sent) {
+      break;
+    }
+    sentAny = true;
+    lastKey = scriptKey;
+    await sleep(500);
+  }
+  if (!sentAny) {
+    return false;
+  }
+  console.log(
+    `Pager worker: CM ${ctx.convId.slice(0, 8)} link-trouble help -> 06_link+07_chrome+07_mtn_tip build=${getDeployLabel()}`,
+  );
+  await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+    conversationId: ctx.convId,
+    channelId: ctx.runtime.channelId,
+    lastCustomerMessageId: ctx.lastIncoming.id,
+    lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: lastKey,
+    sendFailures: 0,
+  });
+  return true;
+}
+
 async function sendCmScriptKey(
   deps: WorkerDeps,
   ctx: SpecialResponseContext & { outgoingTexts: string[] },
@@ -7266,6 +7353,26 @@ async function tryHandleCustomerImage(
     proofKind = classification.proofKind;
     ocrCombinedText = classification.combinedText;
 
+    // Black screen / tinyurl fail / «envoie encore le lien» — Chrome + Wi‑Fi, not player ID.
+    if (
+      ctx.channel.country === "CM" &&
+      cmRegLinkSentInHistory(ctx.outgoingTexts) &&
+      (isLinkAccessProblemMessage(ctx.text) ||
+        isLinkAccessProblemMessage(ocrCombinedText) ||
+        looksLikeBrokenLinkScreenshot(ocrCombinedText) ||
+        (Boolean(ctx.text.trim()) &&
+          /envoy\w*.*\blien\b|\blien\b.*\benvoy\w*/i.test(ctx.text)))
+    ) {
+      const helped = await trySendCmLinkTroubleHelp(deps, ctx);
+      if (helped) {
+        return true;
+      }
+      console.log(
+        `Pager worker: CM ${ctx.convId.slice(0, 8)} image is link-access fail — defer to funnel Chrome/Wi‑Fi scripts`,
+      );
+      return false;
+    }
+
     if (ctx.channel.country === "CM") {
       const sent = await trySendCmProofFromCombinedText(
         deps,
@@ -7293,6 +7400,19 @@ async function tryHandleCustomerImage(
     try {
       image = await ctx.client.downloadAttachment(ctx.imageUrl);
     } catch {
+      return false;
+    }
+    if (
+      ctx.channel.country === "CM" &&
+      cmRegLinkSentInHistory(ctx.outgoingTexts) &&
+      (isLinkAccessProblemMessage(ctx.text) ||
+        (Boolean(ctx.text.trim()) &&
+          /envoy\w*.*\blien\b|\blien\b.*\benvoy\w*/i.test(ctx.text)))
+    ) {
+      const helped = await trySendCmLinkTroubleHelp(deps, ctx);
+      if (helped) {
+        return true;
+      }
       return false;
     }
     if (ctx.channel.country === "CM") {
@@ -7447,6 +7567,14 @@ async function tryHandleCustomerImage(
         : cmRegLinkSentInHistory(ctx.outgoingTexts);
 
   if (proofKind === "unclear_screenshot") {
+    if (
+      ctx.channel.country === "CM" &&
+      (isLinkAccessProblemMessage(ctx.text) ||
+        looksLikeBrokenLinkScreenshot(ocrCombinedText) ||
+        /envoy\w*.*\blien\b|\blien\b.*\benvoy\w*/i.test(ctx.text))
+    ) {
+      return false;
+    }
     if (!regLinkSent || !depositSent) {
       return false;
     }

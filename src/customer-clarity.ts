@@ -40,9 +40,33 @@ export function isLinkAccessProblemMessage(text: string): boolean {
   if (!t) {
     return false;
   }
-  return /(j['']arrive pas|pas acc[eè]s|acc[eè]der|acc[eè]s|wifi|wi-fi|sans wifi|no wifi|donn[eé]es mobile|op[eé]rateur|operateur|\bmtn\b|\borange\b|lien.*(marche|ouvre|fonctionne)|link.*(work|open|load)|tinyurl|page.*(blanche|vide)|ne s['']ouvre pas)/i.test(
+  return /(j['']arrive pas|pas acc[eè]s|acc[eè]der|acc[eè]s|wifi|wi-fi|sans wifi|no wifi|donn[eé]es mobile|op[eé]rateur|operateur|\bmtn\b|\borange\b|lien.*(marche|ouvre|fonctionne|charge)|link.*(work|open|load)|tinyurl|page.*(blanche|vide|noire)|[ée]cran\s*noir|ne\s*charge|ne s['']ouvre pas|autre\s*navigateur|google\s*chrome)/i.test(
     t,
   );
+}
+
+/**
+ * Screenshot / OCR of a failed short link load (black screen, tinyurl bar) —
+ * not registration / deposit / player-ID proof.
+ */
+export function looksLikeBrokenLinkScreenshot(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) {
+    return false;
+  }
+  const hasAccountProof =
+    /login\s*:|inscription\s*r[eé]ussie|solde|balance|id\s*joueur|num[eé]ro\s*de\s*joueur|\b(?:17|18)\d{8,}\b/i.test(
+      t,
+    );
+  if (hasAccountProof) {
+    return false;
+  }
+  const hasShortener = /tinyurl\.com|bit\.ly|cutt\.ly|t\.co\//i.test(t);
+  const hasBlankFail =
+    /page\s*(blanche|vide|noire)|[ée]cran\s*noir|ne\s*charge|about:blank|err_name_not_resolved|site\s*ne\s*(se\s*)?(charge|ouvre)/i.test(
+      t,
+    );
+  return hasShortener || hasBlankFail;
 }
 export function isScamOrTrustQuestion(text: string): boolean {
   const t = (text || "").trim();

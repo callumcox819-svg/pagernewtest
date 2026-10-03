@@ -1,6 +1,8 @@
 import type { PagerMessage } from "./pager-client.js";
 import {
   isCustomerSaysNotRegisteredYet,
+  isLinkAccessProblemMessage,
+  looksLikeBrokenLinkScreenshot,
   recentTextsIndicateNotRegistered,
 } from "./customer-clarity.js";
 import { registrationResendScriptKeys, customerAgreedAfterOfferTable } from "./funnel-common.js";
@@ -21,6 +23,28 @@ import {
   wantsDetailsAfterIntro,
   wantsRegistrationLink,
 } from "./cm-intent.js";
+
+/** Resend link + Chrome + Wi‑Fi tip when the short link will not load. */
+export function cmLinkTroubleHelpScripts(includeLinkResend = true): string[] {
+  return includeLinkResend
+    ? ["06_link", "07_chrome", "07_mtn_tip"]
+    : ["07_chrome", "07_mtn_tip"];
+}
+
+function cmNeedsLinkTroubleHelp(
+  text: string,
+  options?: { hasImage?: boolean },
+): boolean {
+  const t = (text || "").trim();
+  if (isLinkAccessProblemMessage(t) || isRegistrationBlocked(t) || looksLikeBrokenLinkScreenshot(t)) {
+    return true;
+  }
+  // Caption «envoie encore le lien» + screenshot of the failed load.
+  if (options?.hasImage && wantsRegistrationLink(t)) {
+    return true;
+  }
+  return false;
+}
 
 export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "Tu es du Cameroun",
@@ -453,11 +477,9 @@ export function funnelStepFromScriptGaps(
     return Math.min(step, 1);
   }
   step = Math.max(step, 2);
-  if (!stepsSentInHistory(outgoingTexts)) {
-    return Math.min(step, 2);
-  }
+  // Age → table (04_tier); 03_steps is optional / legacy only.
   if (!tierSentInHistory(outgoingTexts)) {
-    return Math.min(step, 3);
+    return Math.min(step, 2);
   }
   if (!regLinkSentInHistory(outgoingTexts)) {
     return Math.min(step, 4);
@@ -498,6 +520,23 @@ function positiveSignal(
   );
 }
 
+/** Positive advance for CM early funnel (2nd intro / age) — not bare noise. */
+function cmPositiveAdvance(
+  text: string,
+  intent: CmIntent,
+  effectiveStep: number,
+): boolean {
+  if (isClientReadyPhrase(text) || wantsDetailsAfterIntro(text)) {
+    return true;
+  }
+  return positiveSignal(text, intent, effectiveStep);
+}
+
+function cmAgeJustGiven(text: string): boolean {
+  const t = (text || "").trim();
+  return isAgeAnswer(t) || /^\d{1,2}\s*ans?\b/i.test(t);
+}
+
 export function resolveCmFunnelScripts(
   effectiveStep: number,
   text: string,
@@ -527,23 +566,49 @@ export function resolveCmFunnelScripts(
   const tierChoice =
     isDepositTierChoice(t) || recentTexts.some((line) => isDepositTierChoice(line));
   const signal = positiveSignal(t, intent, effectiveStep);
+  const positive = cmPositiveAdvance(t, intent, effectiveStep);
 
-  if (notRegisteredYet) {
-    if (!introSent) {
-      return nextCmIntroScript(out);
+  // ── Early funnel (strict one script / customer turn) ─────────────────
+  // 1) Any first reply to the ad → 01_intro
+  // 2) Positive reply → 01_intro_3
+  // 3) Positive reply → 02_age
+  // 4) Age answer → 04_tier (table), then reg…
+  if (!introSent) {
+    if (t.length > 0 || options?.hasImage || options?.messageReaction) {
+      return ["01_intro"];
     }
-    if (!intro3Sent) {
+    return [];
+  }
+  if (!intro3Sent) {
+    if (positive) {
       return ["01_intro_3"];
     }
-    if (!ageSent) {
+    return [];
+  }
+  if (!ageSent) {
+    if (positive) {
       return ["02_age"];
     }
-    if (!stepsSent) {
-      return ["03_steps"];
-    }
-    if (!tierSent) {
+    return [];
+  }
+  if (!tierSent) {
+    if (cmAgeJustGiven(t)) {
       return ["04_tier"];
     }
+    // Legacy chats where 03_steps already went out: continue on positive.
+    if (stepsSent && (positive || t.length > 0)) {
+      return ["04_tier"];
+    }
+    return [];
+  }
+
+  // Broken short-link / black screen / «envoie encore le lien» + screenshot →
+  // Chrome + Wi‑Fi help, never player ID.
+  if (linkSent && cmNeedsLinkTroubleHelp(t, options)) {
+    return cmLinkTroubleHelpScripts(true);
+  }
+
+  if (notRegisteredYet) {
     if (!linkSent) {
       return [...CM_REG_BUNDLE];
     }
@@ -552,7 +617,7 @@ export function resolveCmFunnelScripts(
 
   if (registrationHelp) {
     if (regLinkSentInHistory(out)) {
-      return ["06_link"];
+      return cmLinkTroubleHelpScripts(true);
     }
     const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out, t);
     if (reg.length) {
@@ -561,33 +626,14 @@ export function resolveCmFunnelScripts(
     const tierReminder = cmTierReminderIfNeeded(tierSent, tierChoice);
     if (tierReminder.length) {
       return tierReminder;
-    }
-    if (effectiveStep < 3) {
-      if (!introSent) {
-        return nextCmIntroScript(out);
-      }
-      const remainingIntro = nextCmIntroScript(out);
-      if (remainingIntro.length) {
-        return remainingIntro;
-      }
-      if (!ageSent) {
-        return ["02_age"];
-      }
-      if (!stepsSent) {
-        return ["03_steps"];
-      }
-      if (!tierSent) {
-        return ["04_tier"];
-      }
-      return [];
-    }
-    if (!tierSent && stepsSent) {
-      return ["04_tier"];
     }
     return [];
   }
 
   if (wantsRegistrationLink(t)) {
+    if (linkSent) {
+      return cmLinkTroubleHelpScripts(true);
+    }
     const reg = cmRegBundleIfEligible(tierSent, tierChoice, linkSent, out, t);
     if (reg.length) {
       return reg;
@@ -595,9 +641,6 @@ export function resolveCmFunnelScripts(
     const tierReminder = cmTierReminderIfNeeded(tierSent, tierChoice);
     if (tierReminder.length) {
       return tierReminder;
-    }
-    if (stepsSent && !tierSent) {
-      return ["04_tier"];
     }
     return [];
   }
@@ -622,15 +665,13 @@ export function resolveCmFunnelScripts(
   }
 
   if (linkSent) {
-    if (registrationHelp) {
-      return ["06_link"];
-    }
-    if (isRegistrationBlocked(t)) {
-      return ["06_link"];
+    if (registrationHelp || isRegistrationBlocked(t) || isLinkAccessProblemMessage(t)) {
+      return cmLinkTroubleHelpScripts(true);
     }
     if (
       (options?.hasImage || isRegistrationConfirmed(t) || intent === "image_only") &&
-      !depositSentInHistory(out)
+      !depositSentInHistory(out) &&
+      !cmNeedsLinkTroubleHelp(t, options)
     ) {
       return ["09_deposit"];
     }
@@ -647,101 +688,17 @@ export function resolveCmFunnelScripts(
     ) {
       return ["09_deposit"];
     }
-    // Game ID only after clear deposit proof — never on bare Oui/Ok in old threads.
+    // Game ID only after clear deposit proof — never on link-fail / resend screenshots.
     if (
       depositSentInHistory(out) &&
       !gameIdSentInHistory(out) &&
+      !cmNeedsLinkTroubleHelp(t, options) &&
+      !wantsRegistrationLink(t) &&
       (intent === "deposit_done" ||
         intent === "image_only" ||
-        options?.hasImage ||
         isRegistrationConfirmed(t))
     ) {
       return ["08_game_id"];
-    }
-    return [];
-  }
-
-  if (effectiveStep < 1) {
-    if (!introSent) {
-      if (
-        ["interested", "positive", "ready", "question"].includes(intent) ||
-        signal ||
-        t.length > 0
-      ) {
-        return nextCmIntroScript(out);
-      }
-      return [];
-    }
-    const remainingIntro = nextCmIntroScript(out);
-    if (remainingIntro.length) {
-      return remainingIntro;
-    }
-    return [];
-  }
-
-  if (effectiveStep < 2) {
-    const remainingIntro = nextCmIntroScript(out);
-    if (remainingIntro.length) {
-      if (
-        ["interested", "positive", "ready", "question"].includes(intent) ||
-        signal ||
-        wantsDetailsAfterIntro(t) ||
-        isClientReadyPhrase(t) ||
-        t.length > 0
-      ) {
-        return remainingIntro;
-      }
-      return [];
-    }
-    if (!ageSent) {
-      if (
-        ["interested", "positive", "ready", "question"].includes(intent) ||
-        signal ||
-        wantsDetailsAfterIntro(t) ||
-        isClientReadyPhrase(t)
-      ) {
-        return ["02_age"];
-      }
-    } else if (!stepsSent) {
-      if (
-        isAgeAnswer(t) ||
-        ["positive", "ready", "interested", "question"].includes(intent) ||
-        signal ||
-        wantsDetailsAfterIntro(t) ||
-        isClientReadyPhrase(t) ||
-        t.length > 0
-      ) {
-        return ["03_steps"];
-      }
-    }
-    return [];
-  }
-
-  if (effectiveStep < 3) {
-    if (!stepsSent) {
-      if (
-        isAgeAnswer(t) ||
-        ["positive", "ready", "interested", "question"].includes(intent) ||
-        signal ||
-        wantsDetailsAfterIntro(t) ||
-        wantsRegistrationLink(t) ||
-        isClientReadyPhrase(t) ||
-        t.length > 0
-      ) {
-        return ["03_steps"];
-      }
-    } else if (!tierSent) {
-      if (
-        ["positive", "ready", "interested", "question"].includes(intent) ||
-        signal ||
-        isReadyForRegistration(t) ||
-        wantsDetailsAfterIntro(t) ||
-        wantsRegistrationLink(t) ||
-        isClientReadyPhrase(t) ||
-        t.length > 0
-      ) {
-        return ["04_tier"];
-      }
     }
     return [];
   }
@@ -773,17 +730,6 @@ export function resolveCmFunnelScripts(
       }
       return [...CM_REG_BUNDLE];
     }
-    if (stepsSent && !tierSent) {
-      if (
-        ["positive", "ready", "interested", "question"].includes(intent) ||
-        signal ||
-        isReadyForRegistration(t) ||
-        wantsDetailsAfterIntro(t) ||
-        wantsRegistrationLink(t)
-      ) {
-        return ["04_tier"];
-      }
-    }
     if (tierSent && tierChoice && !linkSent) {
       return [...CM_REG_BUNDLE];
     }
@@ -804,47 +750,6 @@ export function resolveCmFunnelScripts(
     return [...CM_REG_BUNDLE];
   }
 
-  if (effectiveStep < 7) {
-    if (isRegistrationConfirmed(t) || intent === "joined") {
-      if (!depositSentInHistory(out)) {
-        return ["09_deposit"];
-      }
-      if (!gameIdSentInHistory(out)) {
-        return ["08_game_id"];
-      }
-    }
-    if (cmReadyForRegAfterTier(t, intent, tierSent, tierChoice, linkSent, signal)) {
-      return [...CM_REG_BUNDLE];
-    }
-    if (canSendCmRegistration(tierSent, tierChoice, linkSent, out, t)) {
-      return [...CM_REG_BUNDLE];
-    }
-    if (
-      stepsSent &&
-      !tierSent &&
-      (signal ||
-        intent === "interested" ||
-        intent === "positive" ||
-        intent === "ready" ||
-        intent === "question" ||
-        isReadyForRegistration(t) ||
-        /\b(application|appli|lien|aide|explique|comment)\b/i.test(t))
-    ) {
-      return ["04_tier"];
-    }
-    if (linkSent && !depositSentInHistory(out) && (signal || options?.hasImage || intent === "ready" || intent === "positive" || isReadyForRegistration(t))) {
-      return ["09_deposit"];
-    }
-    if (
-      depositSentInHistory(out) &&
-      !gameIdSentInHistory(out) &&
-      (intent === "deposit_done" || intent === "image_only" || options?.hasImage || isRegistrationConfirmed(t))
-    ) {
-      return ["08_game_id"];
-    }
-    return [];
-  }
-
   if (
     depositSentInHistory(out) &&
     !gameIdSentInHistory(out) &&
@@ -856,25 +761,6 @@ export function resolveCmFunnelScripts(
     return ["08_game_id"];
   }
 
-  if (
-    !introSent &&
-    (t.length > 0 || signal || intent === "interested" || intent === "question")
-  ) {
-    return nextCmIntroScript(out);
-  }
-  const remainingIntroTail = nextCmIntroScript(out);
-  if (remainingIntroTail.length) {
-    return remainingIntroTail;
-  }
-  if (introSent && !ageSent && (t.length > 0 || signal)) {
-    return ["02_age"];
-  }
-  if (ageSent && !stepsSent && (t.length > 0 || signal || isAgeAnswer(t))) {
-    return ["03_steps"];
-  }
-  if (stepsSent && !tierSent && (t.length > 0 || signal)) {
-    return ["04_tier"];
-  }
   if (cmReadyForRegAfterTier(t, intent, tierSent, tierChoice, linkSent, signal)) {
     return [...CM_REG_BUNDLE];
   }
@@ -941,7 +827,12 @@ export function limitCmScriptsForCustomerTurn(
       return ["06_link"];
     }
 
-    // Help / resend only — never auto-append Wi‑Fi tip.
+    // Help / resend: keep Wi‑Fi tip only when the funnel explicitly requested it
+    // (broken link / black-screen). Allow resend even if tips were sent earlier.
+    const allowMtnTip = scriptKeys.includes("07_mtn_tip");
+    if (allowMtnTip) {
+      return scriptKeys.filter((key) => CM_REG_SEND_KEYS.has(key));
+    }
     const remaining = scriptKeys.filter(
       (key) =>
         CM_REG_SEND_KEYS.has(key) &&

@@ -31,7 +31,7 @@ const FR_REG_PENDING =
   /\b(pas encore|pas fini|je m'inscris|j['']?inscris|en cours)\b/i;
 const POSITIVE_EMOJI = /[👍👌✅🔥❤️🙏😊🙂]/;
 const FR_LINK_BROKEN =
-  /\b(sa marche pas|ca marche pas|ne marche pas|marche pas|ne fonctionne pas|fonctionne pas|pas pu telecharger|pas pui telecharger|probleme de lien|lien.*pas|telecharg\w*.*pas)\b/i;
+  /\b(sa marche pas|ca marche pas|ne marche pas|marche pas|ne fonctionne pas|fonctionne pas|pas pu telecharger|pas pui telecharger|probleme de lien|lien.*pas|telecharg\w*.*pas|ne charge pas|ne s['']ouvre pas|page (blanche|vide|noire)|[ée]cran noir)\b/i;
 const FR_HAS_ACCOUNT_OR_APP =
   /\b(j'ai l'application|jai l'application|j'ai un compte|jai un compte|avec un compte|application deja|deja un compte|compte deja cree)\b/i;
 
