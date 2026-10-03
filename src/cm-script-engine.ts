@@ -111,6 +111,12 @@ export const CM_INTRO_SEND_KEYS = new Set(["01_intro", "01_intro_3"]);
 const CM_INTRO_BUNDLE = ["01_intro", "01_intro_3"] as const;
 const CM_REG_BUNDLE = ["05_registration", "06_link"] as const;
 
+/** Next unfinished intro bubble — one per customer turn. */
+function nextCmIntroScript(outgoingTexts: string[]): string[] {
+  const remaining = CM_INTRO_BUNDLE.filter((key) => !cmScriptSentInHistory(outgoingTexts, key));
+  return remaining.length ? [remaining[0]!] : [];
+}
+
 export function scriptSnippet(key: string): string {
   return CM_SCRIPT_SNIPPETS[key] ?? "";
 }
@@ -524,7 +530,7 @@ export function resolveCmFunnelScripts(
 
   if (notRegisteredYet) {
     if (!introSent) {
-      return [...CM_INTRO_BUNDLE];
+      return nextCmIntroScript(out);
     }
     if (!intro3Sent) {
       return ["01_intro_3"];
@@ -558,11 +564,11 @@ export function resolveCmFunnelScripts(
     }
     if (effectiveStep < 3) {
       if (!introSent) {
-        return [...CM_INTRO_BUNDLE];
+        return nextCmIntroScript(out);
       }
-      const remainingIntro = CM_INTRO_BUNDLE.filter((key) => !cmScriptSentInHistory(out, key));
+      const remainingIntro = nextCmIntroScript(out);
       if (remainingIntro.length) {
-        return [...remainingIntro];
+        return remainingIntro;
       }
       if (!ageSent) {
         return ["02_age"];
@@ -662,18 +668,31 @@ export function resolveCmFunnelScripts(
         signal ||
         t.length > 0
       ) {
-        return [...CM_INTRO_BUNDLE];
+        return nextCmIntroScript(out);
       }
       return [];
     }
-    const remainingIntro = CM_INTRO_BUNDLE.filter((key) => !cmScriptSentInHistory(out, key));
+    const remainingIntro = nextCmIntroScript(out);
     if (remainingIntro.length) {
-      return [...remainingIntro];
+      return remainingIntro;
     }
     return [];
   }
 
   if (effectiveStep < 2) {
+    const remainingIntro = nextCmIntroScript(out);
+    if (remainingIntro.length) {
+      if (
+        ["interested", "positive", "ready", "question"].includes(intent) ||
+        signal ||
+        wantsDetailsAfterIntro(t) ||
+        isClientReadyPhrase(t) ||
+        t.length > 0
+      ) {
+        return remainingIntro;
+      }
+      return [];
+    }
     if (!ageSent) {
       if (
         ["interested", "positive", "ready", "question"].includes(intent) ||
@@ -841,11 +860,11 @@ export function resolveCmFunnelScripts(
     !introSent &&
     (t.length > 0 || signal || intent === "interested" || intent === "question")
   ) {
-    return [...CM_INTRO_BUNDLE];
+    return nextCmIntroScript(out);
   }
-  const remainingIntro = CM_INTRO_BUNDLE.filter((key) => !cmScriptSentInHistory(out, key));
-  if (remainingIntro.length) {
-    return [...remainingIntro];
+  const remainingIntroTail = nextCmIntroScript(out);
+  if (remainingIntroTail.length) {
+    return remainingIntroTail;
   }
   if (introSent && !ageSent && (t.length > 0 || signal)) {
     return ["02_age"];
@@ -883,7 +902,7 @@ export function cmStatusMoveAfterSend(sentScriptKeys: string[]): boolean {
   return sentScriptKeys.includes("06_link") || sentScriptKeys.includes("07_chrome");
 }
 
-/** Intro pair and registration trio are multi-send; everything else is one script per customer turn. */
+/** Registration link pair can multi-send; intro is one script per customer turn. */
 export function limitCmScriptsForCustomerTurn(
   scriptKeys: string[],
   outgoingTexts: string[],
@@ -902,7 +921,8 @@ export function limitCmScriptsForCustomerTurn(
   if (scriptKeys.some((key) => CM_INTRO_SEND_KEYS.has(key))) {
     const remaining = CM_INTRO_BUNDLE.filter((key) => !cmScriptSentInHistory(outgoingTexts, key));
     if (remaining.length) {
-      return [...remaining];
+      // Wait for the next customer reply before 01_intro_3.
+      return [remaining[0]!];
     }
   }
   if (scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))) {
@@ -934,9 +954,7 @@ export function limitCmScriptsForCustomerTurn(
 }
 
 export function cmAllowsMultiSend(scriptKeys: string[]): boolean {
-  if (scriptKeys.includes("01_intro")) {
-    return true;
-  }
+  // Intro is one bubble per turn; only registration instructions+link stay paired.
   return scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key));
 }
 
