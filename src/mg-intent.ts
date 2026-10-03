@@ -56,7 +56,7 @@ const DECLINED = /\b(pas interesse|non merci|stop|arnaque|scam|laisse[- ]moi)\b/
 const BARE_DECLINED = /^(non|nah|nope|jamais|rien|non merci)\.?!*$/i;
 const DEPOSIT_DONE =
   /\b(j'ai (fait|depose)|depot (fait|termine)|deposit done|deposited|apres (le )?depot)\b/i;
-const GAME_ID = /\b(17\d{6,}|16\d{6,}|identifiant\s*\d+|id\s*\d+)\b/i;
+const GAME_ID = /\b((?:15|16|17|18|19)\d{7,10}|identifiant\s*\d+|id\s*\d+)\b/i;
 const POSITIVE_EMOJI = /^[\s👍👌✅🔥❤️🙏😊🙂]+$/u;
 const FR_LINK_ASK =
   /\b(?:envoie|envoyer|envoyez|donne|donner|besoin|veux|veut|ou|recu|reçu|pas).{0,40}\b(?:lien|link)\b|\b(?:lien|link)\b.{0,28}\b(?:svp|s'il|sil|please|inscription|register|plateforme|pas|encore)\b|\blien\s+d['']inscription\b|\bpas (encore )?(recu|reçu|eu|avoir).{0,20}\b(lien|link)\b/i;

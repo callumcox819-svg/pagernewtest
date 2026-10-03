@@ -336,7 +336,7 @@ export function egFunnelNeedsContinuation(customerText: string, outgoingTexts: s
   if (!gameIdSent) {
     return (
       isDepositConfirmed(customerText) ||
-      /\b(17\d{6,}|16\d{6,}|10\d{8,})\b/.test(customerText)
+      /\b((?:15|16|17|18|19)\d{7,10}|10\d{8,})\b/.test(customerText)
     );
   }
   return false;

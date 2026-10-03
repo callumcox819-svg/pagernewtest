@@ -21,7 +21,7 @@ function parseCompactAmount(raw: string): number | null {
   if (!digitsOnly || digitsOnly.length > 6) {
     return null;
   }
-  if (/^17\d{6,}$/.test(digitsOnly)) {
+  if (/^(?:15|16|17|18|19)\d{7,}$/.test(digitsOnly)) {
     return null;
   }
   const amount = Number(digitsOnly);
@@ -38,7 +38,7 @@ export function isCustomMarketDepositAmount(text: string, rules: CustomDepositRu
   if (!t || t.length > 120) {
     return false;
   }
-  if (/\b(17\d{6,}|otp|verification code|whatsapp|phone number|game id)\b/i.test(t)) {
+  if (/\b((?:15|16|17|18|19)\d{7,10}|otp|verification code|whatsapp|phone number|game id)\b/i.test(t)) {
     return false;
   }
   if (/\b(j'ai|jai|ai)\s*\d{1,2}\s*an[s]?\b/i.test(t)) {

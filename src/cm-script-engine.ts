@@ -88,7 +88,7 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "06_link": ["cmr056", "tinyurl.com/cmr056"],
   "07_chrome": ["copiez ce lien", "navigateur google chrome"],
   "07_mtn_tip": ["ne s'ouvre pas sur mtn", "essayez le wi-fi", "autre opérateur mobile"],
-  "08_game_id": ["commence par 17", "numéro de joueur"],
+  "08_game_id": ["commence par 17", "commence par 18", "numéro de joueur", "numero de joueur"],
   "09_deposit": ["bouton vert", "déposer", "deposer", "mtn", "orange"],
   "10_tg_invite": ["canal telegram privé", "canal telegram prive"],
   "11_tg_link": ["xtiy04zvcvw", "t.me/"],
@@ -361,7 +361,12 @@ export function gameIdSentInHistory(outgoingTexts: string[]): boolean {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("commence par 17") || blob.includes("numéro de joueur") || blob.includes("numero de joueur");
+  return (
+    blob.includes("commence par 17") ||
+    blob.includes("commence par 18") ||
+    blob.includes("numéro de joueur") ||
+    blob.includes("numero de joueur")
+  );
 }
 
 function stepForOutgoingText(text: string): number {
@@ -375,7 +380,7 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("bouton vert") || (t.includes("déposer") && t.includes("mtn"))) {
     return 7;
   }
-  if (t.includes("commence par 17")) {
+  if (t.includes("commence par 17") || t.includes("commence par 18")) {
     return 6;
   }
   if (

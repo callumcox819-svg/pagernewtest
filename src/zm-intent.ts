@@ -34,7 +34,7 @@ const DECLINED = /\b(not interested|no thanks|stop|scam|leave me alone)\b/i;
 const BARE_DECLINED = /^(no|nah|nope|never|nothing|no thanks|no thank you|no dear|not interested)\.?!*$/i;
 const DEPOSIT_DONE =
   /\b(made my dep(?:o)?sit|i deposited|deposit done|done deposit|deposited|after i deposited|i made a deposit)\b/i;
-const GAME_ID = /\b(17\d{6,}|16\d{6,}|account\s*\d+)\b/i;
+const GAME_ID = /\b((?:15|16|17|18|19)\d{7,10}|account\s*\d+)\b/i;
 const POSITIVE_EMOJI = /^[\s👍👌✅🔥❤️🙏😊🙂]+$/u;
 const EN_LINK_ASK =
   /\b(?:send|give|share|want|need|get|where|gimme).{0,28}\b(?:link|url)\b|\b(?:link|url)\b.{0,28}\b(?:please|pls|send|registration|register)\b|\bregistration\s+link\b|\bregister\s+link\b|\bneed\s+(?:the\s+)?link\b/i;

@@ -30,7 +30,7 @@ Une fois inscrit, envoie-moi un message ici.
 Voici le lien :`,
   "05_link": DEFAULT_MG_LINK,
   "06_deposit": `Connecte-toi, clique sur «Déposer» ou le bouton vert « $ » en haut à droite. Choisis un mode de paiement pratique .Après le dépôt, envoie-moi une capture d'écran pour confirmation.Je t'attends`,
-  "07_game_id": `Envoyez-moi votre identifiant de jeu ; vous le trouverez dans votre profil (dans le coin droit). il commence par les chiffres 17.`,
+  "07_game_id": `Envoyez-moi votre identifiant de jeu ; vous le trouverez dans votre profil (dans le coin droit). il commence par les chiffres 17 ou 18.`,
 };
 
 const cache = new Map<string, string>();

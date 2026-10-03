@@ -42,10 +42,11 @@ const FR_PHONE_REQUEST =
 const AR_PHONE_REQUEST =
   /(رقمك|رقم الهاتف|رقم التليفون|رقم الواتس|واتس|واتساب|اتصل(ي)?\s*بي|اتصل\s*معي|ابعت(لي)?\s*رقم|ارسل(لي)?\s*رقم)/i;
 
-/** Casino game IDs (16/17…) must not be treated as phone numbers. */
+/** Casino game / login IDs must not be treated as phone numbers. */
 export function isLikelyGameId(text: string): boolean {
-  const digits = (text || "").replace(/\s+/g, "");
-  return /^(16|17)\d{6,}$/.test(digits);
+  const digits = (text || "").replace(/\D+/g, "");
+  // 1xBET player IDs: 9–12 digits, historically 16/17…, now also 18… (and nearby 15/19).
+  return /^(15|16|17|18|19)\d{7,10}$/.test(digits);
 }
 
 export function normalizeCustomerText(value?: string): string {

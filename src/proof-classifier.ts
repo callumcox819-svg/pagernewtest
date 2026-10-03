@@ -65,7 +65,7 @@ export function classifyProofFromText(
   const hasClientGameId =
     country === "CM"
       ? Boolean(login17)
-      : /\b(17\d{6,}|16\d{6,})\b/.test(inputText);
+      : /\b((?:15|16|17|18|19)\d{7,10})\b/.test(inputText);
 
   if (country === "CM" && login17 && isCmRegistrationSuccessProof(inputText)) {
     return {

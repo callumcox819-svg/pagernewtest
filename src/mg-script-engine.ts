@@ -23,7 +23,7 @@ import {
   wantsRegistrationLink,
 } from "./mg-intent.js";
 
-const MG_GAME_ID_RE = /\b(17\d{6,}|16\d{6,})\b/;
+const MG_GAME_ID_RE = /\b((?:15|16|17|18|19)\d{7,10})\b/;
 
 export const MG_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "augmenter vos revenus",
@@ -58,7 +58,7 @@ export const MG_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   ],
   "05_link": ["tinyurl.com/mdg56"],
   "06_deposit": ["déposer", "bouton vert", "capture d'écran pour confirmation"],
-  "07_game_id": ["identifiant de jeu", "commence par les chiffres 17"],
+  "07_game_id": ["identifiant de jeu", "commence par les chiffres 17", "commence par les chiffres 18", "commence par les chiffres"],
 };
 
 export const MG_FOLDER_NAME_HINTS = ["мадаг", "madag", "madagascar", "mg", "mdg"];
@@ -177,7 +177,12 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("bouton vert") || t.includes("après le dépôt, envoie-moi")) {
     return 7;
   }
-  if (t.includes("identifiant de jeu") || t.includes("commence par les chiffres 17")) {
+  if (
+    t.includes("identifiant de jeu") ||
+    t.includes("commence par les chiffres 17") ||
+    t.includes("commence par les chiffres 18") ||
+    (t.includes("commence par les chiffres") && t.includes("identifiant"))
+  ) {
     return 6;
   }
   if (t.includes("tinyurl.com/mdg56") || t.includes("code promo mad778")) {

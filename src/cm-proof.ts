@@ -1,11 +1,13 @@
 import type { ProofKind } from "./config.js";
 import { depositSentInHistory, regLinkSentInHistory, gameIdSentInHistory } from "./cm-script-engine.js";
 
-/** CM client account IDs always start with 17 (not 16). */
-export const CM_CLIENT_LOGIN_17 = /\b(17\d{7,10})\b/;
+/** 1xBET client login / game IDs (15–19…, historically 17). */
+export const CM_CLIENT_LOGIN_ID = /\b((?:15|16|17|18|19)\d{7,10})\b/;
+/** @deprecated use CM_CLIENT_LOGIN_ID */
+export const CM_CLIENT_LOGIN_17 = CM_CLIENT_LOGIN_ID;
 
 export function extractCmClientLoginId17(text: string): string | undefined {
-  const match = (text || "").match(CM_CLIENT_LOGIN_17);
+  const match = (text || "").match(CM_CLIENT_LOGIN_ID);
   return match?.[1];
 }
 

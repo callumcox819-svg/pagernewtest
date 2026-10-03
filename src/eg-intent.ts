@@ -25,7 +25,7 @@ const AR_JOINED =
 const AR_REG_PENDING = /(لسه|لسا|مش خلصت|بحاول|جاري التسجيل|not yet|still registering|هسجل|أسجل|اسجل)/i;
 const AR_DEPOSIT_DONE =
   /(عملت إيداع|عملت ايداع|عملت الإيداع|منتظر التأكيد|ايداع|إيداع|deposit|funded)/i;
-const GAME_ID = /\b(17\d{6,}|16\d{6,})\b/;
+const GAME_ID = /\b((?:15|16|17|18|19)\d{7,10})\b/;
 const POSITIVE_EMOJI = /^[\s👍👌✅🔥❤️🙏😊🙂]+$/u;
 const AR_LINK_ASK =
   /(اللينك|الرابط|ابعت.*لينك|ابعت.*رابط|وين اللينك|فين اللينك|محتاج اللينك|عايز اللينك|عاوز اللينك|link|url)/i;

@@ -104,6 +104,7 @@ import {
 } from "./conversation-reply.js";
 import {
   classifySpecialCustomerIntent,
+  isLikelyGameId,
   moneyRefusalText,
   phoneChatOnlyText,
   specialIntentTemplateRole,
@@ -6987,6 +6988,10 @@ async function trySendSpecialCustomerResponse(
   deps: WorkerDeps,
   ctx: SpecialResponseContext,
 ): Promise<boolean> {
+  // Game / login IDs (15–19…) must never trigger the «phone only» refusal.
+  if (isLikelyGameId(ctx.text)) {
+    return false;
+  }
   const special = classifySpecialCustomerIntent(ctx.playbook, ctx.text);
   if (special === "none") {
     return false;

@@ -23,7 +23,7 @@ import {
   wantsRegistrationLink,
 } from "./zm-intent.js";
 
-const ZM_GAME_ID_RE = /\b(17\d{6,}|16\d{6,})\b/;
+const ZM_GAME_ID_RE = /\b((?:15|16|17|18|19)\d{7,10})\b/;
 
 export const ZM_SCRIPT_SNIPPETS: Record<string, string> = {
   "01_intro": "Hi! I want to show you",
