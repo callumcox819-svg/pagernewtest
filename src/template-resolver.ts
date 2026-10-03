@@ -46,7 +46,7 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
     details: ["03_steps", "voici comment ça fonctionne", "02_age", "Quel âge"],
     registration: ["05_registration", "CASH056", "06_link", "CMR056"],
     deposit: ["09_deposit", "bouton vert"],
-    ask_id: ["08_game_id", "commence par 17"],
+    ask_id: ["08_game_id", "commence par +"],
     no_money: ["pas d'argent", "plus tard"],
     reactivation: ["Il reste encore"],
   },
@@ -196,6 +196,12 @@ export async function resolveScriptTextByKey(
     const localLink = loadLocalCmScript("06_link");
     if (localLink?.trim()) {
       return localLink.trim();
+    }
+  }
+  if (country === "CM" && options.scriptKey === "08_game_id") {
+    const localGameId = loadLocalCmScript("08_game_id");
+    if (localGameId?.trim()) {
+      return localGameId.trim();
     }
   }
   if (country === "CM") {

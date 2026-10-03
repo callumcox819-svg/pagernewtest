@@ -24,7 +24,7 @@ import {
   cmVisionExtractToCombinedText,
   maybeAiVisionExtractCmProof,
 } from "./ai-assist.js";
-import { extractCmClientLoginId17 } from "./cm-proof.js";
+import { extractCmClientLoginId17, isRegistrationFormInProgress } from "./cm-proof.js";
 import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
 import {
   isLinkAccessProblemMessage,
@@ -7099,6 +7099,59 @@ async function trySendSpecialCustomerResponse(
   return true;
 }
 
+/** Client stuck on INSCRIPTION form — coach finish + promo, never ask player ID. */
+async function trySendRegistrationFormHelp(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext & { outgoingTexts: string[] },
+  combinedText: string,
+): Promise<boolean> {
+  const country = String(ctx.channel.country || "");
+  if (country !== "CM" && country !== "MG") {
+    return false;
+  }
+  if (country === "CM" && !cmRegLinkSentInHistory(ctx.outgoingTexts)) {
+    return false;
+  }
+  if (country === "MG" && !mgRegLinkSentInHistory(ctx.outgoingTexts)) {
+    return false;
+  }
+  if (!isRegistrationFormInProgress(combinedText)) {
+    return false;
+  }
+  const noNet = /aucune\s*connexion|pas\s*d['']?internet|no\s*internet|hors\s*ligne/i.test(
+    combinedText,
+  );
+  const promo = country === "MG" ? "MAD778" : "CASH056";
+  const body = [
+    "Tu es encore sur la page d'inscription — le compte n'est pas encore créé.",
+    `Termine l'inscription, mets le code promo ${promo}, puis envoie-moi une capture une fois le compte ouvert.`,
+    noNet
+      ? "Je vois aussi un problème de connexion : essaie le Wi-Fi ou un autre navigateur (Google Chrome), puis réessaie."
+      : "Si la page bloque, essaie Google Chrome ou le Wi-Fi.",
+  ].join(" ");
+  await tryTakeConversationForProcessing(ctx.client, ctx.convId, country);
+  const sent = await ctx.client.sendMessageReliable(ctx.convId, body, {
+    channelId: ctx.runtime.channelId,
+    conv: ctx.conv,
+  });
+  if (!sent) {
+    return false;
+  }
+  console.log(
+    `Pager worker: ${country} ${ctx.convId.slice(0, 8)} registration-form help (not game id) build=${getDeployLabel()}`,
+  );
+  await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+    conversationId: ctx.convId,
+    channelId: ctx.runtime.channelId,
+    lastCustomerMessageId: ctx.lastIncoming.id,
+    lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: "registration_form_help",
+    sendFailures: 0,
+  });
+  return true;
+}
+
 async function trySendCmLinkTroubleHelp(
   deps: WorkerDeps,
   ctx: SpecialResponseContext & { outgoingTexts: string[] },
@@ -7352,6 +7405,11 @@ async function tryHandleCustomerImage(
     });
     proofKind = classification.proofKind;
     ocrCombinedText = classification.combinedText;
+
+    // INSCRIPTION form (Étape X/Y) — not a finished account; never ask for player ID.
+    if (await trySendRegistrationFormHelp(deps, ctx, ocrCombinedText)) {
+      return true;
+    }
 
     // Black screen / tinyurl fail / «envoie encore le lien» — Chrome + Wi‑Fi, not player ID.
     if (

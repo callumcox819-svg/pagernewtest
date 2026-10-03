@@ -1,6 +1,12 @@
 import tesseract from "tesseract.js";
 import type { PlaybookConfig, CountryCode, ProofKind } from "./config.js";
-import { extractCmClientLoginId17, isCmRegistrationSuccessProof, resolveCmProofScriptAction, type CmProofScriptAction } from "./cm-proof.js";
+import {
+  extractCmClientLoginId17,
+  isCmRegistrationSuccessProof,
+  isRegistrationFormInProgress,
+  resolveCmProofScriptAction,
+  type CmProofScriptAction,
+} from "./cm-proof.js";
 
 const { recognize } = tesseract;
 
@@ -67,6 +73,15 @@ export function classifyProofFromText(
       ? Boolean(login17)
       : /\b((?:15|16|17|18|19)\d{7,10})\b/.test(inputText);
 
+  // Still filling the INSCRIPTION form — not proof of a finished account.
+  if (isRegistrationFormInProgress(inputText)) {
+    return {
+      proofKind: "unclear_screenshot",
+      combinedText: inputText,
+      reason: "Registration form in progress (INSCRIPTION), not completed account",
+    };
+  }
+
   if (country === "CM" && login17 && isCmRegistrationSuccessProof(inputText)) {
     return {
       proofKind: "registration_screenshot",
@@ -75,7 +90,11 @@ export function classifyProofFromText(
     };
   }
 
-  if (country === "CM" && login17 && /inscription|r[eé]ussie|successful|login\s*:/i.test(inputText)) {
+  if (
+    country === "CM" &&
+    login17 &&
+    /inscription\s*r[eé]ussie|r[eé]ussie|successful|login\s*:/i.test(inputText)
+  ) {
     return {
       proofKind: "registration_screenshot",
       combinedText: inputText,
@@ -119,6 +138,15 @@ export function classifyProofFromText(
       proofKind: "id_screenshot",
       combinedText: inputText,
       reason: "Detected account or client identifier markers",
+    };
+  }
+
+  // Bare «inscription» UI without login success ≠ completed registration proof.
+  if (hasRegistrationUiMarker && !login17 && country === "CM") {
+    return {
+      proofKind: "unclear_screenshot",
+      combinedText: inputText,
+      reason: "Registration UI without completed login id",
     };
   }
 

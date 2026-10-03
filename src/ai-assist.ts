@@ -67,6 +67,8 @@ const COUNTRY_RULES: Record<CountryCode, string> = {
     "Registration proof: congratulate, ask for balance screenshot after top-up.",
     "Acknowledge «Ok boss», «j'ai déjà fait», waiting for screenshot — brief and friendly.",
     "Link/MTN/Orange issues: Wi‑Fi, other operator, Google Chrome — no new URL.",
+    "Screenshot of INSCRIPTION / Étape X sur Y / code promo form = still registering — tell them to finish signup with promo CASH056; NEVER ask for player ID yet.",
+    "Player ID (when truly registered): say it starts with + (not 17 or 18).",
     "On «arnaque»: calm reassurance.",
     "Do not repeat deposit script verbatim.",
     "If they say NOT registered yet / no account / «Non» or «No» to finishing registration — do NOT ask for ID or deposit; registration link scripts handle that.",

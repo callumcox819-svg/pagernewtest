@@ -57,7 +57,7 @@ export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
   "06_link": "CMR056",
   "07_chrome": "Copiez ce lien",
   "07_mtn_tip": "ne s'ouvre pas sur MTN",
-  "08_game_id": "commence par 17",
+  "08_game_id": "commence par +",
   "09_deposit": "bouton vert",
   "10_tg_invite": "canal Telegram privé",
   "11_tg_link": "XtIY04zvcVw2YzZi",
@@ -112,7 +112,14 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "06_link": ["cmr056", "tinyurl.com/cmr056"],
   "07_chrome": ["copiez ce lien", "navigateur google chrome"],
   "07_mtn_tip": ["ne s'ouvre pas sur mtn", "essayez le wi-fi", "autre opérateur mobile"],
-  "08_game_id": ["commence par 17", "commence par 18", "numéro de joueur", "numero de joueur"],
+  "08_game_id": [
+    "commence par +",
+    "commence par 17",
+    "commence par 18",
+    "numéro de joueur",
+    "numero de joueur",
+    "identifiant de jeu",
+  ],
   "09_deposit": ["bouton vert", "déposer", "deposer", "mtn", "orange"],
   "10_tg_invite": ["canal telegram privé", "canal telegram prive"],
   "11_tg_link": ["xtiy04zvcvw", "t.me/"],
@@ -392,10 +399,12 @@ export function gameIdSentInHistory(outgoingTexts: string[]): boolean {
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
   return (
+    blob.includes("commence par +") ||
     blob.includes("commence par 17") ||
     blob.includes("commence par 18") ||
     blob.includes("numéro de joueur") ||
-    blob.includes("numero de joueur")
+    blob.includes("numero de joueur") ||
+    blob.includes("identifiant de jeu")
   );
 }
 
@@ -410,7 +419,12 @@ function stepForOutgoingText(text: string): number {
   if (t.includes("bouton vert") || (t.includes("déposer") && t.includes("mtn"))) {
     return 7;
   }
-  if (t.includes("commence par 17") || t.includes("commence par 18")) {
+  if (
+    t.includes("commence par +") ||
+    t.includes("commence par 17") ||
+    t.includes("commence par 18") ||
+    t.includes("identifiant de jeu")
+  ) {
     return 6;
   }
   if (
@@ -688,15 +702,14 @@ export function resolveCmFunnelScripts(
     ) {
       return ["09_deposit"];
     }
-    // Game ID only after clear deposit proof — never on link-fail / resend screenshots.
+    // Game ID only after clear deposit proof — never on link-fail / INSCRIPTION form shots.
+    // Bare image_only is handled in tryHandleCustomerImage (OCR); do not auto-ask ID here.
     if (
       depositSentInHistory(out) &&
       !gameIdSentInHistory(out) &&
       !cmNeedsLinkTroubleHelp(t, options) &&
       !wantsRegistrationLink(t) &&
-      (intent === "deposit_done" ||
-        intent === "image_only" ||
-        isRegistrationConfirmed(t))
+      (intent === "deposit_done" || isRegistrationConfirmed(t))
     ) {
       return ["08_game_id"];
     }
