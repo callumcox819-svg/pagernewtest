@@ -1721,7 +1721,11 @@ async function showAiFoldersMenu(
     state.pagerAccount?.liveChannels,
   );
   if (!folders.length) {
-    await telegram.sendMessage(chatId, "Сначала загрузи папки в меню «Папки».", buildFoldersRetryKeyboard());
+    await telegram.sendMessage(
+      chatId,
+      "Сначала открой 📁 папки у канала в «Каналы» и нажми «Обновить папки».",
+      buildFoldersRetryKeyboard(),
+    );
     return;
   }
 
