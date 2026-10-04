@@ -55,7 +55,14 @@ export const DJ_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "07_promo": ["code promo\nbji777", "code promo"],
 };
 
-export const DJ_FOLDER_NAME_HINTS = ["джибут", "djibouti", "djib", "djf", "bji"];
+export const DJ_FOLDER_NAME_HINTS = [
+  "джибут",
+  "djibouti",
+  "djib",
+  "djf",
+  "bji",
+  "bji777",
+];
 export const DJ_OFFER_SEND_KEYS = new Set(["03_djf_table", "04_ready_ask"]);
 export const DJ_REG_SEND_KEYS = new Set(["05_registration", "06_link", "07_promo"]);
 export const DJ_REG_BUNDLE = ["05_registration", "06_link", "07_promo"] as const;

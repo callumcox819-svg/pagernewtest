@@ -133,7 +133,14 @@ export const CM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
   "04_tier": ["cash056", "cmr056", "camerun01", "google chrome"],
 };
 
-export const CM_FOLDER_NAME_HINTS = ["камерун", "cameroon", "cameroun", "cm"];
+export const CM_FOLDER_NAME_HINTS = [
+  "камерун",
+  "cameroon",
+  "cameroun",
+  "cm",
+  "cash056",
+  "cmr056",
+];
 
 /** Initial reg send: instructions + link only. Chrome/MTN tip are help-only, never after folder move. */
 export const CM_REG_SEND_KEYS = new Set(["05_registration", "06_link", "07_chrome", "07_mtn_tip"]);

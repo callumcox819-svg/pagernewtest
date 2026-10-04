@@ -317,7 +317,18 @@ import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { loadLocalMgScript, mgDefaultRegistrationLink } from "./mg-local-scripts.js";
 import { loadLocalDjScript, djDefaultRegistrationLink } from "./dj-local-scripts.js";
 import { loadLocalJoScript, joDefaultRegistrationLink } from "./jo-local-scripts.js";
-import { resolveCmTemplateFolderId, resolveEgTemplateFolderId, resolveRwTemplateFolderId, resolveScriptTextByKey, resolveTemplateText, resolveZmTemplateFolderId } from "./template-resolver.js";
+import {
+  isForeignBrandTemplateBank,
+  resolveCmTemplateFolderId,
+  resolveDjTemplateFolderId,
+  resolveEgTemplateFolderId,
+  resolveJoTemplateFolderId,
+  resolveMgTemplateFolderId,
+  resolveRwTemplateFolderId,
+  resolveScriptTextByKey,
+  resolveTemplateText,
+  resolveZmTemplateFolderId,
+} from "./template-resolver.js";
 import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
 import { customerAgreedAfterOfferTable } from "./funnel-common.js";
 import {
@@ -3735,7 +3746,14 @@ async function processMgConversation(
       );
       continue;
     }
-    let replyText = loadLocalMgScript(scriptKey)?.trim();
+    let replyText = (
+      await resolveScriptTextByKey(client, {
+        folderId: runtime.runtime.templateBankId,
+        liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+        scriptKey,
+        country: "MG",
+      })
+    )?.trim();
     if (!replyText) {
       if (scriptKey === "04_registration") {
         const fallbackText = loadLocalMgScript("04_registration")?.trim();
@@ -4197,9 +4215,19 @@ async function processDjConversation(
       );
       continue;
     }
-    let replyText = loadLocalDjScript(scriptKey)?.trim();
+    let replyText = (
+      await resolveScriptTextByKey(client, {
+        folderId: runtime.runtime.templateBankId,
+        liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+        scriptKey,
+        country: "DJ",
+      })
+    )?.trim();
     if (scriptKey === "06_link") {
-      replyText = replyText || djDefaultRegistrationLink();
+      replyText = replyText || loadLocalDjScript("06_link")?.trim() || djDefaultRegistrationLink();
+    }
+    if (!replyText) {
+      replyText = loadLocalDjScript(scriptKey)?.trim();
     }
     if (!replyText) {
       console.warn(`DJ script missing ${convId.slice(0, 8)}: ${scriptKey}`);
@@ -4667,7 +4695,14 @@ async function processJoConversation(
       );
       continue;
     }
-    let replyText = loadLocalJoScript(scriptKey)?.trim();
+    let replyText = (
+      await resolveScriptTextByKey(client, {
+        folderId: runtime.runtime.templateBankId,
+        liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+        scriptKey,
+        country: "JO",
+      })
+    )?.trim();
     if (!replyText) {
       if (scriptKey === "04_registration") {
         const fallbackText = loadLocalJoScript("04_registration")?.trim();
@@ -6820,14 +6855,17 @@ function pickLiveTemplateBank(
   state: ChatState,
   country: WorkerCountry,
 ): { id: string; name: string } | undefined {
-  const banks = state.pagerAccount?.liveTemplateBanks ?? [];
+  // 1xBET bot only — never auto-pick Melbet folders.
+  const banks = (state.pagerAccount?.liveTemplateBanks ?? []).filter(
+    (bank) => !isForeignBrandTemplateBank(bank.name),
+  );
   if (!banks.length) {
     return undefined;
   }
   const hints: Record<WorkerCountry, string[]> = {
-    ZM: ["замб", "zamb", "zambia"],
-    EG: ["егип", "egypt", "hapka"],
-    CM: ["камер", "cameroon", "cameroun"],
+    ZM: ["замб", "zamb", "zambia", "zam577"],
+    EG: ["егип", "egypt", "hapka", "egypt0011"],
+    CM: ["камер", "cameroon", "cameroun", "cash056", "cmr056"],
     RW: ["ruand", "rwand", "rw"],
     CL: ["chile", "chili", "чили", "cl"],
     MG: MG_FOLDER_NAME_HINTS,
@@ -6839,18 +6877,13 @@ function pickLiveTemplateBank(
     CR: ["коста", "costa"],
     SN: ["сенегал", "senegal", "sénégal"],
   };
-  if (isFolderOnlyCountry(country)) {
-    const matchedOnly = banks.find((bank) => {
-      const normalized = bank.name.toLowerCase();
-      return hints[country].some((hint) => normalized.includes(hint));
-    });
-    return matchedOnly;
-  }
+  const countryHints = hints[country] ?? [];
   const matched = banks.find((bank) => {
     const normalized = bank.name.toLowerCase();
-    return hints[country].some((hint) => normalized.includes(hint));
+    return countryHints.some((hint) => normalized.includes(hint.toLowerCase()));
   });
-  return matched ?? banks[0];
+  // Never fall back to a random first bank (could be wrong geo / Melbet leftover).
+  return matched;
 }
 
 function getConversationState(

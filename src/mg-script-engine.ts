@@ -67,7 +67,14 @@ export const MG_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   ],
 };
 
-export const MG_FOLDER_NAME_HINTS = ["мадаг", "madag", "madagascar", "mg", "mdg"];
+export const MG_FOLDER_NAME_HINTS = [
+  "мадаг",
+  "madag",
+  "madagascar",
+  "mg",
+  "mdg",
+  "mad778",
+];
 export const MG_REG_SEND_KEYS = new Set(["04_registration", "05_link"]);
 export const MG_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works", "03_mga_table"]);
 

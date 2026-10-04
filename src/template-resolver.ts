@@ -4,6 +4,9 @@ import { loadLocalCmScript } from "./cm-local-scripts.js";
 import { loadLocalEgScript } from "./eg-local-scripts.js";
 import { loadLocalRwScript, clearLocalRwScriptCache } from "./rw-local-scripts.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
+import { loadLocalMgScript } from "./mg-local-scripts.js";
+import { loadLocalDjScript } from "./dj-local-scripts.js";
+import { loadLocalJoScript } from "./jo-local-scripts.js";
 import {
   CM_FOLDER_NAME_HINTS,
   CM_SCRIPT_EXCLUDE_SNIPPETS,
@@ -29,13 +32,40 @@ import {
   rwScriptSearchNeedles,
   rwScriptSnippet,
 } from "./rw-script-engine.js";
+import {
+  MG_FOLDER_NAME_HINTS,
+  scriptSearchNeedles as mgScriptSearchNeedles,
+  scriptSnippet as mgScriptSnippet,
+} from "./mg-script-engine.js";
+import {
+  DJ_FOLDER_NAME_HINTS,
+  scriptSearchNeedles as djScriptSearchNeedles,
+  scriptSnippet as djScriptSnippet,
+} from "./dj-script-engine.js";
+import {
+  JO_FOLDER_NAME_HINTS,
+  scriptSearchNeedles as joScriptSearchNeedles,
+  scriptSnippet as joScriptSnippet,
+} from "./jo-script-engine.js";
 import type { PagerClient, PagerSavedReply } from "./pager-client.js";
 import {
   isDisabledOutboundScriptKey,
   isDisabledOutboundTemplateRole,
 } from "./disabled-outbound-scripts.js";
 
-export type ScriptResolveCountry = CountryCode | "RW";
+/** 1xBET bot geos that resolve scripts from Pager saved-reply folders. */
+export type ScriptResolveCountry = CountryCode | "RW" | "MG" | "DJ" | "JO";
+
+/** Never auto-pick Melbet folders on this 1xBET bot. */
+const FOREIGN_BRAND_BANK_BLOCKLIST = ["melbet", "мелбет", "mel bet", "мельбет"];
+
+export function isForeignBrandTemplateBank(name?: string): boolean {
+  const normalized = (name || "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return FOREIGN_BRAND_BANK_BLOCKLIST.some((needle) => normalized.includes(needle));
+}
 
 const replyCache = new Map<string, { loadedAt: number; replies: PagerSavedReply[] }>();
 const REPLY_CACHE_TTL_MS = 90_000;
@@ -70,22 +100,38 @@ const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>
   },
 };
 
+function bankMatchesHints(name: string, hints: string[]): boolean {
+  const normalized = name.toLowerCase();
+  if (isForeignBrandTemplateBank(normalized)) {
+    return false;
+  }
+  return hints.some((hint) => normalized.includes(hint.toLowerCase()));
+}
+
 async function resolveTemplateFolderId(
   client: PagerClient,
   hints: string[],
   preferredId?: string,
   liveBanks?: Array<{ id: string; name: string }>,
 ): Promise<string | undefined> {
+  // Operator-linked folder on this 1xBET channel wins (even if name is odd).
   if (preferredId) {
-    const replies = await loadFolderReplies(client, preferredId).catch(() => []);
-    if (replies.length) {
-      return preferredId;
+    const preferredMeta = (liveBanks ?? []).find((bank) => bank.id === preferredId);
+    if (!preferredMeta || !isForeignBrandTemplateBank(preferredMeta.name)) {
+      const replies = await loadFolderReplies(client, preferredId).catch(() => []);
+      if (replies.length) {
+        return preferredId;
+      }
+    } else {
+      console.warn(
+        `1xBET template: skip Melbet-linked folder ${preferredId.slice(0, 8)} (${preferredMeta.name})`,
+      );
     }
   }
 
-  for (const bank of liveBanks ?? []) {
-    const normalized = bank.name.toLowerCase();
-    if (hints.some((hint) => normalized.includes(hint))) {
+  const live = (liveBanks ?? []).filter((bank) => !isForeignBrandTemplateBank(bank.name));
+  for (const bank of live) {
+    if (bankMatchesHints(bank.name, hints)) {
       const replies = await loadFolderReplies(client, bank.id).catch(() => []);
       if (replies.length) {
         return bank.id;
@@ -93,10 +139,11 @@ async function resolveTemplateFolderId(
     }
   }
 
-  const banks = await client.getTemplateBanks().catch(() => []);
+  const banks = (await client.getTemplateBanks().catch(() => [])).filter(
+    (bank) => !isForeignBrandTemplateBank(bank.name),
+  );
   for (const bank of banks) {
-    const normalized = bank.name.toLowerCase();
-    if (!hints.some((hint) => normalized.includes(hint))) {
+    if (!bankMatchesHints(bank.name, hints)) {
       continue;
     }
     const replies = await loadFolderReplies(client, bank.id).catch(() => []);
@@ -105,9 +152,8 @@ async function resolveTemplateFolderId(
     }
   }
 
-  for (const bank of liveBanks ?? []) {
-    const normalized = bank.name.toLowerCase();
-    if (hints.some((hint) => normalized.includes(hint))) {
+  for (const bank of live) {
+    if (bankMatchesHints(bank.name, hints)) {
       return bank.id;
     }
   }
@@ -147,6 +193,81 @@ export async function resolveRwTemplateFolderId(
   return resolveTemplateFolderId(client, RW_FOLDER_NAME_HINTS, preferredId, liveBanks);
 }
 
+export async function resolveMgTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, MG_FOLDER_NAME_HINTS, preferredId, liveBanks);
+}
+
+export async function resolveDjTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, DJ_FOLDER_NAME_HINTS, preferredId, liveBanks);
+}
+
+export async function resolveJoTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, JO_FOLDER_NAME_HINTS, preferredId, liveBanks);
+}
+
+async function resolveFolderIdForCountry(
+  client: PagerClient,
+  country: ScriptResolveCountry,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  switch (country) {
+    case "RW":
+      return resolveRwTemplateFolderId(client, preferredId, liveBanks);
+    case "ZM":
+      return resolveZmTemplateFolderId(client, preferredId, liveBanks);
+    case "EG":
+      return resolveEgTemplateFolderId(client, preferredId, liveBanks);
+    case "MG":
+      return resolveMgTemplateFolderId(client, preferredId, liveBanks);
+    case "DJ":
+      return resolveDjTemplateFolderId(client, preferredId, liveBanks);
+    case "JO":
+      return resolveJoTemplateFolderId(client, preferredId, liveBanks);
+    default:
+      return resolveCmTemplateFolderId(client, preferredId, liveBanks);
+  }
+}
+
+function loadLocalScriptForCountry(
+  country: ScriptResolveCountry,
+  scriptKey: string,
+): string | undefined {
+  switch (country) {
+    case "RW":
+      return loadLocalRwScript(scriptKey);
+    case "ZM":
+      return loadLocalZmScript(scriptKey);
+    case "EG":
+      return loadLocalEgScript(scriptKey);
+    case "MG":
+      return loadLocalMgScript(scriptKey);
+    case "DJ":
+      return loadLocalDjScript(scriptKey);
+    case "JO":
+      return loadLocalJoScript(scriptKey);
+    default:
+      return loadLocalCmScript(scriptKey);
+  }
+}
+
+/**
+ * 1xBET: ALWAYS prefer Pager saved replies from the country folder.
+ * Local .txt files are emergency fallback only — same idea as Melbet presets,
+ * but keyed by script name (01_intro, 05_registration…) for the 1xBET engines.
+ */
 export async function resolveScriptTextByKey(
   client: PagerClient,
   options: {
@@ -162,156 +283,61 @@ export async function resolveScriptTextByKey(
     console.warn(`${country} script blocked (telegram removed): key=${options.scriptKey}`);
     return undefined;
   }
-  if (country === "EG" && options.scriptKey === "04_registration") {
-    const localReg = loadLocalEgScript("04_registration");
-    if (localReg?.trim()) {
-      return localReg;
-    }
-  }
-  if (country === "CM" && options.scriptKey === "04_tier") {
-    const localTier = loadLocalCmScript("04_tier");
-    if (localTier?.trim()) {
-      return localTier;
-    }
-  }
-  if (country === "CM" && options.scriptKey === "03_steps") {
-    const localSteps = loadLocalCmScript("03_steps");
-    if (localSteps?.trim()) {
-      return localSteps.trim();
-    }
-  }
-  if (country === "CM" && options.scriptKey === "02_age") {
-    const localAge = loadLocalCmScript("02_age");
-    if (localAge?.trim()) {
-      return localAge.trim();
-    }
-  }
-  if (country === "CM" && options.scriptKey === "05_registration") {
-    const localReg = loadLocalCmScript("05_registration");
-    if (localReg?.trim()) {
-      return stripCmRegistrationEmbeddedLink(localReg);
-    }
-  }
-  if (country === "CM" && options.scriptKey === "06_link") {
-    const localLink = loadLocalCmScript("06_link");
-    if (localLink?.trim()) {
-      return localLink.trim();
-    }
-  }
-  if (country === "CM" && options.scriptKey === "08_game_id") {
-    const localGameId = loadLocalCmScript("08_game_id");
-    if (localGameId?.trim()) {
-      return localGameId.trim();
-    }
-  }
-  if (country === "CM") {
-    const cmIntroLocalFirst = new Set(["01_intro", "01_intro_3"]);
-    if (cmIntroLocalFirst.has(options.scriptKey)) {
-      const localIntro = loadLocalCmScript(options.scriptKey);
-      if (localIntro?.trim()) {
-        return localIntro.trim();
-      }
-    }
-  }
-  if (country === "ZM") {
-    const zmLocalFirst = new Set([
-      "01_intro",
-      "02_how_it_works",
-      "03_zmw_table",
-      "04_registration",
-      "05_link",
-      "06_deposit",
-    ]);
-    if (zmLocalFirst.has(options.scriptKey)) {
-      const localZm = loadLocalZmScript(options.scriptKey);
-      if (localZm?.trim()) {
-        if (options.scriptKey === "04_registration") {
-          return stripZmRegistrationEmbeddedLink(localZm);
-        }
-        return localZm;
-      }
-    }
-  }
-  if (country === "RW") {
-    const rwLocalFirst = new Set([
-      "01_intro",
-      "02_how_it_works",
-      "03_deposit_table",
-      "04_registration",
-      "05_link",
-    ]);
-    if (rwLocalFirst.has(options.scriptKey)) {
-      const localRw = loadLocalRwScript(options.scriptKey);
-      if (localRw?.trim()) {
-        if (options.scriptKey === "04_registration") {
-          return stripRwRegistrationEmbeddedLink(localRw);
-        }
-        return localRw;
-      }
-    }
-  }
-  const folderId =
-    country === "RW"
-      ? await resolveRwTemplateFolderId(client, options.folderId, options.liveBanks)
-      : country === "ZM"
-      ? await resolveZmTemplateFolderId(client, options.folderId, options.liveBanks)
-      : country === "EG"
-        ? await resolveEgTemplateFolderId(client, options.folderId, options.liveBanks)
-        : await resolveCmTemplateFolderId(client, options.folderId, options.liveBanks);
+
+  const folderId = await resolveFolderIdForCountry(
+    client,
+    country,
+    options.folderId,
+    options.liveBanks,
+  );
 
   if (folderId) {
     const replies = await loadFolderReplies(client, folderId, options.refreshSavedReplies);
     const exactName = findReplyByExactScriptName(replies, options.scriptKey, country);
     if (exactName?.text?.trim()) {
+      console.log(
+        `${country} script from saved replies key=${options.scriptKey} name=${exactName.name ?? "?"} folder=${folderId.slice(0, 8)}`,
+      );
       return finalizeScriptText(exactName.text, options.scriptKey, country);
     }
     const fromPager = matchReplyByScriptKey(replies, options.scriptKey, country);
     if (fromPager?.text?.trim() && isScriptReplyAcceptable(fromPager.text, options.scriptKey, country)) {
+      console.log(
+        `${country} script from saved replies key=${options.scriptKey} matched=${fromPager.name ?? "body"} folder=${folderId.slice(0, 8)}`,
+      );
+      return finalizeScriptText(fromPager.text, options.scriptKey, country);
+    }
+    // Exact/name match with weak body — still prefer Pager text over local for 1xBET.
+    if (fromPager?.text?.trim()) {
+      console.warn(
+        `${country} script pager weak match accepted key=${options.scriptKey} chars=${fromPager.text.length}`,
+      );
       return finalizeScriptText(fromPager.text, options.scriptKey, country);
     }
     if (
       country === "EG" &&
-      options.scriptKey === "04_registration" &&
-      fromPager?.text?.trim() &&
-      /^https?:\/\/\S+$/i.test(fromPager.text.trim())
+      options.scriptKey === "04_registration"
     ) {
-      const fullReg = loadLocalEgScript("04_registration");
-      if (fullReg?.trim()) {
-        console.warn(`${country} script bare link replaced with 04_registration`);
-        return fullReg;
+      const bareLink = replies.find((reply) => /^https?:\/\/\S+$/i.test((reply.text || "").trim()));
+      if (bareLink?.text?.trim()) {
+        const fullReg = loadLocalEgScript("04_registration");
+        if (fullReg?.trim()) {
+          console.warn(`${country} script bare link replaced with local 04_registration`);
+          return fullReg;
+        }
       }
     }
-    if (fromPager?.text?.trim()) {
-      console.warn(
-        `${country} script pager rejected weak match key=${options.scriptKey} chars=${fromPager.text.length}`,
-      );
-    } else {
-      console.warn(
-        `${country} script pager miss key=${options.scriptKey} folder=${folderId.slice(0, 8)} replies=${replies.length}`,
-      );
-    }
+    console.warn(
+      `${country} script pager miss key=${options.scriptKey} folder=${folderId.slice(0, 8)} replies=${replies.length}`,
+    );
+  } else {
+    console.warn(`${country} script no saved-reply folder for key=${options.scriptKey}`);
   }
 
-  const local =
-    country === "RW"
-      ? loadLocalRwScript(options.scriptKey)
-      : country === "ZM"
-      ? loadLocalZmScript(options.scriptKey)
-      : country === "EG"
-        ? loadLocalEgScript(options.scriptKey)
-        : loadLocalCmScript(options.scriptKey);
+  const local = loadLocalScriptForCountry(country, options.scriptKey);
   if (local?.trim()) {
     console.log(`${country} script local fallback key=${options.scriptKey}`);
-    if (country === "CM" && options.scriptKey === "05_registration") {
-      return stripCmRegistrationEmbeddedLink(local);
-    }
-    if (country === "ZM" && options.scriptKey === "04_registration") {
-      return stripZmRegistrationEmbeddedLink(local);
-    }
-    if (country === "RW" && options.scriptKey === "04_registration") {
-      return stripRwRegistrationEmbeddedLink(local);
-    }
-    return local;
+    return finalizeScriptText(local, options.scriptKey, country);
   }
 
   return undefined;
@@ -388,6 +414,12 @@ async function loadFolderReplies(
 function finalizeScriptText(text: string, scriptKey: string, country: ScriptResolveCountry): string {
   if (country === "CM" && scriptKey === "05_registration") {
     return stripCmRegistrationEmbeddedLink(text);
+  }
+  if (
+    (country === "ZM" || country === "RW" || country === "MG" || country === "DJ" || country === "JO") &&
+    (scriptKey === "04_registration" || scriptKey === "05_registration")
+  ) {
+    return stripZmRegistrationEmbeddedLink(text);
   }
   return text;
 }
@@ -510,6 +542,15 @@ function scriptSnippetForCountry(country: ScriptResolveCountry): (key: string) =
   if (country === "EG") {
     return egScriptSnippet;
   }
+  if (country === "MG") {
+    return mgScriptSnippet;
+  }
+  if (country === "DJ") {
+    return djScriptSnippet;
+  }
+  if (country === "JO") {
+    return joScriptSnippet;
+  }
   return cmScriptSnippet;
 }
 
@@ -523,11 +564,20 @@ function scriptSearchNeedlesForCountry(country: ScriptResolveCountry): (key: str
   if (country === "EG") {
     return egScriptSearchNeedles;
   }
+  if (country === "MG") {
+    return mgScriptSearchNeedles;
+  }
+  if (country === "DJ") {
+    return djScriptSearchNeedles;
+  }
+  if (country === "JO") {
+    return joScriptSearchNeedles;
+  }
   return cmScriptSearchNeedles;
 }
 
 function scriptExcludesForCountry(country: ScriptResolveCountry, scriptKey: string): string[] {
-  if (country === "RW") {
+  if (country === "RW" || country === "MG" || country === "DJ" || country === "JO") {
     return [];
   }
   if (country === "ZM") {
