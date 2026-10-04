@@ -320,10 +320,7 @@ import { loadLocalJoScript, joDefaultRegistrationLink } from "./jo-local-scripts
 import {
   isForeignBrandTemplateBank,
   resolveCmTemplateFolderId,
-  resolveDjTemplateFolderId,
   resolveEgTemplateFolderId,
-  resolveJoTemplateFolderId,
-  resolveMgTemplateFolderId,
   resolveRwTemplateFolderId,
   resolveScriptTextByKey,
   resolveTemplateText,
