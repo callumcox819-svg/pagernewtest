@@ -127,6 +127,8 @@ import {
   limitCmScriptsForCustomerTurn,
   cmAllowsMultiSend,
   cmLinkTroubleHelpScripts,
+  cmAgeGivenFromThread,
+  cmAgeQuestionSent,
   CM_REG_SEND_KEYS,
   tierSentInHistory,
   depositSentInHistory as cmDepositSentInHistory,
@@ -2385,16 +2387,15 @@ async function processCmConversation(
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
-  // Hard guarantee after age answer: never stall on «Quel âge» → send money table.
-  const ageAsked =
-    cmScriptSentInHistory(outgoingTexts, "02_age") ||
-    /quel âge|quel age|age avez-vous|age as-tu/i.test(outgoingTexts.join("\n"));
+  // Hard guarantee after age: never stall / never AI → money table.
+  // Handles split bubbles «19» + «Ans».
+  const ageAsked = cmAgeQuestionSent(outgoingTexts);
+  const ageGiven = cmAgeGivenFromThread(latestCustomerText, recentCustomerTexts);
   if (
     ageAsked &&
     !tierSentInHistory(outgoingTexts) &&
     !cmRegLinkSentInHistory(outgoingTexts) &&
-    (isAgeAnswer(latestCustomerText) ||
-      /^\d{1,2}\s*ans?\b/i.test(latestCustomerText.trim()))
+    ageGiven
   ) {
     scriptKeys = ["04_tier"];
   }
@@ -2434,9 +2435,23 @@ async function processCmConversation(
   if (cmLinkHelpBatch) {
     scriptKeys = cmLinkTroubleHelpScripts(true);
   }
+  const waitingAgeTable =
+    ageAsked &&
+    !tierSentInHistory(outgoingTexts) &&
+    !cmRegLinkSentInHistory(outgoingTexts);
   const skipEarlySupportAi =
     supportAgentSkipsEarlyAi("CM", scriptKeys, support) ||
-    scriptKeys.some((key) => key === "05_registration" || key === "06_link") ||
+    scriptKeys.some(
+      (key) =>
+        key === "05_registration" ||
+        key === "06_link" ||
+        key === "04_tier" ||
+        key === "02_age" ||
+        key === "01_intro" ||
+        key === "01_intro_3",
+    ) ||
+    // Between «Quel âge» and the money table — scripts only, never AI chatter.
+    waitingAgeTable ||
     (tierSentInHistory(outgoingTexts) &&
       !cmRegLinkSentInHistory(outgoingTexts) &&
       (isDepositTierChoice(latestCustomerText) ||

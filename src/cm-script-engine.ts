@@ -558,6 +558,44 @@ function cmAgeJustGiven(text: string): boolean {
   return isAgeAnswer(t) || /^\d{1,2}\s*ans?\b/i.test(t);
 }
 
+/** «19» + «Ans» in separate bubbles still counts as an age answer. */
+export function cmAgeGivenFromThread(
+  text: string,
+  recentCustomerTexts: string[] = [],
+): boolean {
+  if (cmAgeJustGiven(text)) {
+    return true;
+  }
+  const recent = [...recentCustomerTexts.slice(-5), text]
+    .map((line) => (line || "").trim())
+    .filter(Boolean);
+  const joined = recent.join(" ");
+  if (cmAgeJustGiven(joined)) {
+    return true;
+  }
+  const hasAgeNumber = recent.some(
+    (line) => /^\d{1,2}$/.test(line) && isAgeAnswer(line),
+  );
+  const hasAnsWord = recent.some((line) => /^ans?\.?$/i.test(line));
+  if (hasAgeNumber && hasAnsWord) {
+    return true;
+  }
+  // Latest is «Ans», a recent bubble was bare «19» / «20».
+  if (/^ans?\.?$/i.test((text || "").trim())) {
+    return recentCustomerTexts.some((line) => {
+      const t = (line || "").trim();
+      return /^\d{1,2}$/.test(t) && isAgeAnswer(t);
+    });
+  }
+  return false;
+}
+
+export function cmAgeQuestionSent(outgoingTexts: string[]): boolean {
+  return (
+    cmScriptSentInHistory(outgoingTexts, "02_age") || ageQuestionSentInHistory(outgoingTexts)
+  );
+}
+
 export function resolveCmFunnelScripts(
   effectiveStep: number,
   text: string,
@@ -613,7 +651,7 @@ export function resolveCmFunnelScripts(
     return [];
   }
   if (!tierSent) {
-    if (cmAgeJustGiven(t)) {
+    if (cmAgeGivenFromThread(t, recentTexts)) {
       return ["04_tier"];
     }
     // Legacy chats where 03_steps already went out: continue on positive.

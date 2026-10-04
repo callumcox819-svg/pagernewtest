@@ -7,7 +7,13 @@ import {
 } from "./ai-support-phase.js";
 import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion, isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
 import { isDepositTierChoice, isCmRegistrationHelpRequest, wantsRegistrationLink as cmWantsRegistrationLink } from "./cm-intent.js";
-import { tierSentInHistory as cmTierSentInHistory, regLinkSentInHistory as cmRegLinkSentInHistory, depositSentInHistory as cmDepositSentInHistory } from "./cm-script-engine.js";
+import {
+  tierSentInHistory as cmTierSentInHistory,
+  regLinkSentInHistory as cmRegLinkSentInHistory,
+  depositSentInHistory as cmDepositSentInHistory,
+  cmAgeQuestionSent,
+  cmAgeGivenFromThread,
+} from "./cm-script-engine.js";
 import {
   tierSentInHistory as clTierSentInHistory,
   regLinkSentInHistory as clRegLinkSentInHistory,
@@ -189,6 +195,31 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
   if (
     !ctx.support?.active &&
     hasPreSupportFunnelScripts(ctx.country, ctx.scriptKeys ?? [])
+  ) {
+    return false;
+  }
+  if (
+    ctx.country === "CM" &&
+    !ctx.support?.active &&
+    cmAgeQuestionSent(ctx.recentOutgoingTexts ?? []) &&
+    !cmTierSentInHistory(ctx.recentOutgoingTexts ?? []) &&
+    !cmRegLinkSentInHistory(ctx.recentOutgoingTexts ?? [])
+  ) {
+    // After age question → table script only (incl. split «19» / «Ans»).
+    return false;
+  }
+  if (
+    ctx.country === "CM" &&
+    !ctx.support?.active &&
+    (ctx.scriptKeys ?? []).includes("04_tier")
+  ) {
+    return false;
+  }
+  if (
+    ctx.country === "CM" &&
+    !ctx.support?.active &&
+    cmAgeGivenFromThread(ctx.customerText.trim(), ctx.recentCustomerTexts ?? []) &&
+    cmAgeQuestionSent(ctx.recentOutgoingTexts ?? [])
   ) {
     return false;
   }
