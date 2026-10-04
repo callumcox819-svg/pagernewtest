@@ -7658,10 +7658,13 @@ async function refreshLiveChannelsFromApi(
         country,
       );
       channels[channel.id] = {
+        ...existing,
         enabled: existing?.enabled ?? collectEnabledChannelIdsFromState(state).includes(channel.id),
         country,
         templateBank: existing?.templateBank ?? yamlChannel?.templateBank ?? bank?.name,
         templateBankId: existing?.templateBankId ?? bank?.id,
+        // Keep per-channel folder picks — rewriting without this reset UI to global «2 пап».
+        statusFolders: existing?.statusFolders,
       };
     }
 
@@ -7854,10 +7857,12 @@ async function seedEnabledChannelsFromYaml(
     const country = existing?.country ?? yamlChannel?.country ?? inferCountryFromChannelName(channel.name);
     const bank = pickLiveTemplateBank(state, country);
     channels[channel.id] = {
+      ...existing,
       enabled: enabledChannelIds.includes(channel.id),
       country,
       templateBank: existing?.templateBank ?? yamlChannel?.templateBank ?? bank?.name,
       templateBankId: existing?.templateBankId ?? bank?.id,
+      statusFolders: existing?.statusFolders,
     };
   }
 

@@ -289,7 +289,9 @@ async function handleCallback(
       }
       if (value === "back" || value === "refresh") {
         const nextState =
-          value === "refresh" ? (await refreshPagerData(chatId, state)) ?? state : state;
+          value === "refresh"
+            ? (await refreshPagerData(chatId, state)) ?? state
+            : (await stateStore.get(chatId)) ?? state;
         await telegram.answerCallbackQuery(callbackId);
         await showChannelsMenu(chatId, nextState, messageId);
         return;
@@ -580,21 +582,26 @@ async function handleCallback(
       await telegram.answerCallbackQuery(callbackId, "Канал не найден");
       return;
     }
+    const latestState = (await stateStore.get(chatId)) ?? state;
     const folders = setAllStatusFolders(
-      resolveChannelStatusFolders(state, channel.id),
+      resolveChannelStatusFolders(latestState, channel.id),
       extra === "on",
     );
-    const runtime = getChannelRuntime(state, channel.id, inferCountryFromName(channel.name));
+    const runtime = getChannelRuntime(
+      latestState,
+      channel.id,
+      inferCountryFromName(channel.name),
+    );
     const nextState =
       (await stateStore.patch(chatId, {
         channels: {
-          ...(state.channels ?? {}),
+          ...(latestState.channels ?? {}),
           [channel.id]: {
             ...runtime,
             statusFolders: folders,
           },
         },
-      })) ?? state;
+      })) ?? latestState;
     await telegram.answerCallbackQuery(
       callbackId,
       extra === "on" ? "Все папки канала включены" : "Папки канала сняты",
@@ -625,19 +632,27 @@ async function handleCallback(
       await telegram.answerCallbackQuery(callbackId, "Канал не найден");
       return;
     }
+    const latestState = (await stateStore.get(chatId)) ?? state;
     const index = Number(extra);
-    const folders = toggleStatusFolder(resolveChannelStatusFolders(state, channel.id), index);
-    const runtime = getChannelRuntime(state, channel.id, inferCountryFromName(channel.name));
+    const folders = toggleStatusFolder(
+      resolveChannelStatusFolders(latestState, channel.id),
+      index,
+    );
+    const runtime = getChannelRuntime(
+      latestState,
+      channel.id,
+      inferCountryFromName(channel.name),
+    );
     const nextState =
       (await stateStore.patch(chatId, {
         channels: {
-          ...(state.channels ?? {}),
+          ...(latestState.channels ?? {}),
           [channel.id]: {
             ...runtime,
             statusFolders: folders,
           },
         },
-      })) ?? state;
+      })) ?? latestState;
     const folder = folders[index];
     await telegram.answerCallbackQuery(
       callbackId,
@@ -1642,21 +1657,30 @@ async function showChannelFoldersMenu(
     inferCountryFromName(channelName),
   );
   // Persist a channel-local copy on first open so later global edits don't override.
+  let menuState = currentState;
   if (!runtime.statusFolders?.length) {
     const seeded = resolveChannelStatusFolders(currentState, channelId);
-    await stateStore.patch(chatId, {
-      channels: {
-        ...(currentState.channels ?? {}),
-        [channelId]: {
-          ...runtime,
-          statusFolders: seeded,
+    menuState =
+      (await stateStore.patch(chatId, {
+        channels: {
+          ...(currentState.channels ?? {}),
+          [channelId]: {
+            ...runtime,
+            statusFolders: seeded,
+          },
         },
-      },
-    });
+      })) ?? currentState;
   }
 
-  const latest = (await stateStore.get(chatId)) ?? currentState;
-  const folders = resolveChannelStatusFolders(latest, channelId);
+  const latest = (await stateStore.get(chatId)) ?? menuState;
+  // Prefer any in-memory channel folders if a concurrent worker patch raced the read.
+  const foldersState =
+    latest.channels?.[channelId]?.statusFolders?.length
+      ? latest
+      : menuState.channels?.[channelId]?.statusFolders?.length
+        ? menuState
+        : latest;
+  const folders = resolveChannelStatusFolders(foldersState, channelId);
   const enabled = folders.filter((folder) => folder.enabled).length;
   const text = [
     `Папки канала «${channelName}» — откуда бот берёт чаты:`,
