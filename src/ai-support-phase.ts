@@ -221,18 +221,26 @@ export function supportAgentSkipsEarlyAi(
   scriptKeys: string[],
   support: SupportSnapshot,
 ): boolean {
-  if (!support.active || !scriptKeys.length) {
+  if (!scriptKeys.length) {
     return false;
   }
   const cfg = getSupportFunnelConfig(country);
   const helpCountry = country === "MG" || country === "DJ" || country === "JO" ? "ZM" : country;
   const mechanical = new Set([
+    ...cfg.introScriptKeys,
     ...cfg.depositScriptKeys,
     ...cfg.gameIdScriptKeys,
     ...cfg.linkResendScriptKeys,
     ...registrationHelpScriptKeys(helpCountry),
   ]);
-  return scriptKeys.some((key) => mechanical.has(key));
+  // Pre-support AND in-progress: queued funnel scripts always beat the AI agent.
+  if (scriptKeys.some((key) => mechanical.has(key))) {
+    return true;
+  }
+  if (!support.active) {
+    return false;
+  }
+  return false;
 }
 
 export function scriptKeysIncludeDeposit(

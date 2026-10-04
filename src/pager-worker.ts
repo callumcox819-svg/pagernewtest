@@ -2393,15 +2393,11 @@ async function processCmConversation(
   if (
     tierSentInHistory(outgoingTexts) &&
     !cmRegLinkSentInHistory(outgoingTexts) &&
-    isDepositTierChoice(latestCustomerText) &&
-    !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
-  ) {
-    scriptKeys = ["05_registration", "06_link"];
-  }
-  if (
-    tierSentInHistory(outgoingTexts) &&
-    !cmRegLinkSentInHistory(outgoingTexts) &&
-    (cmWantsRegistrationLink(latestCustomerText) ||
+    (isDepositTierChoice(latestCustomerText) ||
+      /\b(1000|1500|2000|2500|3000|1\s?000|1\s?500|2\s?000|2\s?500|3\s?000)\b/i.test(
+        latestCustomerText,
+      ) ||
+      cmWantsRegistrationLink(latestCustomerText) ||
       isCmRegistrationHelpRequest(latestCustomerText) ||
       customerAgreedAfterOfferTable(latestCustomerText)) &&
     !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
@@ -2430,7 +2426,13 @@ async function processCmConversation(
   if (cmLinkHelpBatch) {
     scriptKeys = cmLinkTroubleHelpScripts(true);
   }
-  const skipEarlySupportAi = supportAgentSkipsEarlyAi("CM", scriptKeys, support);
+  const skipEarlySupportAi =
+    supportAgentSkipsEarlyAi("CM", scriptKeys, support) ||
+    scriptKeys.some((key) => key === "05_registration" || key === "06_link") ||
+    (tierSentInHistory(outgoingTexts) &&
+      !cmRegLinkSentInHistory(outgoingTexts) &&
+      (isDepositTierChoice(latestCustomerText) ||
+        /\b(1000|1500|2000|2500|3000)\b/.test(latestCustomerText)));
 
   if (!skipEarlySupportAi) {
     const aiHandledEarly = await tryRunAiAgentTurn(

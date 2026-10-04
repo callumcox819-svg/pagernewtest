@@ -195,8 +195,11 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
   if (
     ctx.country === "CM" &&
     !ctx.support?.active &&
-    isDepositTierChoice(ctx.customerText.trim()) &&
-    cmTierSentInHistory(ctx.recentOutgoingTexts ?? [])
+    cmTierSentInHistory(ctx.recentOutgoingTexts ?? []) &&
+    !cmRegLinkSentInHistory(ctx.recentOutgoingTexts ?? []) &&
+    (isDepositTierChoice(ctx.customerText.trim()) ||
+      /\b(1000|1500|2000|2500|3000)\b/.test(ctx.customerText) ||
+      (ctx.scriptKeys ?? []).some((key) => key === "05_registration" || key === "06_link"))
   ) {
     return false;
   }

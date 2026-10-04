@@ -158,28 +158,43 @@ export function isDepositTierChoice(text: string): boolean {
   if (/\ble\s+1\s*(?:er|ere)\b/.test(t) || (t.length <= 16 && /\ble\s+1\b/.test(t))) {
     return true;
   }
-  if (/^(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f|fc)?\.?$/i.test(t)) {
+  if (
+    /^(1000|1500|2000|2500|3000|1\s?000|1\s?500|2\s?000|2\s?500|3\s?000)\s*(?:cfa|frs?|f|fc)?\.?$/i.test(
+      t,
+    )
+  ) {
     return true;
   }
   // Glued typo: "1500Fque", "1000f je", "ce1500fque"
-  if (/(?:^|[^0-9])(1000|1500)f(?=[a-z]|$)/i.test(glued)) {
-    return true;
-  }
-  if (/\b(ce|c'est|cest)\s+(1000|1500|1\s?000|1\s?500)\s*f/i.test(t)) {
-    return true;
-  }
-  if (/\bchois/i.test(t) && /(?:^|[^0-9])(1000|1500|1\s?000|1\s?500)/i.test(t.replace(/\s/g, ""))) {
+  if (/(?:^|[^0-9])(1000|1500|2000|2500|3000)f(?=[a-z]|$)/i.test(glued)) {
     return true;
   }
   if (
-    t.split(/\s+/).length <= 14 &&
-    /\b(1000|1500|1\s?000|1\s?500)\s*(?:cfa|frs?|f|fc)?\b/i.test(t)
+    /\b(ce|c'est|cest)\s+(1000|1500|2000|2500|3000|1\s?000|1\s?500|2\s?000|2\s?500|3\s?000)\s*f/i.test(
+      t,
+    )
   ) {
     return true;
   }
   if (
-    /\b(1000|1500)\s*f(?:rs?|c)?\b/i.test(t) ||
-    /\b(1000f(?:rs?|c)?|1500f(?:rs?|c)?)\b/i.test(t)
+    /\bchois/i.test(t) &&
+    /(?:^|[^0-9])(1000|1500|2000|2500|3000|1\s?000|1\s?500|2\s?000|2\s?500|3\s?000)/i.test(
+      t.replace(/\s/g, ""),
+    )
+  ) {
+    return true;
+  }
+  if (
+    t.split(/\s+/).length <= 14 &&
+    /\b(1000|1500|2000|2500|3000|1\s?000|1\s?500|2\s?000|2\s?500|3\s?000)\s*(?:cfa|frs?|f|fc)?\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(1000|1500|2000|2500|3000)\s*f(?:rs?|c)?\b/i.test(t) ||
+    /\b((?:1000|1500|2000|2500|3000)f(?:rs?|c)?)\b/i.test(t)
   ) {
     return true;
   }
@@ -187,8 +202,10 @@ export function isDepositTierChoice(text: string): boolean {
     return true;
   }
   if (
-    /\b(je choisis|je choisi|je prends|je veux|choisis|prends|prend)\b/i.test(t) &&
-    /\b(1000|1500|1\s?000|1\s?500)\b/i.test(t)
+    /\b(je choisis|je choisi|je prends|je veux|je pr[eé]f[eè]r|choisis|prends|prend|pr[eé]f[eè]r)\b/i.test(
+      t,
+    ) &&
+    /\b(1000|1500|2000|2500|3000|1\s?000|1\s?500|2\s?000|2\s?500|3\s?000)\b/i.test(t)
   ) {
     return true;
   }
@@ -211,6 +228,25 @@ export function isCmCustomDepositAmountChoice(text: string): boolean {
     if (amount >= 200 && amount <= 50_000) {
       return true;
     }
+  }
+  // Table amounts: 1000–3000 CFA (and free picks in that band).
+  if (
+    t.split(/\s+/).length <= 16 &&
+    /\b(1000|1500|2000|2500|3000|1\s?000|1\s?500|2\s?000|2\s?500|3\s?000)\s*(?:cfa|frs?|f|fc)?\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  // «Je préféré 2000», «je prefere 2500», «je choisis 2000 CFA»
+  if (
+    t.split(/\s+/).length <= 16 &&
+    /\b(je\s+)?(pr[eé]f[eè]r[eé]|prefere|prefer|choisis|choisi|prends|prend|veux|mets|met|investir|avec|pour|depot|d[eé]p[oô]t)\b/i.test(
+      t,
+    ) &&
+    /\b\d{3,5}\s*(?:cfa|frs?|f|fc)?\b/i.test(t)
+  ) {
+    return true;
   }
   if (
     t.split(/\s+/).length <= 14 &&
