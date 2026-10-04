@@ -69,23 +69,23 @@ export function containsArabicScript(text: string): boolean {
   return /[\u0600-\u06FF]/.test(text);
 }
 
+/** Accept saved-reply text as-is — do not require old local snippet phrases. */
 export function isEgScriptTextAcceptable(scriptKey: string, text: string): boolean {
   const body = (text || "").trim();
   if (!body) {
     return false;
   }
   if (scriptKey === "05_link") {
-    return /tinyurl\.com\/egypt0011/i.test(body) || /^https?:\/\//i.test(body);
+    return /^https?:\/\/\S+$/i.test(body) || /tinyurl\.com\//i.test(body);
   }
   if (scriptKey === "04_registration" && isEgHowItWorksPitchBody(body)) {
     return false;
   }
-  if (!containsArabicScript(body)) {
-    return false;
+  // Prefer Arabic operator presets; allow any non-trivial saved reply by name/match.
+  if (containsArabicScript(body)) {
+    return body.length >= 20;
   }
-  return egScriptSentInHistory([body], scriptKey) || scriptSearchNeedles(scriptKey).some((needle) =>
-    body.toLowerCase().includes(needle.toLowerCase()),
-  );
+  return body.length >= 40;
 }
 
 export function scriptSearchNeedles(key: string): string[] {

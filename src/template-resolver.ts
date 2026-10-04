@@ -1,7 +1,6 @@
 import type { BotConfig, CountryCode, TemplateRole } from "./config.js";
 import { getTemplateBank } from "./config.js";
 import { loadLocalCmScript } from "./cm-local-scripts.js";
-import { loadLocalEgScript } from "./eg-local-scripts.js";
 import { loadLocalRwScript, clearLocalRwScriptCache } from "./rw-local-scripts.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { loadLocalMgScript } from "./mg-local-scripts.js";
@@ -306,7 +305,7 @@ function loadLocalScriptForCountry(
     case "ZM":
       return loadLocalZmScript(scriptKey);
     case "EG":
-      return loadLocalEgScript(scriptKey);
+      return undefined;
     case "MG":
       return loadLocalMgScript(scriptKey);
     case "DJ":
@@ -325,9 +324,9 @@ function loadLocalScriptForCountry(
 }
 
 /**
- * 1xBET: ALWAYS prefer Pager saved replies from the country folder.
- * Local .txt files are emergency fallback only — same idea as Melbet presets,
- * but keyed by script name (01_intro, 05_registration…) for the 1xBET engines.
+ * 1xBET: ALWAYS use Pager saved replies from the country folder.
+ * Egypt has no local .txt fallback. Other countries may still use local files
+ * only if Pager has no match for that script key.
  */
 export async function resolveScriptTextByKey(
   client: PagerClient,
@@ -383,24 +382,16 @@ export async function resolveScriptTextByKey(
       );
       return finalizeScriptText(fromPager.text, options.scriptKey, country);
     }
-    if (
-      country === "EG" &&
-      options.scriptKey === "04_registration"
-    ) {
-      const bareLink = replies.find((reply) => /^https?:\/\/\S+$/i.test((reply.text || "").trim()));
-      if (bareLink?.text?.trim()) {
-        const fullReg = loadLocalEgScript("04_registration");
-        if (fullReg?.trim()) {
-          console.warn(`${country} script bare link replaced with local 04_registration`);
-          return fullReg;
-        }
-      }
-    }
     console.warn(
       `${country} script pager miss key=${options.scriptKey} folder=${folderId.slice(0, 8)} replies=${replies.length}`,
     );
   } else {
     console.warn(`${country} script no saved-reply folder for key=${options.scriptKey}`);
+  }
+
+  // Egypt: never fall back to bundled/local .txt — operators edit Pager saved replies.
+  if (country === "EG") {
+    return undefined;
   }
 
   const local = loadLocalScriptForCountry(country, options.scriptKey);
@@ -747,15 +738,22 @@ function isScriptReplyAcceptable(text: string, scriptKey: string, country: Scrip
     if (isEgHowItWorksPitchBody(text)) {
       return false;
     }
-    return body.includes("eg011") || body.includes("هبعتلك اللينك") || body.includes("google chrome");
+    return /[\u0600-\u06FF]/.test(body) ? body.length >= 20 : body.length >= 40;
   }
 
   if (country === "EG") {
+    if (scriptKey === "05_link") {
+      return body.includes("tinyurl.com/") || body.includes("http://") || body.includes("https://");
+    }
+    // Trust Pager saved replies even when wording differs from old local snippets.
+    if (/[\u0600-\u06FF]/.test(body)) {
+      return body.length >= 20;
+    }
     const needles = scriptSearchNeedlesForCountry(country)(scriptKey);
     if (needles.some((needle) => body.includes(needle.trim().toLowerCase()))) {
-      return /[\u0600-\u06FF]/.test(body);
+      return true;
     }
-    return false;
+    return body.length >= 40;
   }
 
   if (scriptKey === "05_link") {

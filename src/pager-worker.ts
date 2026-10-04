@@ -378,7 +378,7 @@ import {
   isClRegistrationHelpRequest,
   isRegistrationAccountQuestion as isClRegistrationAccountQuestion,
 } from "./cl-intent.js";
-import { buildEgLinkOnlyMessage, buildEgRegistrationOnlyMessage, loadLocalEgScript, shouldBlockEgBareLinkSend } from "./eg-local-scripts.js";
+import { shouldBlockEgBareLinkSend } from "./eg-local-scripts.js";
 import { getDeployLabel } from "./telegram-api.js";
 import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { loadLocalMgScript, mgDefaultRegistrationLink } from "./mg-local-scripts.js";
@@ -6113,12 +6113,31 @@ async function sendEgRegistrationThenLink(
   convId: string,
   runtime: EnabledChannel,
   conv: PagerConversation,
+  options: {
+    folderId?: string;
+    liveBanks?: Array<{ id: string; name: string }>;
+  },
 ): Promise<boolean> {
-  const regText = buildEgRegistrationOnlyMessage();
+  const regText = await resolveScriptTextByKey(client, {
+    folderId: options.folderId,
+    liveBanks: options.liveBanks,
+    scriptKey: "04_registration",
+    country: "EG",
+  });
   if (!regText?.trim()) {
+    console.warn(`EG registration missing from saved replies ${convId.slice(0, 8)}`);
     return false;
   }
-  const linkText = buildEgLinkOnlyMessage();
+  const linkText = await resolveScriptTextByKey(client, {
+    folderId: options.folderId,
+    liveBanks: options.liveBanks,
+    scriptKey: "05_link",
+    country: "EG",
+  });
+  if (!linkText?.trim()) {
+    console.warn(`EG link missing from saved replies ${convId.slice(0, 8)}`);
+    return false;
+  }
   const sentReg = await client.sendMessageReliable(convId, regText.trim(), {
     channelId: runtime.channelId,
     conv,
@@ -6545,7 +6564,10 @@ async function processEgConversation(
       !egFullRegistrationInstructionsSentInHistory(outgoingTexts) &&
       !sentScriptKeys.includes("04_registration")
     ) {
-      const sentBundle = await sendEgRegistrationThenLink(client, convId, runtime, conv);
+      const sentBundle = await sendEgRegistrationThenLink(client, convId, runtime, conv, {
+        folderId,
+        liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+      });
       if (sentBundle) {
         sentAny = true;
         sentScriptKeys.push("04_registration", "05_link");
@@ -6579,29 +6601,22 @@ async function processEgConversation(
       country: "EG",
     });
     if (replyText?.trim() && !isEgScriptTextAcceptable(activeScriptKey, replyText)) {
-      const localArabic = loadLocalEgScript(activeScriptKey);
-      if (localArabic?.trim()) {
-        console.warn(
-          `EG script forced local Arabic key=${activeScriptKey} (pager text rejected, chars=${replyText.length})`,
-        );
-        replyText = localArabic;
-      } else {
-        replyText = undefined;
-      }
-    }
-    if (!replyText?.trim()) {
-      const localFallback = loadLocalEgScript(activeScriptKey);
-      if (localFallback?.trim()) {
-        console.log(`EG script local fallback key=${activeScriptKey}`);
-        replyText = localFallback;
-      }
+      console.warn(
+        `EG script rejected from saved replies key=${activeScriptKey} chars=${replyText.length}`,
+      );
+      replyText = undefined;
     }
     if (
       activeScriptKey === "05_link" &&
       !sentScriptKeys.includes("04_registration") &&
       !egFullRegistrationInstructionsSentInHistory(outgoingTexts)
     ) {
-      const regText = buildEgRegistrationOnlyMessage();
+      const regText = await resolveScriptTextByKey(client, {
+        folderId,
+        liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+        scriptKey: "04_registration",
+        country: "EG",
+      });
       if (regText?.trim()) {
         console.warn(`EG defer bare link — sending registration text first ${convId.slice(0, 8)}`);
         const sentReg = await client.sendMessageReliable(convId, regText.trim(), {
@@ -6615,26 +6630,20 @@ async function processEgConversation(
         sentAny = true;
         sentScriptKeys.push("04_registration");
         await sleep(500);
-        replyText = buildEgLinkOnlyMessage();
+        replyText = await resolveScriptTextByKey(client, {
+          folderId,
+          liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+          scriptKey: "05_link",
+          country: "EG",
+        });
         activeScriptKey = "05_link";
       }
     }
     if (!replyText?.trim()) {
-      if (activeScriptKey === "05_link") {
-        const regReady =
-          sentScriptKeys.includes("04_registration") ||
-          egFullRegistrationInstructionsSentInHistory(outgoingTexts);
-        if (!regReady) {
-          console.warn(`EG skip bare link ${convId.slice(0, 8)} — registration text missing`);
-          continue;
-        }
-        replyText = buildEgLinkOnlyMessage();
-      } else {
-        console.warn(
-          `EG script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${activeScriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
-        );
-        continue;
-      }
+      console.warn(
+        `EG script missing from saved replies folder=${folderId?.slice(0, 8) ?? "?"} key=${activeScriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
+      );
+      continue;
     }
 
     if (
