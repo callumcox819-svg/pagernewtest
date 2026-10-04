@@ -147,7 +147,21 @@ export function getTemplateBank(
 
 export function resolveYamlTemplateBankName(
   config: BotConfig,
-  country: CountryCode | "RW" | "CL" | "MG" | "DJ" | "JO" | "MR" | "BF" | "BJ" | "CR" | "SN",
+  country:
+    | CountryCode
+    | "RW"
+    | "CL"
+    | "MG"
+    | "DJ"
+    | "JO"
+    | "KE"
+    | "GT"
+    | "EC"
+    | "MR"
+    | "BF"
+    | "BJ"
+    | "CR"
+    | "SN",
   channelId?: string,
 ): string {
   if (country === "RW") {
@@ -195,7 +209,22 @@ export function resolveYamlTemplateBankName(
     }
     return "jo-default";
   }
-  if (country === "MR" || country === "BF" || country === "BJ" || country === "CR" || country === "SN") {
+  if (country === "KE") {
+    return "ke-default";
+  }
+  if (country === "GT") {
+    return "gt-default";
+  }
+  if (country === "EC") {
+    return "ec-default";
+  }
+  if (
+    country === "MR" ||
+    country === "BF" ||
+    country === "BJ" ||
+    country === "CR" ||
+    country === "SN"
+  ) {
     return `${country.toLowerCase()}-folder`;
   }
   if (channelId) {
@@ -217,7 +246,21 @@ export function isChannelConfigured(config: BotConfig, channelId: string): boole
 
 export function statusMapForCountry(
   config: BotConfig,
-  country: CountryCode | "RW" | "CL" | "MG" | "DJ" | "JO" | "MR" | "BF" | "BJ" | "CR" | "SN",
+  country:
+    | CountryCode
+    | "RW"
+    | "CL"
+    | "MG"
+    | "DJ"
+    | "JO"
+    | "KE"
+    | "GT"
+    | "EC"
+    | "MR"
+    | "BF"
+    | "BJ"
+    | "CR"
+    | "SN",
 ): ChannelConfig["statusMap"] {
   if (
     country === "RW" ||

@@ -53,8 +53,8 @@ export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
   "02_age": "Quel âge avez-vous",
   "03_steps": "voici comment ça fonctionne",
   "04_tier": "140 000 CFA",
-  "05_registration": "CASH056",
-  "06_link": "CMR056",
+  "05_registration": "Je vais vous envoyer un lien d'inscription spécial",
+  "06_link": "tinyurl.com/CMR056",
   "07_chrome": "Copiez ce lien",
   "07_mtn_tip": "ne s'ouvre pas sur MTN",
   "08_game_id": "commence par +",
@@ -108,9 +108,15 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
     "investissement → gain",
     "bénéfice",
   ],
-  "05_registration": ["je vais vous envoyer", "lien d'inscription spécial", "code promotionnel", "cash056"],
-  "06_link": ["cmr056", "tinyurl.com/cmr056"],
-  "07_chrome": ["copiez ce lien", "navigateur google chrome"],
+  "05_registration": [
+    "je vais vous envoyer un lien d'inscription",
+    "lien d'inscription spécial",
+    "lien d'inscription special",
+    "utilisez le code promotionnel",
+    "une fois inscrit, envoyez-moi",
+  ],
+  "06_link": ["tinyurl.com/cmr056", "https://tinyurl.com/cmr056", "cmr056"],
+  "07_chrome": ["copiez ce lien et collez-le", "navigateur google chrome"],
   "07_mtn_tip": ["ne s'ouvre pas sur mtn", "essayez le wi-fi", "autre opérateur mobile"],
   "08_game_id": [
     "commence par +",
@@ -126,9 +132,27 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
 };
 
 export const CM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
-  "05_registration": ["voici comment ça fonctionne", "d'accord, voici comment", "crée ton compte casino"],
-  "06_link": ["voici comment ça fonctionne", "d'accord, voici comment"],
-  "07_chrome": ["voici comment ça fonctionne", "que vas-tu choisir"],
+  // Never pick the short promo-only scrap as the full registration preset.
+  "05_registration": [
+    "voici comment ça fonctionne",
+    "d'accord, voici comment",
+    "crée ton compte casino",
+    "indiquez le code promotionnel",
+  ],
+  "06_link": [
+    "voici comment ça fonctionne",
+    "d'accord, voici comment",
+    "je vais vous envoyer",
+    "code promotionnel",
+    "cash056",
+  ],
+  "07_chrome": [
+    "voici comment ça fonctionne",
+    "que vas-tu choisir",
+    "je vais vous envoyer",
+    "cash056",
+    "code promotionnel",
+  ],
   "03_steps": ["cash056", "cmr056", "camerun01", "google chrome"],
   "04_tier": ["cash056", "cmr056", "camerun01", "google chrome"],
 };
@@ -142,12 +166,32 @@ export const CM_FOLDER_NAME_HINTS = [
   "cmr056",
 ];
 
-/** Initial reg send: instructions + link only. Chrome/MTN tip are help-only, never after folder move. */
+/** Initial reg send: full instructions + link + Chrome tip (as in Pager saved presets). */
 export const CM_REG_SEND_KEYS = new Set(["05_registration", "06_link", "07_chrome", "07_mtn_tip"]);
 export const CM_INTRO_SEND_KEYS = new Set(["01_intro", "01_intro_3"]);
 
 const CM_INTRO_BUNDLE = ["01_intro", "01_intro_3"] as const;
-const CM_REG_BUNDLE = ["05_registration", "06_link"] as const;
+/** Must match the 3-bubble Pager preset: reg text → URL → Chrome. */
+const CM_REG_BUNDLE = ["05_registration", "06_link", "07_chrome"] as const;
+
+/** Full registration instructions preset — not a one-line CASH056 reminder. */
+export function isFullCmRegistrationPreset(text: string): boolean {
+  const body = (text || "").trim().toLowerCase();
+  if (body.length < 120) {
+    return false;
+  }
+  const hasIntro =
+    body.includes("je vais vous envoyer") ||
+    body.includes("lien d'inscription spécial") ||
+    body.includes("lien d'inscription special");
+  const hasPromo = body.includes("cash056") || body.includes("code promotionnel");
+  const hasChromeHint = body.includes("google chrome") || body.includes("inscription");
+  // Reject short promo-only scraps.
+  if (/indiquez le code promotionnel/i.test(body) && body.length < 160) {
+    return false;
+  }
+  return hasIntro && hasPromo && hasChromeHint;
+}
 
 /** Next unfinished intro bubble — one per customer turn. */
 function nextCmIntroScript(outgoingTexts: string[]): string[] {
@@ -873,7 +917,7 @@ export function limitCmScriptsForCustomerTurn(
     const instructionsSent = cmRegistrationInstructionsSentInHistory(outgoingTexts);
     const linkSent = regLinkSentInHistory(outgoingTexts);
 
-    // First reg turn: only instructions + link, then stop (folder move). No chrome/Wi‑Fi.
+    // First reg turn: full preset = instructions + link + Chrome tip.
     const isInitialReg =
       scriptKeys.includes("05_registration") ||
       scriptKeys.includes("06_link") ||
@@ -882,7 +926,8 @@ export function limitCmScriptsForCustomerTurn(
       if (!instructionsSent) {
         return [...CM_REG_BUNDLE];
       }
-      return ["06_link"];
+      // Instructions already out — finish link + Chrome.
+      return ["06_link", "07_chrome"].filter((key) => !cmScriptSentInHistory(outgoingTexts, key));
     }
 
     // Help / resend: keep Wi‑Fi tip only when the funnel explicitly requested it

@@ -122,9 +122,12 @@ export function moneyRefusalText(country: CountryCode | string): string {
     case "JO":
       return "نحن لا نُعطي أموالاً، بل نساعدك فقط على الكسب بالتكتيكات. عندما تكون جاهزاً للاستثمار، راسلني.";
     case "CL":
+    case "GT":
+    case "EC":
+    case "CR":
       return "No damos dinero — solo te ayudamos a ganar con nuestras tácticas. Cuando estés listo para invertir, escríbeme.";
     default:
-      // ZM, RW, and other English markets
+      // ZM, RW, KE, and other English markets
       return "We don't give money — we only help you earn with our tactics. Message me when you're ready to invest.";
   }
 }
@@ -139,6 +142,9 @@ export function phoneChatOnlyText(country: CountryCode | string): string {
     case "JO":
       return "نتواصل فقط أونلاين داخل هذه المحادثة. إذا كنت مهتماً، اكتب لي هنا ونكمل.";
     case "CL":
+    case "GT":
+    case "EC":
+    case "CR":
       return "Nos comunicamos solo en línea en este chat. Si te interesa, escríbeme aquí y seguimos.";
     default:
       return "We only communicate online in this chat. If you're interested, text me here and we'll continue.";

@@ -486,6 +486,22 @@ export function buildCountryKeyboard(channelId: string): ReplyMarkup {
           style: "primary",
         }),
       ],
+      [
+        inlineBtn("Кения", `country_pick|${channelId}|KE`, {
+          emojiId: PREMIUM_EMOJI.globe,
+          style: "primary",
+        }),
+        inlineBtn("Гватемала", `country_pick|${channelId}|GT`, {
+          emojiId: PREMIUM_EMOJI.globe,
+          style: "primary",
+        }),
+      ],
+      [
+        inlineBtn("Эквадор", `country_pick|${channelId}|EC`, {
+          emojiId: PREMIUM_EMOJI.globe,
+          style: "primary",
+        }),
+      ],
       [inlineBtn("Назад", "channels:back", { emojiId: PREMIUM_EMOJI.back })],
     ],
   };

@@ -29,6 +29,9 @@ export type WorkerCountry =
   | "MG"
   | "DJ"
   | "JO"
+  | "KE"
+  | "GT"
+  | "EC"
   | "MR"
   | "BF"
   | "BJ"
@@ -106,6 +109,11 @@ const DJ_CHANNEL_HINTS = ["djibouti", "djibout"];
 /** Jordan funnel — Arabic local scripts/jo. */
 const JO_CHANNEL_HINTS = ["jordan", "الأردن", "الاردن"];
 
+/** Kenya / Guatemala / Ecuador — Pager saved-reply folder markets. */
+const KE_CHANNEL_HINTS = ["kenya", "kenia", "кени", "nairobi"];
+const GT_CHANNEL_HINTS = ["guatemala", "гватемал", "guate"];
+const EC_CHANNEL_HINTS = ["ecuador", "эквадор", "еквадор", "quito"];
+
 export function isClChannelName(name: string): boolean {
   const normalized = name.toLowerCase();
   if (/\bchile\b|\bchili\b|\bcl\b/.test(normalized)) {
@@ -147,6 +155,30 @@ export function isJoChannelName(name: string): boolean {
   return JO_CHANNEL_HINTS.some((hint) => normalized.includes(hint) || name.includes(hint));
 }
 
+export function isKeChannelName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  if (/\bkenya\b|\bkenia\b|\bkes\b|\bnairobi\b/.test(normalized)) {
+    return true;
+  }
+  return KE_CHANNEL_HINTS.some((hint) => normalized.includes(hint));
+}
+
+export function isGtChannelName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  if (/\bguatemala\b|\bguate\b|\bgtq\b/.test(normalized)) {
+    return true;
+  }
+  return GT_CHANNEL_HINTS.some((hint) => normalized.includes(hint));
+}
+
+export function isEcChannelName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  if (/\becuador\b|\bquito\b/.test(normalized) || /эквадор|еквадор/.test(normalized)) {
+    return true;
+  }
+  return EC_CHANNEL_HINTS.some((hint) => normalized.includes(hint));
+}
+
 export function resolveWorkerCountryForChannel(
   channelName: string,
   savedCountry?: WorkerCountry,
@@ -168,6 +200,15 @@ export function resolveWorkerCountryForChannel(
   if (isJoChannelName(channelName)) {
     return "JO";
   }
+  if (isKeChannelName(channelName)) {
+    return "KE";
+  }
+  if (isGtChannelName(channelName)) {
+    return "GT";
+  }
+  if (isEcChannelName(channelName)) {
+    return "EC";
+  }
   return yamlCountry ?? defaultCountryForChannelName(channelName);
 }
 
@@ -186,6 +227,15 @@ export function defaultCountryForChannelName(name: string): WorkerCountry {
   }
   if (isJoChannelName(name)) {
     return "JO";
+  }
+  if (isKeChannelName(name)) {
+    return "KE";
+  }
+  if (isGtChannelName(name)) {
+    return "GT";
+  }
+  if (isEcChannelName(name)) {
+    return "EC";
   }
   const normalized = name.toLowerCase();
   if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {

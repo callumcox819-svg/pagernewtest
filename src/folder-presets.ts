@@ -1,9 +1,9 @@
 import type { PagerSavedReply } from "./pager-client.js";
 
-/** Countries whose saved-reply folders drive the early funnel. */
+/** Melbet-style folder markets only — NOT used for 1xBET KE/GT/EC engines. */
 export type FolderMarketCode = "MR" | "DJ" | "BF" | "CM" | "BJ" | "CR" | "SN";
 
-export type PresetLanguage = "fr" | "es";
+export type PresetLanguage = "fr" | "es" | "en";
 
 export type FolderMarket = {
   language: PresetLanguage;
@@ -21,7 +21,7 @@ export const FOLDER_MARKETS: Record<FolderMarketCode, FolderMarket> = {
   SN: { language: "fr", hints: ["сенегал", "senegal", "sénégal"], label: "Сенегал" },
 };
 
-/** Markets that have no legacy script engine and must use folder order. */
+/** Melbet folder-order markets — 1xBET KE/GT/EC use dedicated Pager script engines. */
 export const FOLDER_ONLY_COUNTRIES = ["MR", "BF", "BJ", "CR", "SN"] as const;
 
 export type FolderOnlyCountry = (typeof FOLDER_ONLY_COUNTRIES)[number];
@@ -43,7 +43,7 @@ export type PresetPlan =
   | { action: "hold"; reason: string };
 
 const AMOUNT_PAIR =
-  /(\d[\d\s.,]{0,12})\s*(?:mru|djf|xof|fcfa|cfa|crc|usd|eur|€)?\s*[-–—]\s*(\d[\d\s.,]{0,12})/gi;
+  /(\d[\d\s.,]{0,12})\s*(?:mru|djf|xof|fcfa|cfa|crc|kes|gtq|usd|eur|€)?\s*[-–—]\s*(\d[\d\s.,]{0,12})/gi;
 
 export function foldPresetText(value: string): string {
   return value
@@ -101,6 +101,11 @@ function isDecline(language: PresetLanguage, text: string): boolean {
       folded,
     );
   }
+  if (language === "en") {
+    return /^(no|nope|nah|later|not now|not interested|stop|leave me|dont|don't|pass)\b/.test(
+      folded,
+    );
+  }
   return /^(non|nan|pas interesse|pas d'argent|j'ai pas|je n'ai pas|plus tard|pas maintenant|arrete|stop|laisse)\b/.test(
     folded,
   );
@@ -117,14 +122,16 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
   }
   if (
     /\b(comment|pourquoi|combien|quel|quelle|cuando|como|por que|why|how)\b/.test(folded) &&
-    !/^(oui|ouais|ok|si|dale|claro)\b/.test(folded)
+    !/^(oui|ouais|ok|si|dale|claro|yes)\b/.test(folded)
   ) {
     return false;
   }
   const pattern =
     language === "es"
       ? /^(si|ok|okay|okey|dale|va|vale|listo|de acuerdo|claro|bueno|quiero|me interesa|vamos|perfecto|sale|simon|yes|ya)([\s,!.]+.*)?$/
-      : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|bien|super|parfait|vas-y|vas y|go|ca marche|je suis pret|pret|interesse|je veux|montre|montrez|explique|continue|suivant|merci|allons-y|d'acc)([\s,!.]+.*)?$/;
+      : language === "en"
+        ? /^(yes|yep|yeah|ok|okay|okey|sure|alright|ready|go|continue|interested|i want|show me|tell me|next|fine|good|perfect|lets go|let's go|i'm in|im in)([\s,!.]+.*)?$/
+        : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|bien|super|parfait|vas-y|vas y|go|ca marche|je suis pret|pret|interesse|je veux|montre|montrez|explique|continue|suivant|merci|allons-y|d'acc)([\s,!.]+.*)?$/;
   return pattern.test(folded);
 }
 

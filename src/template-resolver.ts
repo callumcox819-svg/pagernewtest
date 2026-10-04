@@ -7,9 +7,13 @@ import { loadLocalZmScript } from "./zm-local-scripts.js";
 import { loadLocalMgScript } from "./mg-local-scripts.js";
 import { loadLocalDjScript } from "./dj-local-scripts.js";
 import { loadLocalJoScript } from "./jo-local-scripts.js";
+import { loadLocalKeScript } from "./ke-local-scripts.js";
+import { loadLocalGtScript } from "./gt-local-scripts.js";
+import { loadLocalEcScript } from "./ec-local-scripts.js";
 import {
   CM_FOLDER_NAME_HINTS,
   CM_SCRIPT_EXCLUDE_SNIPPETS,
+  isFullCmRegistrationPreset,
   scriptSearchNeedles as cmScriptSearchNeedles,
   scriptSnippet as cmScriptSnippet,
 } from "./cm-script-engine.js";
@@ -47,6 +51,21 @@ import {
   scriptSearchNeedles as joScriptSearchNeedles,
   scriptSnippet as joScriptSnippet,
 } from "./jo-script-engine.js";
+import {
+  KE_FOLDER_NAME_HINTS,
+  scriptSearchNeedles as keScriptSearchNeedles,
+  scriptSnippet as keScriptSnippet,
+} from "./ke-script-engine.js";
+import {
+  GT_FOLDER_NAME_HINTS,
+  scriptSearchNeedles as gtScriptSearchNeedles,
+  scriptSnippet as gtScriptSnippet,
+} from "./gt-script-engine.js";
+import {
+  EC_FOLDER_NAME_HINTS,
+  scriptSearchNeedles as ecScriptSearchNeedles,
+  scriptSnippet as ecScriptSnippet,
+} from "./ec-script-engine.js";
 import type { PagerClient, PagerSavedReply } from "./pager-client.js";
 import {
   isDisabledOutboundScriptKey,
@@ -54,7 +73,7 @@ import {
 } from "./disabled-outbound-scripts.js";
 
 /** 1xBET bot geos that resolve scripts from Pager saved-reply folders. */
-export type ScriptResolveCountry = CountryCode | "RW" | "MG" | "DJ" | "JO";
+export type ScriptResolveCountry = CountryCode | "RW" | "MG" | "DJ" | "JO" | "KE" | "GT" | "EC";
 
 /** Never auto-pick Melbet folders on this 1xBET bot. */
 const FOREIGN_BRAND_BANK_BLOCKLIST = ["melbet", "мелбет", "mel bet", "мельбет"];
@@ -68,13 +87,19 @@ export function isForeignBrandTemplateBank(name?: string): boolean {
 }
 
 const replyCache = new Map<string, { loadedAt: number; replies: PagerSavedReply[] }>();
-const REPLY_CACHE_TTL_MS = 90_000;
+/** Short TTL so Pager saved-reply edits show up quickly without waiting for «Обновить». */
+const REPLY_CACHE_TTL_MS = 15_000;
 
 const ROLE_SNIPPETS: Record<CountryCode, Partial<Record<TemplateRole, string[]>>> = {
   CM: {
     intro: ["01_intro", "Tu es du Cameroun", "L'IA analyse", "Mon équipe cumule"],
     details: ["03_steps", "voici comment ça fonctionne", "02_age", "Quel âge"],
-    registration: ["05_registration", "CASH056", "06_link", "CMR056"],
+    registration: [
+      "05_registration",
+      "Je vais vous envoyer un lien d'inscription spécial",
+      "06_link",
+      "tinyurl.com/CMR056",
+    ],
     deposit: ["09_deposit", "bouton vert"],
     ask_id: ["08_game_id", "commence par +"],
     no_money: ["pas d'argent", "plus tard"],
@@ -209,6 +234,30 @@ export async function resolveDjTemplateFolderId(
   return resolveTemplateFolderId(client, DJ_FOLDER_NAME_HINTS, preferredId, liveBanks);
 }
 
+export async function resolveKeTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, KE_FOLDER_NAME_HINTS, preferredId, liveBanks);
+}
+
+export async function resolveGtTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, GT_FOLDER_NAME_HINTS, preferredId, liveBanks);
+}
+
+export async function resolveEcTemplateFolderId(
+  client: PagerClient,
+  preferredId?: string,
+  liveBanks?: Array<{ id: string; name: string }>,
+): Promise<string | undefined> {
+  return resolveTemplateFolderId(client, EC_FOLDER_NAME_HINTS, preferredId, liveBanks);
+}
+
 export async function resolveJoTemplateFolderId(
   client: PagerClient,
   preferredId?: string,
@@ -236,6 +285,12 @@ async function resolveFolderIdForCountry(
       return resolveDjTemplateFolderId(client, preferredId, liveBanks);
     case "JO":
       return resolveJoTemplateFolderId(client, preferredId, liveBanks);
+    case "KE":
+      return resolveKeTemplateFolderId(client, preferredId, liveBanks);
+    case "GT":
+      return resolveGtTemplateFolderId(client, preferredId, liveBanks);
+    case "EC":
+      return resolveEcTemplateFolderId(client, preferredId, liveBanks);
     default:
       return resolveCmTemplateFolderId(client, preferredId, liveBanks);
   }
@@ -258,6 +313,12 @@ function loadLocalScriptForCountry(
       return loadLocalDjScript(scriptKey);
     case "JO":
       return loadLocalJoScript(scriptKey);
+    case "KE":
+      return loadLocalKeScript(scriptKey);
+    case "GT":
+      return loadLocalGtScript(scriptKey, "es");
+    case "EC":
+      return loadLocalEcScript(scriptKey, "es");
     default:
       return loadLocalCmScript(scriptKey);
   }
@@ -292,9 +353,14 @@ export async function resolveScriptTextByKey(
   );
 
   if (folderId) {
-    const replies = await loadFolderReplies(client, folderId, options.refreshSavedReplies);
+    // Always re-fetch from Pager unless caller explicitly opts into cache.
+    const forceRefresh = options.refreshSavedReplies !== false;
+    const replies = await loadFolderReplies(client, folderId, forceRefresh);
     const exactName = findReplyByExactScriptName(replies, options.scriptKey, country);
-    if (exactName?.text?.trim()) {
+    if (
+      exactName?.text?.trim() &&
+      isScriptReplyAcceptable(exactName.text, options.scriptKey, country)
+    ) {
       console.log(
         `${country} script from saved replies key=${options.scriptKey} name=${exactName.name ?? "?"} folder=${folderId.slice(0, 8)}`,
       );
@@ -307,8 +373,11 @@ export async function resolveScriptTextByKey(
       );
       return finalizeScriptText(fromPager.text, options.scriptKey, country);
     }
-    // Exact/name match with weak body — still prefer Pager text over local for 1xBET.
-    if (fromPager?.text?.trim()) {
+    // Never accept weak short scraps for CM registration / link / chrome.
+    if (
+      fromPager?.text?.trim() &&
+      !(country === "CM" && ["05_registration", "06_link", "07_chrome"].includes(options.scriptKey))
+    ) {
       console.warn(
         `${country} script pager weak match accepted key=${options.scriptKey} chars=${fromPager.text.length}`,
       );
@@ -407,6 +476,9 @@ async function loadFolderReplies(
   const replies = await client.getSavedReplies(folderId);
   if (replies.length) {
     replyCache.set(folderId, { loadedAt: Date.now(), replies });
+  } else if (forceRefresh) {
+    // Don't keep serving a stale non-empty folder after Pager returns empty/failed sync.
+    replyCache.delete(folderId);
   }
   return replies;
 }
@@ -416,7 +488,7 @@ function finalizeScriptText(text: string, scriptKey: string, country: ScriptReso
     return stripCmRegistrationEmbeddedLink(text);
   }
   if (
-    (country === "ZM" || country === "RW" || country === "MG" || country === "DJ" || country === "JO") &&
+    (country === "ZM" || country === "RW" || country === "MG" || country === "DJ" || country === "JO" || country === "KE") &&
     (scriptKey === "04_registration" || scriptKey === "05_registration")
   ) {
     return stripZmRegistrationEmbeddedLink(text);
@@ -523,13 +595,21 @@ function hasExcludedSnippet(text: string, excludes: string[]): boolean {
 }
 
 function pickBestScriptReply(replies: PagerSavedReply[], scriptKey: string): PagerSavedReply {
-  if (scriptKey === "06_link") {
-    return [...replies].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0];
+  if (scriptKey === "06_link" || scriptKey === "05_link") {
+    // Prefer bare URL bubble, not a long instruction that happens to contain the link.
+    const urls = replies.filter((reply) => /^https?:\/\/\S+$/i.test((reply.text || "").trim()));
+    const pool = urls.length ? urls : replies;
+    return [...pool].sort((left, right) => (left.text?.length ?? 0) - (right.text?.length ?? 0))[0]!;
   }
-  if (scriptKey === "05_link" || scriptKey === "07_chrome") {
-    return [...replies].sort((left, right) => (left.text?.length ?? 0) - (right.text?.length ?? 0))[0];
+  if (scriptKey === "07_chrome") {
+    return [...replies].sort((left, right) => (left.text?.length ?? 0) - (right.text?.length ?? 0))[0]!;
   }
-  return [...replies].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0];
+  if (scriptKey === "05_registration") {
+    const full = replies.filter((reply) => isFullCmRegistrationPreset(reply.text || ""));
+    const pool = full.length ? full : replies;
+    return [...pool].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0]!;
+  }
+  return [...replies].sort((left, right) => (right.text?.length ?? 0) - (left.text?.length ?? 0))[0]!;
 }
 
 function scriptSnippetForCountry(country: ScriptResolveCountry): (key: string) => string {
@@ -550,6 +630,15 @@ function scriptSnippetForCountry(country: ScriptResolveCountry): (key: string) =
   }
   if (country === "JO") {
     return joScriptSnippet;
+  }
+  if (country === "KE") {
+    return keScriptSnippet;
+  }
+  if (country === "GT") {
+    return gtScriptSnippet;
+  }
+  if (country === "EC") {
+    return ecScriptSnippet;
   }
   return cmScriptSnippet;
 }
@@ -573,11 +662,20 @@ function scriptSearchNeedlesForCountry(country: ScriptResolveCountry): (key: str
   if (country === "JO") {
     return joScriptSearchNeedles;
   }
+  if (country === "KE") {
+    return keScriptSearchNeedles;
+  }
+  if (country === "GT") {
+    return gtScriptSearchNeedles;
+  }
+  if (country === "EC") {
+    return ecScriptSearchNeedles;
+  }
   return cmScriptSearchNeedles;
 }
 
 function scriptExcludesForCountry(country: ScriptResolveCountry, scriptKey: string): string[] {
-  if (country === "RW" || country === "MG" || country === "DJ" || country === "JO") {
+  if (country === "RW" || country === "MG" || country === "DJ" || country === "JO" || country === "KE" || country === "GT" || country === "EC") {
     return [];
   }
   if (country === "ZM") {
@@ -603,17 +701,23 @@ function isScriptReplyAcceptable(text: string, scriptKey: string, country: Scrip
   }
 
   if (scriptKey === "05_registration" && country === "CM") {
+    return isFullCmRegistrationPreset(text);
+  }
+
+  if (scriptKey === "06_link" && country === "CM") {
+    const trimmed = text.trim();
     return (
-      body.includes("cash056") ||
-      body.includes("je vous envoie le lien") ||
-      body.includes("télécharger l'application")
+      /^https?:\/\/\S+$/i.test(trimmed) ||
+      (/tinyurl\.com\/cmr056/i.test(trimmed) && trimmed.length < 80)
     );
   }
 
   if (scriptKey === "07_chrome" && country === "CM") {
     return (
       body.includes("google chrome") &&
-      (body.includes("copiez ce lien") || body.includes("collez-le"))
+      (body.includes("copiez ce lien") || body.includes("collez-le")) &&
+      !body.includes("cash056") &&
+      body.length < 160
     );
   }
 

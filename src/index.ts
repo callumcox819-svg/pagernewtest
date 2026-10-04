@@ -14,7 +14,7 @@ import { PagerClient } from "./pager-client.js";
 import { runPagerWorker, runPagerWorkerOnceForChat } from "./pager-worker.js";
 import { CATCH_UP_READ_ACTIVE_MS, isIncomingDirection } from "./conversation-reply.js";
 import { classifyProofFromImage } from "./proof-classifier.js";
-import { clearTemplateReplyCache } from "./template-resolver.js";
+import { clearTemplateReplyCache, isForeignBrandTemplateBank } from "./template-resolver.js";
 import { createStateStore, type ChannelRuntimeState, type ChatState, type StateStore } from "./state-store.js";
 import { createAppMetaStore, type AppMetaStore } from "./app-meta-store.js";
 import {
@@ -107,6 +107,9 @@ const COUNTRY_FOLDER_HINTS: Record<string, string[]> = {
   MG: ["мадаг", "madag", "madagascar", "mdg"],
   DJ: ["джибут", "djibouti", "djib", "djf", "bji"],
   JO: ["йордан", "jordan", "jod", "jor"],
+  KE: ["кени", "kenya", "kenia", "nairobi"],
+  GT: ["гватемал", "guatemala", "guate"],
+  EC: ["эквадор", "еквадор", "ecuador", "quito"],
 };
 
 const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>([
@@ -118,6 +121,9 @@ const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>([
   "MG",
   "DJ",
   "JO",
+  "KE",
+  "GT",
+  "EC",
 ]);
 
 const CHANNEL_COUNTRY_DISPLAY: Record<string, string> = {
@@ -129,6 +135,9 @@ const CHANNEL_COUNTRY_DISPLAY: Record<string, string> = {
   MG: "Мадагаскар",
   DJ: "Джибути",
   JO: "Йордания",
+  KE: "Кения",
+  GT: "Гватемала",
+  EC: "Эквадор",
 };
 
 function formatChannelIdSuffix(id: string): string {
@@ -516,13 +525,15 @@ async function handleCallback(
           ? "Чили · локальные скрипты ES/EN/FR"
           : country === "MG"
             ? "Мадагаскар · FR · MAD778"
-            :       country === "DJ"
+            : country === "DJ"
               ? "Джибути · сохранённые ответы"
               : country === "JO"
                 ? "Йордания · AR · JOR778"
-            : CHANNEL_COUNTRY_DISPLAY[country]
-              ? `${CHANNEL_COUNTRY_DISPLAY[country]} · сохранённые ответы`
-            : `Страна: ${country}`,
+                : country === "KE" || country === "GT" || country === "EC"
+                  ? `${CHANNEL_COUNTRY_DISPLAY[country]} · сохранённые ответы Pager`
+                  : CHANNEL_COUNTRY_DISPLAY[country]
+                    ? `${CHANNEL_COUNTRY_DISPLAY[country]} · сохранённые ответы`
+                    : `Страна: ${country}`,
     );
     await showChannelsMenu(chatId, nextState, messageId);
     return;
@@ -874,11 +885,15 @@ async function handleMessage(message: TelegramMessage) {
     effectiveChannel.country === "CL" ||
     effectiveChannel.country === "MG" ||
     effectiveChannel.country === "DJ" ||
+    effectiveChannel.country === "GT" ||
+    effectiveChannel.country === "EC" ||
     isFolderOnlyCountry(effectiveChannel.country)
       ? "CM"
       : effectiveChannel.country === "JO"
         ? "EG"
-      : effectiveChannel.country;
+        : effectiveChannel.country === "KE"
+          ? "ZM"
+          : effectiveChannel.country;
   const playbook = getPlaybook(config, playbookCountry);
   const channelForDecision = {
     ...effectiveChannel,
@@ -886,11 +901,15 @@ async function handleMessage(message: TelegramMessage) {
     effectiveChannel.country === "CL" ||
     effectiveChannel.country === "MG" ||
     effectiveChannel.country === "DJ" ||
+    effectiveChannel.country === "GT" ||
+    effectiveChannel.country === "EC" ||
     isFolderOnlyCountry(effectiveChannel.country)
       ? "CM"
       : effectiveChannel.country === "JO"
         ? "EG"
-      : effectiveChannel.country) as "ZM" | "CM" | "EG",
+        : effectiveChannel.country === "KE"
+          ? "ZM"
+          : effectiveChannel.country) as "ZM" | "CM" | "EG",
   };
 
   if (message.photo?.length) {
@@ -1345,7 +1364,9 @@ function mergeChannelsOnLogin(
 }
 
 function getLiveTemplateBanks(state: ChatState) {
-  return state.pagerAccount?.liveTemplateBanks ?? [];
+  return (state.pagerAccount?.liveTemplateBanks ?? []).filter(
+    (bank) => !isForeignBrandTemplateBank(bank.name),
+  );
 }
 
 function getChannelRuntime(

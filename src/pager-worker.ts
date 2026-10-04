@@ -266,6 +266,71 @@ import {
 } from "./cm-intent.js";
 import { isEgDepositTierChoice, isEgJoinOrRegistrationQuestion } from "./eg-intent.js";
 import { isZmRegistrationAccountQuestion, isReadyForRegistration as zmIsReadyForRegistration, isRegistrationHelpRequest as zmIsRegistrationHelpRequest, wantsRegistrationLink as zmWantsRegistrationLink, isZmDepositAmountChoice } from "./zm-intent.js";
+import {
+  classifyKeMessage,
+  collectOutgoingTexts as collectKeOutgoingTexts,
+  explainScriptsSentInHistory as keExplainScriptsSentInHistory,
+  KE_FOLDER_NAME_HINTS,
+  keAllowsMultiSend,
+  funnelStepFromScriptGaps as keFunnelStepFromScriptGaps,
+  inferStepFromThread as keInferStepFromThread,
+  keScriptSentInHistory,
+  keStatusMoveTarget,
+  limitKeScriptsForCustomerTurn,
+  regLinkSentInHistory as keRegLinkSentInHistory,
+  depositSentInHistory as keDepositSentInHistory,
+  resolveKeFunnelScripts,
+} from "./ke-script-engine.js";
+import {
+  isRegistrationHelpRequest as keIsRegistrationHelpRequest,
+  wantsRegistrationLink as keWantsRegistrationLink,
+  isKeDepositAmountChoice,
+} from "./ke-intent.js";
+import { loadLocalKeScript } from "./ke-local-scripts.js";
+import {
+  classifyGtMessage,
+  gtScriptSentInHistory,
+  collectOutgoingTexts as collectGtOutgoingTexts,
+  funnelStepFromScriptGaps as gtFunnelStepFromScriptGaps,
+  inferStepFromThread as gtInferStepFromThread,
+  regLinkSentInHistory as gtRegLinkSentInHistory,
+  gtStatusMoveAfterSend,
+  resolveGtFunnelScripts,
+  limitGtScriptsForCustomerTurn,
+  gtAllowsMultiSend,
+  GT_REG_SEND_KEYS,
+  GT_FOLDER_NAME_HINTS,
+  tierSentInHistory as gtTierSentInHistory,
+} from "./gt-script-engine.js";
+import {
+  isDepositTierChoice as isGtDepositTierChoice,
+  isGtRegistrationHelpRequest,
+  isRegistrationAccountQuestion as isGtRegistrationAccountQuestion,
+} from "./gt-intent.js";
+import { loadLocalGtScript } from "./gt-local-scripts.js";
+import { resolveGtReplyLanguage } from "./gt-language.js";
+import {
+  classifyEcMessage,
+  ecScriptSentInHistory,
+  collectOutgoingTexts as collectEcOutgoingTexts,
+  funnelStepFromScriptGaps as ecFunnelStepFromScriptGaps,
+  inferStepFromThread as ecInferStepFromThread,
+  regLinkSentInHistory as ecRegLinkSentInHistory,
+  ecStatusMoveAfterSend,
+  resolveEcFunnelScripts,
+  limitEcScriptsForCustomerTurn,
+  ecAllowsMultiSend,
+  EC_REG_SEND_KEYS,
+  EC_FOLDER_NAME_HINTS,
+  tierSentInHistory as ecTierSentInHistory,
+} from "./ec-script-engine.js";
+import {
+  isDepositTierChoice as isEcDepositTierChoice,
+  isEcRegistrationHelpRequest,
+  isRegistrationAccountQuestion as isEcRegistrationAccountQuestion,
+} from "./ec-intent.js";
+import { loadLocalEcScript } from "./ec-local-scripts.js";
+import { resolveEcReplyLanguage } from "./ec-language.js";
 import type { AppEnv } from "./env.js";
 import {
   isIncomingDirection,
@@ -327,6 +392,9 @@ import {
   resolveScriptTextByKey,
   resolveTemplateText,
   resolveZmTemplateFolderId,
+  resolveKeTemplateFolderId,
+  resolveGtTemplateFolderId,
+  resolveEcTemplateFolderId,
 } from "./template-resolver.js";
 import { filterDisabledScriptKeys } from "./disabled-outbound-scripts.js";
 import { customerAgreedAfterOfferTable } from "./funnel-common.js";
@@ -657,6 +725,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       item.runtime.country === "MG" ||
       item.runtime.country === "DJ" ||
       item.runtime.country === "JO" ||
+      item.runtime.country === "KE" ||
+      item.runtime.country === "GT" ||
+      item.runtime.country === "EC" ||
       isFolderOnlyCountry(item.runtime.country),
   )
     ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_UNREAD + INBOX_TOP_CM_FOLLOWUP)
@@ -973,7 +1044,11 @@ async function buildWorkQueue(
           runtime.runtime.country !== "CL" &&
           runtime.runtime.country !== "MG" &&
           runtime.runtime.country !== "DJ" &&
-          runtime.runtime.country !== "JO")
+          runtime.runtime.country !== "JO" &&
+          runtime.runtime.country !== "KE" &&
+          runtime.runtime.country !== "GT" &&
+          runtime.runtime.country !== "EC" &&
+          !isFolderOnlyCountry(runtime.runtime.country))
       ) {
         continue;
       }
@@ -1010,6 +1085,9 @@ async function buildWorkQueue(
       channel.runtime.country !== "MG" &&
       channel.runtime.country !== "DJ" &&
       channel.runtime.country !== "JO" &&
+      channel.runtime.country !== "KE" &&
+      channel.runtime.country !== "GT" &&
+      channel.runtime.country !== "EC" &&
       !isFolderOnlyCountry(channel.runtime.country)
     ) {
       continue;
@@ -1017,9 +1095,13 @@ async function buildWorkQueue(
     const isEg = channel.runtime.country === "EG";
     const isCm = channel.runtime.country === "CM";
     const isCl = channel.runtime.country === "CL";
-    const isZm = channel.runtime.country === "ZM";
+    const isZm = channel.runtime.country === "ZM" || channel.runtime.country === "KE";
     const isMg = channel.runtime.country === "MG";
-    const isDj = channel.runtime.country === "DJ" || isFolderOnlyCountry(channel.runtime.country);
+    const isDj =
+      channel.runtime.country === "DJ" ||
+      channel.runtime.country === "GT" ||
+      channel.runtime.country === "EC" ||
+      isFolderOnlyCountry(channel.runtime.country);
     const isJo = channel.runtime.country === "JO";
     const isRw = channel.runtime.country === "RW";
     const channelFolderIds = resolveChannelEnabledFolderIds(
@@ -1223,7 +1305,7 @@ async function buildWorkQueue(
       if (!shouldQueueCmConversation(conv) && !catchUpEligible) {
         continue;
       }
-    } else if (runtime?.runtime.country === "ZM") {
+    } else if (runtime?.runtime.country === "ZM" || runtime?.runtime.country === "KE") {
       if (!shouldQueueZmConversation(conv) && !catchUpEligible) {
         continue;
       }
@@ -1231,7 +1313,12 @@ async function buildWorkQueue(
       if (!shouldQueueMgConversation(conv) && !catchUpEligible) {
         continue;
       }
-    } else if (runtime?.runtime.country === "DJ" || isFolderOnlyCountry(runtime?.runtime.country ?? "")) {
+    } else if (
+      runtime?.runtime.country === "DJ" ||
+      runtime?.runtime.country === "GT" ||
+      runtime?.runtime.country === "EC" ||
+      isFolderOnlyCountry(runtime?.runtime.country ?? "")
+    ) {
       if (!shouldQueueDjConversation(conv) && !catchUpEligible) {
         continue;
       }
@@ -1794,6 +1881,15 @@ async function processConversation(
   }
   if (workerCountry === "JO") {
     return processJoConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (workerCountry === "KE") {
+    return processKeConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (workerCountry === "GT") {
+    return processGtConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (workerCountry === "EC") {
+    return processEcConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (isFolderOnlyCountry(workerCountry)) {
     return processFolderMarketConversation(deps, state, client, workingConv, runtime, channel);
@@ -2411,7 +2507,7 @@ async function processCmConversation(
       customerAgreedAfterOfferTable(latestCustomerText)) &&
     !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
   ) {
-    scriptKeys = ["05_registration", "06_link"];
+    scriptKeys = ["05_registration", "06_link", "07_chrome"];
   }
   scriptKeys = limitCmScriptsForCustomerTurn(scriptKeys, outgoingTexts);
   // After reg link: never re-send intro/age/steps/tier.
@@ -2427,14 +2523,20 @@ async function processCmConversation(
     ]);
     scriptKeys = scriptKeys.filter((key) => !early.has(key));
   }
+  // Link-trouble rescue (broken tinyurl) — not the normal first reg send with Chrome tip.
   const cmLinkHelpBatch =
-    scriptKeys.includes("07_chrome") || scriptKeys.includes("07_mtn_tip");
+    scriptKeys.includes("07_mtn_tip") ||
+    (scriptKeys.includes("07_chrome") &&
+      scriptKeys.includes("06_link") &&
+      !scriptKeys.includes("05_registration") &&
+      cmRegLinkSentInHistory(outgoingTexts));
   scriptKeys = filterDisabledScriptKeys(scriptKeys);
   scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support);
   // Keep Chrome/Wi‑Fi help intact — support filter must not strip the rescue bundle.
   if (cmLinkHelpBatch) {
     scriptKeys = cmLinkTroubleHelpScripts(true);
   }
+  const cmInitialRegBatch = scriptKeys.includes("05_registration");
   const waitingAgeTable =
     ageAsked &&
     !tierSentInHistory(outgoingTexts) &&
@@ -2680,8 +2782,8 @@ async function processCmConversation(
               outAfterLink,
               cmRegLinkSentInHistory,
             );
-            // Initial reg: stop after link. Link-trouble batch continues with Chrome/Wi‑Fi.
-            if (!cmLinkHelpBatch) {
+            // Initial reg preset continues with Chrome tip; only stop if Chrome is not queued.
+            if (!cmLinkHelpBatch && !cmInitialRegBatch && !scriptKeys.includes("07_chrome")) {
               break;
             }
           }
@@ -2748,8 +2850,13 @@ async function processCmConversation(
           outAfterLink,
           cmRegLinkSentInHistory,
         );
-        // After first-time link: stop. Link-trouble batch continues with Chrome/Wi‑Fi.
-        if (scriptKey === "06_link" && !cmLinkHelpBatch) {
+        // After link: keep going for Chrome tip on the initial reg preset.
+        if (
+          scriptKey === "06_link" &&
+          !cmLinkHelpBatch &&
+          !cmInitialRegBatch &&
+          !scriptKeys.includes("07_chrome")
+        ) {
           break;
         }
       }
@@ -2814,6 +2921,608 @@ async function processCmConversation(
 
   return true;
 }
+
+async function processGtConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
+  const convId = conv.id;
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  if (!messages.length) {
+    return false;
+  }
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const outgoingTexts = collectGtOutgoingTexts(messages);
+  await maybeEnsureInProgressAfterRegLink(
+    deps,
+    currentState,
+    client,
+    conv,
+    convId,
+    runtime.channelId,
+    "GT",
+    outgoingTexts,
+    gtRegLinkSentInHistory,
+  );
+
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, "CM");
+  if (!lastIncoming) {
+    return false;
+  }
+
+  const operatorUserIdEarly = await client.probeOperatorUserId();
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId: operatorUserIdEarly,
+      country: "CM",
+      catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
+    })
+  ) {
+    console.log(`Pager worker: skip ${convId.slice(0, 8)} CL — bot_spoke_last`);
+    return false;
+  }
+
+  const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+
+  if (
+    await tryHandleTrollCustomerToIgnore(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "CL",
+      latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      convState.funnelStep ?? 0,
+      Boolean(extractProofImageUrl(lastIncoming)),
+    )
+  ) {
+    return true;
+  }
+
+  const tierChosenRecently = recentCustomerTexts.some((line) => isGtDepositTierChoice(line));
+  const awaitingRegAfterTierChoice =
+    gtTierSentInHistory(outgoingTexts) &&
+    !gtRegLinkSentInHistory(outgoingTexts) &&
+    (isGtDepositTierChoice(latestCustomerText) ||
+      tierChosenRecently ||
+      isGtRegistrationAccountQuestion(latestCustomerText) ||
+      isGtRegistrationHelpRequest(latestCustomerText));
+  const gtNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !gtScriptSentInHistory(outgoingTexts, "01_intro") &&
+    Boolean(latestCustomerText);
+
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    currentState,
+  );
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: aiFolderEnabled,
+  });
+  const gtInProgressFollowUp =
+    inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
+    isCustomerClarificationMessage(latestCustomerText);
+
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      client,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      {
+        bypass: awaitingRegAfterTierChoice || gtNewLeadBypass || gtInProgressFollowUp,
+        operatorUserId: operatorUserIdEarly,
+        countryLabel: "GT",
+        country: "GT",
+        catchUpRead: isCatchUpReadActive(state.catchUpRead),
+      },
+    ))
+  ) {
+    return false;
+  }
+
+  const replyLang = resolveGtReplyLanguage(
+    latestCustomerText,
+    recentCustomerTexts,
+    convState.clReplyLanguage,
+  );
+
+  const playbook = getPlaybook(deps.config, channel.country);
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+    outgoingTexts,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
+  const threadStep = gtInferStepFromThread(messages);
+  const gapStep = gtFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
+  const messageReaction = resolveMessageReaction(lastIncoming);
+  const intent = classifyGtMessage(latestCustomerText, {
+    hasImage: Boolean(imageUrl),
+    funnelStep: effectiveStep,
+    messageReaction,
+  });
+
+  let scriptKeys = resolveGtFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
+  );
+  if (
+    !gtScriptSentInHistory(outgoingTexts, "01_intro") &&
+    latestCustomerText.trim().length > 0 &&
+    !scriptKeys.includes("01_intro")
+  ) {
+    scriptKeys = ["01_intro", "01_intro_2"];
+  }
+  if (
+    gtTierSentInHistory(outgoingTexts) &&
+    !gtRegLinkSentInHistory(outgoingTexts) &&
+    isGtDepositTierChoice(latestCustomerText) &&
+    !scriptKeys.some((key) => GT_REG_SEND_KEYS.has(key))
+  ) {
+    scriptKeys = ["05_registration", "06_link", "07_chrome"];
+  }
+  scriptKeys = limitGtScriptsForCustomerTurn(scriptKeys, outgoingTexts);
+  scriptKeys = filterDisabledScriptKeys(scriptKeys);
+  scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support);
+
+  if (!scriptKeys.length) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} CL — no script (lang=${replyLang}, step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+    );
+    return false;
+  }
+
+  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "GT", scriptKeys);
+  if (!scriptKeys.length) {
+    await maybeEnsureInProgressAfterRegLink(
+      deps,
+      currentState,
+      client,
+      conv,
+      convId,
+      runtime.channelId,
+      "GT",
+      outgoingTexts,
+      gtRegLinkSentInHistory,
+    );
+    console.log(`Pager worker: CL ${convId.slice(0, 8)} — scripts already in thread`);
+    return false;
+  }
+
+  await tryTakeConversationForProcessing(client, convId, "GT");
+
+  console.log(
+    `Pager worker: GT ${convId.slice(0, 8)} lang=${replyLang} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+  );
+
+  const allowMultiSend = gtAllowsMultiSend(scriptKeys);
+  let sentAny = false;
+  const sentScriptKeys: string[] = [];
+
+  for (const scriptKey of scriptKeys) {
+    const replyText =
+      (
+        await resolveScriptTextByKey(client, {
+          folderId: runtime.runtime.templateBankId,
+          liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+          scriptKey,
+          country: "GT",
+        })
+      )?.trim() || loadLocalGtScript(scriptKey, "es")?.trim();
+    if (!replyText) {
+      if (scriptKey === "01_intro_2") {
+        continue;
+      }
+      console.warn(`Pager worker: GT missing ${scriptKey} ${convId.slice(0, 8)}`);
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: (convState.sendFailures ?? 0) + 1,
+      });
+      return sentAny;
+    }
+    sentAny = true;
+    sentScriptKeys.push(scriptKey);
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      clReplyLanguage: replyLang,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
+    await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
+  }
+
+  if (sentAny) {
+    const outAfterSend = collectGtOutgoingTexts(await client.listMessages(convId, 1, 80));
+    if (gtStatusMoveAfterSend(sentScriptKeys) || gtRegLinkSentInHistory(outAfterSend)) {
+      await maybeEnsureInProgressAfterRegLink(
+        deps,
+        currentState,
+        client,
+        conv,
+        convId,
+        runtime.channelId,
+        "GT",
+        outAfterSend,
+        gtRegLinkSentInHistory,
+      );
+    }
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    clReplyLanguage: replyLang,
+    currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
+    funnelStep: Math.max(effectiveStep, sentScriptKeys.includes("09_deposit") ? 6 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1] ?? scriptKeys[scriptKeys.length - 1],
+    sendFailures: 0,
+  });
+
+  return true;
+}
+
+
+async function processEcConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
+  const convId = conv.id;
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  if (!messages.length) {
+    return false;
+  }
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const outgoingTexts = collectEcOutgoingTexts(messages);
+  await maybeEnsureInProgressAfterRegLink(
+    deps,
+    currentState,
+    client,
+    conv,
+    convId,
+    runtime.channelId,
+    "EC",
+    outgoingTexts,
+    ecRegLinkSentInHistory,
+  );
+
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, "CM");
+  if (!lastIncoming) {
+    return false;
+  }
+
+  const operatorUserIdEarly = await client.probeOperatorUserId();
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId: operatorUserIdEarly,
+      country: "CM",
+      catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
+    })
+  ) {
+    console.log(`Pager worker: skip ${convId.slice(0, 8)} CL — bot_spoke_last`);
+    return false;
+  }
+
+  const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+
+  if (
+    await tryHandleTrollCustomerToIgnore(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "CL",
+      latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      convState.funnelStep ?? 0,
+      Boolean(extractProofImageUrl(lastIncoming)),
+    )
+  ) {
+    return true;
+  }
+
+  const tierChosenRecently = recentCustomerTexts.some((line) => isEcDepositTierChoice(line));
+  const awaitingRegAfterTierChoice =
+    ecTierSentInHistory(outgoingTexts) &&
+    !ecRegLinkSentInHistory(outgoingTexts) &&
+    (isEcDepositTierChoice(latestCustomerText) ||
+      tierChosenRecently ||
+      isEcRegistrationAccountQuestion(latestCustomerText) ||
+      isEcRegistrationHelpRequest(latestCustomerText));
+  const ecNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !ecScriptSentInHistory(outgoingTexts, "01_intro") &&
+    Boolean(latestCustomerText);
+
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    currentState,
+  );
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: aiFolderEnabled,
+  });
+  const ecInProgressFollowUp =
+    inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
+    isCustomerClarificationMessage(latestCustomerText);
+
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      client,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      {
+        bypass: awaitingRegAfterTierChoice || ecNewLeadBypass || ecInProgressFollowUp,
+        operatorUserId: operatorUserIdEarly,
+        countryLabel: "EC",
+        country: "EC",
+        catchUpRead: isCatchUpReadActive(state.catchUpRead),
+      },
+    ))
+  ) {
+    return false;
+  }
+
+  const replyLang = resolveEcReplyLanguage(
+    latestCustomerText,
+    recentCustomerTexts,
+    convState.clReplyLanguage,
+  );
+
+  const playbook = getPlaybook(deps.config, channel.country);
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+    outgoingTexts,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
+  const threadStep = ecInferStepFromThread(messages);
+  const gapStep = ecFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
+  const messageReaction = resolveMessageReaction(lastIncoming);
+  const intent = classifyEcMessage(latestCustomerText, {
+    hasImage: Boolean(imageUrl),
+    funnelStep: effectiveStep,
+    messageReaction,
+  });
+
+  let scriptKeys = resolveEcFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
+  );
+  if (
+    !ecScriptSentInHistory(outgoingTexts, "01_intro") &&
+    latestCustomerText.trim().length > 0 &&
+    !scriptKeys.includes("01_intro")
+  ) {
+    scriptKeys = ["01_intro", "01_intro_2"];
+  }
+  if (
+    ecTierSentInHistory(outgoingTexts) &&
+    !ecRegLinkSentInHistory(outgoingTexts) &&
+    isEcDepositTierChoice(latestCustomerText) &&
+    !scriptKeys.some((key) => EC_REG_SEND_KEYS.has(key))
+  ) {
+    scriptKeys = ["05_registration", "06_link", "07_chrome"];
+  }
+  scriptKeys = limitEcScriptsForCustomerTurn(scriptKeys, outgoingTexts);
+  scriptKeys = filterDisabledScriptKeys(scriptKeys);
+  scriptKeys = filterScriptKeysForSupportAgent("CM", scriptKeys, latestCustomerText, support);
+
+  if (!scriptKeys.length) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} CL — no script (lang=${replyLang}, step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+    );
+    return false;
+  }
+
+  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "EC", scriptKeys);
+  if (!scriptKeys.length) {
+    await maybeEnsureInProgressAfterRegLink(
+      deps,
+      currentState,
+      client,
+      conv,
+      convId,
+      runtime.channelId,
+      "EC",
+      outgoingTexts,
+      ecRegLinkSentInHistory,
+    );
+    console.log(`Pager worker: CL ${convId.slice(0, 8)} — scripts already in thread`);
+    return false;
+  }
+
+  await tryTakeConversationForProcessing(client, convId, "EC");
+
+  console.log(
+    `Pager worker: EC ${convId.slice(0, 8)} lang=${replyLang} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+  );
+
+  const allowMultiSend = ecAllowsMultiSend(scriptKeys);
+  let sentAny = false;
+  const sentScriptKeys: string[] = [];
+
+  for (const scriptKey of scriptKeys) {
+    const replyText =
+      (
+        await resolveScriptTextByKey(client, {
+          folderId: runtime.runtime.templateBankId,
+          liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+          scriptKey,
+          country: "EC",
+        })
+      )?.trim() || loadLocalEcScript(scriptKey, "es")?.trim();
+    if (!replyText) {
+      if (scriptKey === "01_intro_2") {
+        continue;
+      }
+      console.warn(`Pager worker: EC missing ${scriptKey} ${convId.slice(0, 8)}`);
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: (convState.sendFailures ?? 0) + 1,
+      });
+      return sentAny;
+    }
+    sentAny = true;
+    sentScriptKeys.push(scriptKey);
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      clReplyLanguage: replyLang,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
+    await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
+  }
+
+  if (sentAny) {
+    const outAfterSend = collectEcOutgoingTexts(await client.listMessages(convId, 1, 80));
+    if (ecStatusMoveAfterSend(sentScriptKeys) || ecRegLinkSentInHistory(outAfterSend)) {
+      await maybeEnsureInProgressAfterRegLink(
+        deps,
+        currentState,
+        client,
+        conv,
+        convId,
+        runtime.channelId,
+        "EC",
+        outAfterSend,
+        ecRegLinkSentInHistory,
+      );
+    }
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    clReplyLanguage: replyLang,
+    currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
+    funnelStep: Math.max(effectiveStep, sentScriptKeys.includes("09_deposit") ? 6 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1] ?? scriptKeys[scriptKeys.length - 1],
+    sendFailures: 0,
+  });
+
+  return true;
+}
+
 
 async function processClConversation(
   deps: WorkerDeps,
@@ -3106,6 +3815,446 @@ async function processClConversation(
 
   return true;
 }
+
+async function processKeConversation(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  channel: ReturnType<typeof buildRuntimeChannelConfig>,
+): Promise<boolean> {
+  const convId = conv.id;
+
+  const currentState = (await deps.stateStore.get(state.chatId)) ?? state;
+  const convState = getConversationState(currentState, convId, runtime.channelId);
+  if ((convState.sendFailures ?? 0) >= MAX_SEND_FAILURES) {
+    return false;
+  }
+
+  const messages = await client.listMessages(convId, 1, 80);
+  if (!messages.length) {
+    return false;
+  }
+
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, "ZM");
+  if (!lastIncoming) {
+    return false;
+  }
+
+  const operatorUserIdEarly = await client.probeOperatorUserId();
+  if (
+    shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
+      operatorUserId: operatorUserIdEarly,
+      country: "ZM",
+      catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
+    })
+  ) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} KE — bot_spoke_last (awaiting_customer)`,
+    );
+    return false;
+  }
+
+  const outgoingTexts = collectKeOutgoingTexts(messages);
+  const latestCustomerText = (lastIncoming.text || "").trim();
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const keNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    !keScriptSentInHistory(outgoingTexts, "01_intro") &&
+    Boolean(latestCustomerText);
+
+  const operatorUserId = operatorUserIdEarly;
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    currentState,
+  );
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const support = buildSupportSnapshot("ZM", isInProgressStatusConversation(conv), outgoingTexts, {
+    operatorFolderEnabled: aiFolderEnabled,
+  });
+  const zmInProgressBypass =
+    inProgressFollowUpEligible(support, latestCustomerText, Boolean(imageUrl)) ||
+    isCustomerClarificationMessage(latestCustomerText);
+
+  if (
+    !(await ensureCustomerMessageEligible(
+      deps,
+      state,
+      client,
+      conv,
+      convId,
+      convState,
+      lastIncoming,
+      sorted,
+      {
+        bypass: keNewLeadBypass || zmInProgressBypass,
+        operatorUserId,
+        countryLabel: "KE",
+        country: "KE",
+        catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
+      },
+    ))
+  ) {
+    return false;
+  }
+
+  const threadStep = keInferStepFromThread(messages);
+  const gapStep = keFunnelStepFromScriptGaps(outgoingTexts, convState.funnelStep ?? 0);
+  const effectiveStep = Math.max(threadStep, gapStep, convState.funnelStep ?? 0);
+  const messageReaction = resolveMessageReaction(lastIncoming);
+  const playbook = getPlaybook(deps.config, channel.country);
+
+  const specialHandled = await trySendSpecialCustomerResponse(deps, {
+    state,
+    client,
+    conv,
+    runtime,
+    channel,
+    convState,
+    convId,
+    lastIncoming,
+    text: latestCustomerText,
+    playbook,
+    outgoingTexts,
+  });
+  if (specialHandled) {
+    return true;
+  }
+
+  if (imageUrl && (keDepositSentInHistory(outgoingTexts) || keRegLinkSentInHistory(outgoingTexts))) {
+    const imageHandled = await tryHandleCustomerImage(deps, {
+      state,
+      client,
+      conv,
+      runtime,
+      channel,
+      convState,
+      convId,
+      lastIncoming,
+      text: latestCustomerText,
+      imageUrl,
+      playbook,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      sortedMessages: sorted,
+      operatorUserId,
+    });
+    if (imageHandled) {
+      return true;
+    }
+  }
+
+  let proofKind: import("./config.js").ProofKind | undefined;
+  let proofText = "";
+  if (imageUrl) {
+    try {
+      const image = await client.downloadAttachment(imageUrl);
+      const classification = await classifyProofFromImage(playbook, image, {
+        caption: latestCustomerText,
+        ocrEnabled: deps.env.OCR_ENABLED,
+        ocrLang: ocrLangForCountry(channel.country),
+        country: "ZM",
+      });
+      proofKind = classification.proofKind;
+      proofText = classification.combinedText;
+    } catch (error) {
+      console.warn(`KE OCR failed ${convId.slice(0, 8)}:`, formatError(error));
+    }
+  }
+
+  const intent = classifyKeMessage(latestCustomerText, {
+    hasImage: Boolean(imageUrl),
+    funnelStep: effectiveStep,
+    messageReaction,
+  });
+
+  let scriptKeys = resolveKeFunnelScripts(
+    effectiveStep,
+    latestCustomerText,
+    intent,
+    outgoingTexts,
+    {
+      hasImage: Boolean(imageUrl),
+      messageReaction,
+      recentCustomerTexts,
+      proofKind,
+      proofText,
+    },
+  );
+  scriptKeys = limitKeScriptsForCustomerTurn(scriptKeys, outgoingTexts);
+  scriptKeys = filterDisabledScriptKeys(scriptKeys);
+  scriptKeys = filterScriptKeysForSupportAgent("ZM", scriptKeys, latestCustomerText, support);
+  const skipEarlySupportAi = supportAgentSkipsEarlyAi("ZM", scriptKeys, support);
+
+  if (
+    !scriptKeys.length &&
+    keExplainScriptsSentInHistory(outgoingTexts) &&
+    !keRegLinkSentInHistory(outgoingTexts) &&
+    (keWantsRegistrationLink(latestCustomerText) ||
+      keIsRegistrationHelpRequest(latestCustomerText) ||
+      customerAgreedAfterOfferTable(latestCustomerText) ||
+      isKeDepositAmountChoice(latestCustomerText))
+  ) {
+    scriptKeys = ["04_registration", "05_link"];
+  }
+
+  if (scriptKeys.length) {
+  scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "KE", scriptKeys);
+  if (!scriptKeys.length) {
+    console.log(`Pager worker: KE ${convId.slice(0, 8)} — scripts already in thread`);
+  } else {
+  await tryTakeConversationForProcessing(client, convId);
+
+  console.log(
+    `Pager worker: KE ${convId.slice(0, 8)} step=${effectiveStep} intent=${intent} scripts=[${scriptKeys.join(",")}]`,
+  );
+
+  const folderId = await resolveKeTemplateFolderId(
+    client,
+    runtime.runtime.templateBankId,
+    currentState.pagerAccount?.liveTemplateBanks,
+  );
+
+  let sentAny = false;
+  const sentScriptKeys: string[] = [];
+  const allowMultiSend = keAllowsMultiSend(scriptKeys);
+  const coveredOutgoing = [...outgoingTexts];
+  for (const scriptKey of scriptKeys) {
+    if (keScriptSentInHistory(coveredOutgoing, scriptKey)) {
+      console.log(
+        `Pager worker: KE ${convId.slice(0, 8)} skip duplicate key=${scriptKey} (already in thread/batch)`,
+      );
+      continue;
+    }
+    const replyText = await resolveScriptTextByKey(client, {
+      folderId,
+      liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+      scriptKey,
+      country: "KE",
+      refreshSavedReplies: true,
+    });
+    if (!replyText?.trim()) {
+      if (scriptKey === "04_registration") {
+        const fallbackText = loadLocalKeScript("04_registration")?.trim();
+        if (fallbackText) {
+          const sent = await client.sendMessageReliable(convId, fallbackText, {
+            channelId: runtime.channelId,
+            conv,
+          });
+          if (sent) {
+            sentAny = true;
+            sentScriptKeys.push(scriptKey);
+            coveredOutgoing.push(fallbackText);
+            await patchConversationState(deps.stateStore, state.chatId, convId, {
+              conversationId: convId,
+              channelId: runtime.channelId,
+              lastCustomerMessageId: lastIncoming.id,
+              lastCustomerMessageAt: lastIncoming.createdAt,
+              lastReplyAt: new Date().toISOString(),
+              lastReplyRole: scriptKey,
+              sendFailures: 0,
+            });
+            await sleep(500);
+          }
+        } else {
+          console.warn(`KE script missing ${convId.slice(0, 8)}: ${scriptKey}`);
+        }
+        continue;
+      }
+      if (scriptKey === "05_link") {
+        const fallbackLink =
+          loadLocalKeScript("05_link")?.trim() || "https://tinyurl.com/ZAM577";
+        const sent = await client.sendMessageReliable(convId, fallbackLink, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          sentScriptKeys.push(scriptKey);
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            conversationId: convId,
+            channelId: runtime.channelId,
+            lastCustomerMessageId: lastIncoming.id,
+            lastCustomerMessageAt: lastIncoming.createdAt,
+            lastReplyAt: new Date().toISOString(),
+            lastReplyRole: scriptKey,
+            sendFailures: 0,
+          });
+          await sleep(500);
+        }
+        continue;
+      }
+      console.warn(
+        `KE script missing folder=${folderId?.slice(0, 8) ?? "?"} key=${scriptKey} liveBanks=${currentState.pagerAccount?.liveTemplateBanks?.map((bank) => bank.name).join(",") ?? "none"}`,
+      );
+      continue;
+    }
+
+    const sent = await client.sendMessageReliable(convId, replyText.trim(), {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (!sent) {
+      const failures = (convState.sendFailures ?? 0) + 1;
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: failures,
+      });
+      console.error(`Pager worker: KE send failed ${convId.slice(0, 8)} key=${scriptKey}`);
+      return sentAny;
+    }
+    sentAny = true;
+    sentScriptKeys.push(scriptKey);
+    coveredOutgoing.push(replyText.trim());
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      lastCustomerMessageId: lastIncoming.id,
+      lastCustomerMessageAt: lastIncoming.createdAt,
+      lastReplyAt: new Date().toISOString(),
+      lastReplyRole: scriptKey,
+      sendFailures: 0,
+    });
+    if (scriptKey === "07_game_id") {
+      const attachment = resolveScriptAttachment("ZM", scriptKey);
+      if (attachment) {
+        try {
+          const imageSent = await client.sendImageReliable(
+            convId,
+            {
+              buffer: readFileSync(attachment.path),
+              mimeType: attachment.mimeType,
+              filename: attachment.filename,
+            },
+            {
+              channelId: runtime.channelId,
+              conv,
+            },
+          );
+          if (!imageSent) {
+            console.warn(`Pager worker: KE image miss ${convId.slice(0, 8)} key=${scriptKey}`);
+          }
+        } catch (error) {
+          console.warn(
+            `Pager worker: KE image failed ${convId.slice(0, 8)} key=${scriptKey}:`,
+            formatError(error),
+          );
+        }
+      }
+    }
+    await sleep(500);
+    if (!allowMultiSend) {
+      break;
+    }
+  }
+
+  if (!sentAny) {
+    return false;
+  }
+
+  const statusTarget = keStatusMoveTarget(sentScriptKeys);
+  if (statusTarget) {
+    const statusId = findZmStatusId(currentState, statusTarget);
+    const operatorId = await client.probeOperatorUserId();
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+    if (statusId && operatorId && currentStatusId !== statusId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(
+          `Pager worker: KE ${convId.slice(0, 8)} status -> ${statusTarget === "registration_complete" ? "registration" : "in progress registration"}`,
+        );
+        if (statusTarget === "in_progress_registration") {
+          await onMovedToInProgressRegistration(deps, state.chatId, convId, runtime.channelId);
+        }
+      } catch (error) {
+        console.warn(`Pager worker: status patch failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  }
+
+  await patchConversationState(deps.stateStore, state.chatId, convId, {
+    conversationId: convId,
+    channelId: runtime.channelId,
+    currentStage: effectiveStep >= 5 ? "registered" : effectiveStep >= 1 ? "engaged" : "new_lead",
+    funnelStep: Math.max(effectiveStep, scriptKeys.includes("06_deposit") ? 6 : effectiveStep),
+    lastCustomerMessageId: lastIncoming.id,
+    lastCustomerMessageAt: lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: sentScriptKeys[sentScriptKeys.length - 1] ?? scriptKeys[scriptKeys.length - 1],
+    sendFailures: 0,
+  });
+
+  if (
+    await trySupportAgentAfterScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "ZM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      sentScriptKeys,
+      support,
+      skipEarlySupportAi,
+    })
+  ) {
+    return true;
+  }
+
+  return true;
+  }
+  }
+
+  if (!skipEarlySupportAi) {
+    const aiHandledEarly = await tryRunAiAgentTurn(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      {
+        country: "ZM",
+        customerText: latestCustomerText,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: effectiveStep,
+        intent,
+        scriptKeys,
+        support,
+        aiFolderEnabled,
+      },
+    );
+    if (aiHandledEarly) {
+      return true;
+    }
+  }
+
+  if (
+    await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+      country: "ZM",
+      customerText: latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      funnelStep: effectiveStep,
+      intent,
+      scriptKeys,
+      support,
+    })
+  ) {
+    return true;
+  }
+  console.log(
+    `Pager worker: skip ${convId.slice(0, 8)} KE — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
+  );
+  return false;
+}
+
+/** MG: авто-воронка (локальные скрипты, как ZM). */
 
 async function processZmConversation(
   deps: WorkerDeps,
@@ -5667,8 +6816,9 @@ async function processFolderMarketConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const spanish = folderMarketLanguage(runtime.runtime.country) === "es";
-  const lastIncoming = findLatestIncomingFromThread(sorted, conv, spanish ? "ZM" : "CM");
+  const folderLang = folderMarketLanguage(runtime.runtime.country);
+  const englishLike = folderLang === "es" || folderLang === "en";
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, englishLike ? "ZM" : "CM");
   if (!lastIncoming) {
     return false;
   }
@@ -5676,7 +6826,7 @@ async function processFolderMarketConversation(
   if (
     shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
       operatorUserId,
-      country: spanish ? "ZM" : "CM",
+      country: englishLike ? "ZM" : "CM",
       catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
     })
   ) {
@@ -5703,7 +6853,7 @@ async function processFolderMarketConversation(
       {
         operatorUserId,
         countryLabel: runtime.runtime.country,
-        country: spanish ? "ZM" : "DJ",
+        country: englishLike ? "ZM" : "DJ",
         catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
       },
     ))
@@ -6518,7 +7668,7 @@ async function refreshLiveChannelsFromApi(
   }
 }
 
-type FunnelSendCountry = "CM" | "ZM" | "EG" | "RW" | "CL" | "MG" | "DJ" | "JO";
+type FunnelSendCountry = "CM" | "ZM" | "EG" | "RW" | "CL" | "MG" | "DJ" | "JO" | "KE" | "GT" | "EC";
 
 /** Re-read thread before send — avoids duplicate scripts when two cycles race (e.g. catch-up kick). */
 async function dropScriptKeysAlreadyInThread(
@@ -6713,11 +7863,11 @@ async function ensureCustomerMessageEligible(
     bypass?: boolean;
     operatorUserId?: string;
     countryLabel?: string;
-    country?: "ZM" | "CM" | "EG" | "CL" | "MG" | "DJ" | "JO";
+    country?: "ZM" | "CM" | "EG" | "CL" | "MG" | "DJ" | "JO" | "KE" | "GT" | "EC";
     catchUpRead?: boolean;
   },
 ): Promise<boolean> {
-  const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | "CL" | "MG" | "DJ" | "JO" | undefined);
+  const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | "CL" | "MG" | "DJ" | "JO" | "KE" | "GT" | "EC" | undefined);
   const catchUpRead = Boolean(options?.catchUpRead);
   const threadCountry: CountryCode | undefined =
     country === "CL" || country === "MG" || country === "DJ"
@@ -6883,6 +8033,9 @@ function pickLiveTemplateBank(
     MG: MG_FOLDER_NAME_HINTS,
     DJ: DJ_FOLDER_NAME_HINTS,
     JO: JO_FOLDER_NAME_HINTS,
+    KE: ["кени", "kenya", "kenia", "nairobi"],
+    GT: ["гватемал", "guatemala", "guate"],
+    EC: ["эквадор", "еквадор", "ecuador", "quito"],
     MR: ["мавритан", "mauritan"],
     BF: ["буркина", "burkina"],
     BJ: ["бенін", "бенин", "benin", "bénin"],
