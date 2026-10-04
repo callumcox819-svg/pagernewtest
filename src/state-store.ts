@@ -38,6 +38,8 @@ export type ChannelRuntimeState = {
   country: WorkerCountry;
   templateBank?: string;
   templateBankId?: string;
+  /** Per-channel Pager status folders the bot processes for this channel. */
+  statusFolders?: StatusFolderState[];
 };
 
 export type ConversationRuntimeState = {

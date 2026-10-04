@@ -381,8 +381,8 @@ function truncateLabel(value: string, max = 14): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
-/** Keep under Telegram's ~100 inline-button limit (4 buttons per channel row). */
-export const CHANNELS_PAGE_SIZE = 8;
+/** Keep under Telegram's ~100 inline-button limit (5 buttons per channel row). */
+export const CHANNELS_PAGE_SIZE = 7;
 
 export function buildChannelKeyboard(
   channels: Array<{
@@ -391,6 +391,7 @@ export function buildChannelKeyboard(
     country: string;
     enabled: boolean;
     templateBank?: string;
+    foldersEnabledCount?: number;
   }>,
   page = 0,
 ): ReplyMarkup {
@@ -402,8 +403,10 @@ export function buildChannelKeyboard(
   const rows: InlineKeyboardButton[][] = slice.map((channel, offset) => {
     const index = start + offset;
     const activeStyle: ButtonStyle | undefined = channel.enabled ? "success" : undefined;
+    const foldersCount = channel.foldersEnabledCount ?? 0;
+    const foldersLabel = foldersCount > 0 ? `${foldersCount} пап` : "Папки";
     return [
-      inlineBtn(truncateLabel(`${index + 1}. ${channel.name}`, 24), `channel_toggle|${channel.id}|${safePage}`, {
+      inlineBtn(truncateLabel(`${index + 1}. ${channel.name}`, 18), `channel_toggle|${channel.id}|${safePage}`, {
         emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
         style: activeStyle,
       }),
@@ -412,9 +415,13 @@ export function buildChannelKeyboard(
         emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
         style: activeStyle,
       }),
-      inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 10), `channel_bank|${channel.id}`, {
+      inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 8), `channel_bank|${channel.id}`, {
         emojiId: PREMIUM_EMOJI.openFolder,
         style: activeStyle,
+      }),
+      inlineBtn(truncateLabel(foldersLabel, 8), `ch_folders|${channel.id}`, {
+        emojiId: PREMIUM_EMOJI.folder,
+        style: foldersCount > 0 ? "success" : activeStyle,
       }),
     ];
   });
@@ -529,50 +536,96 @@ export const FOLDERS_PAGE_SIZE = 12;
 export function buildFoldersKeyboard(
   folders: Array<{ name: string; enabled: boolean }>,
   page = 0,
+  channelId?: string,
 ): ReplyMarkup {
   const totalPages = Math.max(1, Math.ceil(folders.length / FOLDERS_PAGE_SIZE));
   const safePage = Math.min(Math.max(page, 0), totalPages - 1);
   const start = safePage * FOLDERS_PAGE_SIZE;
   const slice = folders.slice(start, start + FOLDERS_PAGE_SIZE);
+  const scoped = Boolean(channelId);
 
   const rows = slice.map((folder, offset) => [
-    inlineBtn(truncateLabel(folder.name, 28), `folder_toggle:${start + offset}`, {
-      emojiId: folder.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
-      style: folder.enabled ? "success" : undefined,
-    }),
+    inlineBtn(
+      truncateLabel(folder.name, 28),
+      scoped
+        ? `ch_folder_toggle|${channelId}|${start + offset}`
+        : `folder_toggle:${start + offset}`,
+      {
+        emojiId: folder.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+        style: folder.enabled ? "success" : undefined,
+      },
+    ),
   ]);
 
   if (totalPages > 1) {
     const nav: InlineKeyboardButton[] = [];
     if (safePage > 0) {
-      nav.push(inlineBtn("◀", `folders:page:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }));
+      nav.push(
+        inlineBtn(
+          "◀",
+          scoped ? `ch_folders_page|${channelId}|${safePage - 1}` : `folders:page:${safePage - 1}`,
+          { emojiId: PREMIUM_EMOJI.left },
+        ),
+      );
     }
-    nav.push(inlineBtn(`${safePage + 1}/${totalPages}`, "folders:noop", { emojiId: PREMIUM_EMOJI.chart }));
+    nav.push(
+      inlineBtn(
+        `${safePage + 1}/${totalPages}`,
+        scoped ? `ch_folders_noop|${channelId}` : "folders:noop",
+        { emojiId: PREMIUM_EMOJI.chart },
+      ),
+    );
     if (safePage < totalPages - 1) {
-      nav.push(inlineBtn("▶", `folders:page:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }));
+      nav.push(
+        inlineBtn(
+          "▶",
+          scoped ? `ch_folders_page|${channelId}|${safePage + 1}` : `folders:page:${safePage + 1}`,
+          { emojiId: PREMIUM_EMOJI.right },
+        ),
+      );
     }
     rows.push(nav);
   }
 
   const allEnabled = folders.length > 0 && folders.every((folder) => folder.enabled);
   rows.push([
-    inlineBtn(allEnabled ? "Все вкл." : "Включить все", "folders:all_on", {
-      emojiId: PREMIUM_EMOJI.check,
-      style: "success",
-    }),
-    inlineBtn("Снять все", "folders:all_off", {
-      emojiId: PREMIUM_EMOJI.cross,
-      style: "danger",
-    }),
+    inlineBtn(
+      allEnabled ? "Все вкл." : "Включить все",
+      scoped ? `ch_folders_all|${channelId}|on` : "folders:all_on",
+      {
+        emojiId: PREMIUM_EMOJI.check,
+        style: "success",
+      },
+    ),
+    inlineBtn(
+      "Снять все",
+      scoped ? `ch_folders_all|${channelId}|off` : "folders:all_off",
+      {
+        emojiId: PREMIUM_EMOJI.cross,
+        style: "danger",
+      },
+    ),
   ]);
-  rows.push([inlineBtn("Обновить папки", "folders:refresh", { emojiId: PREMIUM_EMOJI.refresh })]);
   rows.push([
-    inlineBtn("Папки AI", "folders:ai", {
-      emojiId: PREMIUM_EMOJI.robot,
-      style: "primary",
+    inlineBtn(
+      "Обновить папки",
+      scoped ? `ch_folders_refresh|${channelId}` : "folders:refresh",
+      { emojiId: PREMIUM_EMOJI.refresh },
+    ),
+  ]);
+  if (!scoped) {
+    rows.push([
+      inlineBtn("Папки AI", "folders:ai", {
+        emojiId: PREMIUM_EMOJI.robot,
+        style: "primary",
+      }),
+    ]);
+  }
+  rows.push([
+    inlineBtn("Назад", scoped ? "channels:back" : "menu:main", {
+      emojiId: PREMIUM_EMOJI.back,
     }),
   ]);
-  rows.push([inlineBtn("Назад", "menu:main", { emojiId: PREMIUM_EMOJI.back })]);
 
   return { inline_keyboard: rows };
 }
@@ -648,8 +701,8 @@ export function buildMainMenuKeyboard(): ReplyMarkup {
         }),
       ],
       [
-        inlineBtn("Папки", "menu:folders", {
-          emojiId: PREMIUM_EMOJI.folder,
+        inlineBtn("Папки AI", "menu:ai_folders", {
+          emojiId: PREMIUM_EMOJI.robot,
         }),
         inlineBtn("Статус", "menu:status", {
           emojiId: PREMIUM_EMOJI.status,
@@ -756,7 +809,7 @@ export function buildOperatorReplyKeyboard(): ReplyMarkup {
         replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
       ],
       [
-        replyBtn("Папки", { emojiId: PREMIUM_EMOJI.folder }),
+        replyBtn("Папки AI", { emojiId: PREMIUM_EMOJI.robot }),
         replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
       ],
       [replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart, style: "primary" })],

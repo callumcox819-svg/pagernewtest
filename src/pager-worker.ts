@@ -408,6 +408,9 @@ import {
   NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
   getEnabledFolderIds,
+  getChannelEnabledFolderIds,
+  resolveChannelStatusFolders,
+  unionEnabledFolderIdsForChannels,
   hasEnabledStatusFolders,
   isNoStatusConversation,
   isZmInProgressRegistrationStatusName,
@@ -535,8 +538,16 @@ function accountHasEgOrCm(state: ChatState, config: BotConfig): boolean {
 
 function resolveEnabledFolderIds(
   state: ChatState,
-  _enabledChannels: Array<{ runtime: { country: string } }>,
+  enabledChannels: Array<{ channelId: string; runtime: { country: string } }>,
 ): Set<string> | null {
+  const channelIds = enabledChannels.map((item) => item.channelId);
+  if (channelIds.length) {
+    const perChannel = unionEnabledFolderIdsForChannels(state, channelIds);
+    if (perChannel && perChannel.size > 0) {
+      return perChannel;
+    }
+  }
+  // Fallback for operators who have not opened per-channel folders yet.
   return getEnabledFolderIds(state);
 }
 
@@ -624,22 +635,23 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const hasEgChannel = enabledChannels.some((item) => item.runtime.country === "EG");
   if (!enabledFolderIds || enabledFolderIds.size === 0) {
     console.warn(
-      `Pager worker: chat ${freshState.chatId} — no personal status folders enabled; skip poll (enable folders in «Папки»)`,
+      `Pager worker: chat ${freshState.chatId} — no status folders enabled; skip poll (set 📁 folders per channel in «Каналы»)`,
     );
     return;
   }
 
   if (enabledFolderIds) {
-    const folderNames = (
-      freshState.operatorSettings?.statusFolders ??
-      freshState.statusFolders ??
-      []
-    )
-      .filter((folder) => folder.enabled)
-      .map((folder) => folder.name)
+    const folderNames = enabledChannels
+      .map((item) => {
+        const names = resolveChannelStatusFolders(freshState, item.channelId)
+          .filter((folder) => folder.enabled)
+          .map((folder) => folder.name)
+          .join("+");
+        return `${item.channelName}:{${names || "—"}}`;
+      })
       .join(", ");
     console.log(
-      `Pager worker: chat ${freshState.chatId} — personal folders=[${folderNames}]`,
+      `Pager worker: chat ${freshState.chatId} — per-channel folders=[${folderNames}]`,
     );
   }
 
@@ -684,20 +696,23 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
   const folderScopedConversations = conversations.filter((conv) => {
     const channelId = conv.channelId || conv.channel?.id || "";
     const runtime = enabledChannels.find((item) => item.channelId === channelId);
-    const country = runtime?.runtime.country;
-    const folderIds = resolveChannelEnabledFolderIds(
-      enabledFolderIds,
-      country,
-      hasCmChannel,
-      hasEgChannel,
-    );
+    if (!runtime) {
+      return false;
+    }
+    const folderIds =
+      getChannelEnabledFolderIds(freshState, channelId) ??
+      resolveChannelEnabledFolderIds(
+        enabledFolderIds,
+        runtime.runtime.country,
+        hasCmChannel,
+        hasEgChannel,
+      );
     if (!folderIds || folderIds.size === 0) {
       return false;
     }
-    // «В процесі» — only if THIS operator enabled that folder (not via «Всі»).
+    // «В процесі» — only if THIS channel enabled that folder (not via «Всі»).
     if (isInProgressStatusConversation(conv)) {
-      const statusFolders =
-        freshState.operatorSettings?.statusFolders ?? freshState.statusFolders;
+      const statusFolders = resolveChannelStatusFolders(freshState, channelId);
       return isInProgressFollowUpFolderEnabled(conv, statusFolders);
     }
     return conversationAllowedInFolders(conv, folderIds);
@@ -1052,12 +1067,14 @@ async function buildWorkQueue(
       ) {
         continue;
       }
-      const folderIds = resolveChannelEnabledFolderIds(
-        enabledFolderIds,
-        runtime.runtime.country,
-        hasCmChannel,
-        hasEgChannel,
-      );
+      const folderIds =
+        getChannelEnabledFolderIds(chatState, channelId) ??
+        resolveChannelEnabledFolderIds(
+          enabledFolderIds,
+          runtime.runtime.country,
+          hasCmChannel,
+          hasEgChannel,
+        );
       if (folderIds && folderIds.size > 0 && !conversationAllowedInFolders(conv, folderIds)) {
         continue;
       }
@@ -1104,12 +1121,14 @@ async function buildWorkQueue(
       isFolderOnlyCountry(channel.runtime.country);
     const isJo = channel.runtime.country === "JO";
     const isRw = channel.runtime.country === "RW";
-    const channelFolderIds = resolveChannelEnabledFolderIds(
-      enabledFolderIds,
-      channel.runtime.country,
-      hasCmChannel,
-      hasEgChannel,
-    );
+    const channelFolderIds =
+      getChannelEnabledFolderIds(chatState, channel.channelId) ??
+      resolveChannelEnabledFolderIds(
+        enabledFolderIds,
+        channel.runtime.country,
+        hasCmChannel,
+        hasEgChannel,
+      );
     const maxPages = isEg ? INBOX_PAGES_EG : INBOX_PAGES_DEEP;
     const pageSize = isEg ? 100 : 100;
     const unreadCap = isEg ? INBOX_TOP_EG : INBOX_TOP_UNREAD;
@@ -1144,7 +1163,7 @@ async function buildWorkQueue(
           (isCm || isCl || isZm || isMg || isDj || isJo || isRw || isEg) &&
           isInProgressStatusConversation(conv)
         ) {
-          const statusFolders = chatState.operatorSettings?.statusFolders ?? chatState.statusFolders;
+          const statusFolders = resolveChannelStatusFolders(chatState, channel.channelId);
           if (!isInProgressFollowUpFolderEnabled(conv, statusFolders)) {
             continue;
           }
@@ -1369,16 +1388,17 @@ async function buildWorkQueue(
       );
       let addedForChannel = 0;
       for (const conv of inboxTop) {
-        if (!enabledFolderIds || enabledFolderIds.size === 0) {
+        const channelFolderIds =
+          getChannelEnabledFolderIds(chatState, channel.channelId) ?? enabledFolderIds;
+        if (!channelFolderIds || channelFolderIds.size === 0) {
           continue;
         }
         if (isInProgressStatusConversation(conv)) {
-          const statusFolders =
-            chatState.operatorSettings?.statusFolders ?? chatState.statusFolders;
+          const statusFolders = resolveChannelStatusFolders(chatState, channel.channelId);
           if (!isInProgressFollowUpFolderEnabled(conv, statusFolders)) {
             continue;
           }
-        } else if (!conversationAllowedInFolders(conv, enabledFolderIds)) {
+        } else if (!conversationAllowedInFolders(conv, channelFolderIds)) {
           continue;
         }
         if (selected.has(conv.id)) {
@@ -1750,12 +1770,14 @@ async function processConversation(
   }
   conversationsInFlight.add(conv.id);
   try {
-  const channelFolderIds = resolveChannelEnabledFolderIds(
-    enabledFolderIds,
-    runtime.runtime.country,
-    hasCmChannel,
-    hasEgChannel,
-  );
+  const channelFolderIds =
+    getChannelEnabledFolderIds(state, runtime.channelId) ??
+    resolveChannelEnabledFolderIds(
+      enabledFolderIds,
+      runtime.runtime.country,
+      hasCmChannel,
+      hasEgChannel,
+    );
 
   // List payloads often omit status — refresh before the folder gate.
   let workingConv = conv;
@@ -1780,7 +1802,7 @@ async function processConversation(
         isInProgressStatusConversation(workingConv) &&
         isInProgressFollowUpFolderEnabled(
           workingConv,
-          state.operatorSettings?.statusFolders ?? state.statusFolders,
+          resolveChannelStatusFolders(state, runtime.channelId),
         )
       )
     ) {
@@ -1804,8 +1826,8 @@ async function processConversation(
     return false;
   }
 
-  // Strict: in-progress follow-up only when THAT operator enabled the folder (not «Всі»).
-  const statusFolders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  // Strict: in-progress follow-up only when THAT channel enabled the folder (not «Всі»).
+  const statusFolders = resolveChannelStatusFolders(state, runtime.channelId);
   if (
     isInProgressStatusConversation(workingConv) &&
     !isInProgressFollowUpFolderEnabled(workingConv, statusFolders)

@@ -27,6 +27,7 @@ import {
   toggleStatusFolder,
   toggleAiStatusFolder,
   hasEnabledStatusFolders,
+  resolveChannelStatusFolders,
 } from "./status-folders.js";
 import {
   buildPagerAccountPatch,
@@ -539,6 +540,114 @@ async function handleCallback(
     return;
   }
 
+  if (kind === "ch_folders" && value) {
+    const channel = getChannelFromCallback(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+    await telegram.answerCallbackQuery(callbackId);
+    await showChannelFoldersMenu(chatId, state, channel.id, channel.name, messageId, 0);
+    return;
+  }
+
+  if (kind === "ch_folders_noop") {
+    await telegram.answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (kind === "ch_folders_page" && value && extra !== undefined) {
+    const channel = getChannelFromCallback(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+    await telegram.answerCallbackQuery(callbackId);
+    await showChannelFoldersMenu(
+      chatId,
+      state,
+      channel.id,
+      channel.name,
+      messageId,
+      Number(extra) || 0,
+    );
+    return;
+  }
+
+  if (kind === "ch_folders_all" && value && extra) {
+    const channel = getChannelFromCallback(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+    const folders = setAllStatusFolders(
+      resolveChannelStatusFolders(state, channel.id),
+      extra === "on",
+    );
+    const runtime = getChannelRuntime(state, channel.id, inferCountryFromName(channel.name));
+    const nextState =
+      (await stateStore.patch(chatId, {
+        channels: {
+          ...(state.channels ?? {}),
+          [channel.id]: {
+            ...runtime,
+            statusFolders: folders,
+          },
+        },
+      })) ?? state;
+    await telegram.answerCallbackQuery(
+      callbackId,
+      extra === "on" ? "Все папки канала включены" : "Папки канала сняты",
+    );
+    await showChannelFoldersMenu(chatId, nextState, channel.id, channel.name, messageId, 0);
+    return;
+  }
+
+  if (kind === "ch_folders_refresh" && value) {
+    const channel = getChannelFromCallback(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+    await telegram.answerCallbackQuery(callbackId, "Обновляю…");
+    const synced = await syncStatusFolders(chatId, state);
+    if (synced.error) {
+      await telegram.sendMessage(chatId, `⚠️ ${synced.error}`);
+    }
+    const nextState = synced.state ?? state;
+    await showChannelFoldersMenu(chatId, nextState, channel.id, channel.name, messageId, 0);
+    return;
+  }
+
+  if (kind === "ch_folder_toggle" && value && extra !== undefined) {
+    const channel = getChannelFromCallback(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+    const index = Number(extra);
+    const folders = toggleStatusFolder(resolveChannelStatusFolders(state, channel.id), index);
+    const runtime = getChannelRuntime(state, channel.id, inferCountryFromName(channel.name));
+    const nextState =
+      (await stateStore.patch(chatId, {
+        channels: {
+          ...(state.channels ?? {}),
+          [channel.id]: {
+            ...runtime,
+            statusFolders: folders,
+          },
+        },
+      })) ?? state;
+    const folder = folders[index];
+    await telegram.answerCallbackQuery(
+      callbackId,
+      folder?.enabled ? `✅ ${folder.name}` : `⬜ ${folder?.name ?? "папка"}`,
+    );
+    const page = Math.floor(index / FOLDERS_PAGE_SIZE);
+    await showChannelFoldersMenu(chatId, nextState, channel.id, channel.name, messageId, page);
+    return;
+  }
+
   if (kind === "channel_bank" && value) {
     const channel = getChannelFromCallback(state, value);
     if (!channel) {
@@ -721,7 +830,16 @@ async function handleCallback(
     }
 
     if (value === "folders") {
-      await showFoldersMenu(chatId, state);
+      await telegram.sendMessage(
+        chatId,
+        "Папки обработки теперь выбираются в «Каналы» — кнопка 📁 у каждого канала (рядом с шаблонами).",
+        buildMainMenuKeyboard(),
+      );
+      return;
+    }
+
+    if (value === "ai_folders") {
+      await showAiFoldersMenu(chatId, state);
       return;
     }
 
@@ -1204,6 +1322,7 @@ function getSelectableChannels(state: ChatState) {
     return liveChannels.map((channel) => {
       const fallbackCountry = inferCountryFromName(channel.name);
       const runtime = getChannelRuntime(state, channel.id, fallbackCountry);
+      const folders = resolveChannelStatusFolders(state, channel.id);
       return {
         id: channel.id,
         name: channel.name,
@@ -1211,12 +1330,14 @@ function getSelectableChannels(state: ChatState) {
         country: runtime.country,
         enabled: isChannelEnabled(state, channel.id, runtime.enabled),
         templateBank: runtime.templateBank ?? "Шаблоны",
+        foldersEnabledCount: folders.filter((folder) => folder.enabled).length,
       };
     });
   }
 
   return config.channels.map((channel) => {
     const runtime = getChannelRuntime(state, channel.id, channel.country);
+    const folders = resolveChannelStatusFolders(state, channel.id);
     return {
       id: channel.id,
       name: channel.name,
@@ -1224,6 +1345,7 @@ function getSelectableChannels(state: ChatState) {
       country: runtime.country,
       enabled: isChannelEnabled(state, channel.id, runtime.enabled),
       templateBank: runtime.templateBank ?? `${channel.country.toLowerCase()}-default`,
+      foldersEnabledCount: folders.filter((folder) => folder.enabled).length,
     };
   });
 }
@@ -1456,20 +1578,13 @@ async function showChannelsMenu(chatId: number, state: ChatState, messageId?: nu
   }
 }
 
-async function showFoldersMenu(
+async function ensureStatusFolderCatalog(
   chatId: number,
   state: ChatState,
-  messageId?: number,
-  page = 0,
-) {
+): Promise<{ state: ChatState; error?: string }> {
   let currentState = state;
   if (!currentState.pagerAccount?.cookies && !currentState.pagerAccount?.password) {
-    await telegram.sendMessage(
-      chatId,
-      "Сначала подключи Pager аккаунт через «Pager аккаунт».",
-      buildMainMenuKeyboard(),
-    );
-    return;
+    return { state: currentState, error: "Сначала подключи Pager аккаунт через «Pager аккаунт»." };
   }
 
   const savedFolders =
@@ -1479,15 +1594,12 @@ async function showFoldersMenu(
     const synced = await syncStatusFolders(chatId, currentState);
     currentState = synced.state ?? currentState;
     if (countApiStatusFolders(currentState.statusFolders) === 0) {
-      await telegram.sendMessage(
-        chatId,
-        [
-          "Не удалось загрузить папки из Pager.",
-          synced.error ? `Причина: ${synced.error}` : "Сессия обновляется автоматически, попробуй через минуту.",
-        ].join("\n"),
-        buildFoldersRetryKeyboard(),
-      );
-      return;
+      return {
+        state: currentState,
+        error: synced.error
+          ? `Не удалось загрузить папки из Pager: ${synced.error}`
+          : "Не удалось загрузить папки из Pager. Попробуй через минуту.",
+      };
     }
   } else {
     currentState = {
@@ -1507,23 +1619,87 @@ async function showFoldersMenu(
         operatorSettings: buildOperatorSettings(currentState, { statusFolders: folders }),
       })) ?? currentState;
   }
+  return { state: currentState };
+}
+
+async function showChannelFoldersMenu(
+  chatId: number,
+  state: ChatState,
+  channelId: string,
+  channelName: string,
+  messageId?: number,
+  page = 0,
+) {
+  const ensured = await ensureStatusFolderCatalog(chatId, state);
+  if (ensured.error) {
+    await telegram.sendMessage(chatId, ensured.error, buildFoldersRetryKeyboard());
+    return;
+  }
+  const currentState = ensured.state;
+  const runtime = getChannelRuntime(
+    currentState,
+    channelId,
+    inferCountryFromName(channelName),
+  );
+  // Persist a channel-local copy on first open so later global edits don't override.
+  if (!runtime.statusFolders?.length) {
+    const seeded = resolveChannelStatusFolders(currentState, channelId);
+    await stateStore.patch(chatId, {
+      channels: {
+        ...(currentState.channels ?? {}),
+        [channelId]: {
+          ...runtime,
+          statusFolders: seeded,
+        },
+      },
+    });
+  }
+
+  const latest = (await stateStore.get(chatId)) ?? currentState;
+  const folders = resolveChannelStatusFolders(latest, channelId);
   const enabled = folders.filter((folder) => folder.enabled).length;
-  const apiFolderCount = folders.filter(
-    (folder) => folder.id !== "" && folder.id !== "*",
-  ).length;
   const text = [
-    "Папки Pager — откуда бот берёт чаты:",
-    "Только твои галочки: чужие «в процесі» и другие папки бот не трогает.",
+    `Папки канала «${channelName}» — откуда бот берёт чаты:`,
+    "Галочки только для этого канала.",
     "✅ включена | ⬜ выключена",
     "",
-    `Включено папок: ${enabled} из ${folders.length}`,
-    apiFolderCount
-      ? `Загружено из Pager: ${apiFolderCount} папок`
-      : "⚠️ Список из Pager пуст — нажми «Обновить папки».",
-    "«Без статусу» — только новые чаты без статуса.",
-    "«Всі» — все чаты, кроме «в процесі» (её нужно включить отдельно).",
-    "Каналы включаются отдельно в меню «Каналы».",
-    "AI — отдельно в кнопке «Папки AI».",
+    `Включено: ${enabled} из ${folders.length}`,
+    "«Без статусу» — новые чаты без статуса.",
+    "«Всі» — все чаты, кроме «в процесі» (включи отдельно).",
+    "Шаблоны (сохранённые ответы) — соседняя кнопка в списке каналов.",
+  ].join("\n");
+  const keyboard = buildFoldersKeyboard(folders, page, channelId);
+
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function showFoldersMenu(
+  chatId: number,
+  state: ChatState,
+  messageId?: number,
+  page = 0,
+) {
+  // Legacy global menu kept for old keyboards / AI entry fallback.
+  const ensured = await ensureStatusFolderCatalog(chatId, state);
+  if (ensured.error) {
+    await telegram.sendMessage(chatId, ensured.error, buildFoldersRetryKeyboard());
+    return;
+  }
+  const currentState = ensured.state;
+  const folders = stripChannelNamesFromFolders(
+    currentState.statusFolders ?? [],
+    currentState.pagerAccount?.liveChannels,
+  );
+  const enabled = folders.filter((folder) => folder.enabled).length;
+  const text = [
+    "⚠️ Глобальные папки больше не используются для обработки.",
+    "Выбери папки у каждого канала в меню «Каналы» (кнопка 📁).",
+    "",
+    `Каталог Pager: ${enabled}/${folders.length} (старые галочки — только fallback).`,
   ].join("\n");
   const keyboard = buildFoldersKeyboard(folders, page);
 
@@ -1531,7 +1707,6 @@ async function showFoldersMenu(
     await telegram.sendMessage(chatId, text, keyboard);
     return;
   }
-
   await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
@@ -1556,7 +1731,7 @@ async function showAiFoldersMenu(
     "🤖 включено | ⬜ выключено",
     "",
     `AI включён в ${aiOn} из ${folders.length} папок`,
-    "Скрипты работают по настройкам в меню «Папки».",
+    "Скрипты (обработка) — папки у каждого канала в «Каналы».",
     "Если папку не трогали — AI повторяет настройку бота для неё.",
     "Пример: скрипты в «Без статусу», AI только в «В процесі реєстрації».",
   ].join("\n");
@@ -2051,7 +2226,16 @@ async function sendPagerAccountMenu(chatId: number, state: ChatState) {
   );
 }
 
-type MenuAction = "main" | "pager_account" | "channels" | "folders" | "status" | "stats" | "learn" | "reset";
+type MenuAction =
+  | "main"
+  | "pager_account"
+  | "channels"
+  | "folders"
+  | "ai_folders"
+  | "status"
+  | "stats"
+  | "learn"
+  | "reset";
 
 const XP_STATS_COUNTRIES: XPartnersCountry[] = ["CM", "EG", "ZM", "RW"];
 
@@ -2078,6 +2262,9 @@ function resolveMenuTextAction(text?: string): MenuAction | undefined {
   }
   if (/выбор\s*папок|^папки$|folders/.test(normalized)) {
     return "folders";
+  }
+  if (/папки\s*ai|ai\s*папки|ai\s*folders/.test(normalized)) {
+    return "ai_folders";
   }
   if (/^статус$|^status$|настройки|settings/.test(normalized)) {
     return "status";
@@ -2116,7 +2303,15 @@ async function dispatchMenuAction(
     return;
   }
   if (action === "folders") {
-    await showFoldersMenu(chatId, state);
+    await telegram.sendMessage(
+      chatId,
+      "Папки обработки теперь в «Каналы» — кнопка 📁 у каждого канала (рядом с шаблонами).",
+      buildMainMenuKeyboard(),
+    );
+    return;
+  }
+  if (action === "ai_folders") {
+    await showAiFoldersMenu(chatId, state);
     return;
   }
   if (action === "status") {

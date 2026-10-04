@@ -78,6 +78,71 @@ export function getEnabledFolderIds(state: {
   return new Set(folders.filter((folder) => folder.enabled).map((folder) => folder.id));
 }
 
+/** Catalog of folder ids/names from Pager (global), with per-channel enabled flags when set. */
+export function resolveChannelStatusFolders(
+  state: {
+    statusFolders?: StatusFolderState[];
+    operatorSettings?: { statusFolders?: StatusFolderState[] };
+    channels?: Record<string, { statusFolders?: StatusFolderState[] }>;
+  },
+  channelId: string,
+): StatusFolderState[] {
+  const catalog = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+  if (!catalog.length) {
+    return [];
+  }
+  const channelFolders = state.channels?.[channelId]?.statusFolders;
+  if (!channelFolders?.length) {
+    // Migration: until the operator sets per-channel folders, use global checkmarks.
+    return catalog.map((folder) => ({ ...folder }));
+  }
+  const enabledById = new Map(channelFolders.map((folder) => [folder.id, folder.enabled]));
+  const aiById = new Map(
+    channelFolders.map((folder) => [folder.id, folder.aiEnabled]),
+  );
+  return catalog.map((folder) => ({
+    ...folder,
+    enabled: enabledById.has(folder.id) ? Boolean(enabledById.get(folder.id)) : false,
+    aiEnabled: aiById.has(folder.id) ? aiById.get(folder.id) : folder.aiEnabled,
+  }));
+}
+
+export function getChannelEnabledFolderIds(
+  state: {
+    statusFolders?: StatusFolderState[];
+    operatorSettings?: { statusFolders?: StatusFolderState[] };
+    channels?: Record<string, { statusFolders?: StatusFolderState[] }>;
+  },
+  channelId: string,
+): Set<string> | null {
+  const folders = resolveChannelStatusFolders(state, channelId);
+  if (!folders.length) {
+    return null;
+  }
+  return new Set(folders.filter((folder) => folder.enabled).map((folder) => folder.id));
+}
+
+export function unionEnabledFolderIdsForChannels(
+  state: {
+    statusFolders?: StatusFolderState[];
+    operatorSettings?: { statusFolders?: StatusFolderState[] };
+    channels?: Record<string, { statusFolders?: StatusFolderState[] }>;
+  },
+  channelIds: string[],
+): Set<string> | null {
+  const union = new Set<string>();
+  for (const channelId of channelIds) {
+    const ids = getChannelEnabledFolderIds(state, channelId);
+    if (!ids) {
+      continue;
+    }
+    for (const id of ids) {
+      union.add(id);
+    }
+  }
+  return union.size ? union : null;
+}
+
 export function isAiFolderEnabled(folder: StatusFolderState): boolean {
   return folder.aiEnabled ?? folder.enabled;
 }
