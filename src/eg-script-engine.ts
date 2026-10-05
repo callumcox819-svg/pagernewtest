@@ -24,20 +24,44 @@ import {
 
 /** Matching pager-ai-bot EG snippets (no Telegram handoff auto-send). */
 export const EG_SCRIPT_SNIPPETS: Record<string, string> = {
-  "01_intro": "إنت من مصر",
-  "02_how_it_works": "تمام كده",
-  "04_registration": "هبعتلك اللينك دلوقتي",
-  "05_link": "tinyurl.com/Egypt0011",
+  "01_intro": "ذكاء اصطناعي",
+  "02_how_it_works": "جنيهًا مصريًا",
+  "03_egp_table": "جنيه مصري",
+  "04_registration": "eg011",
+  "05_link": "tinyurl.com/eg011",
   "06_deposit": "+ الأخضر",
   "07_game_id": "يبدأ ب 17",
   "08_app_or_browser": "ينفع الاتنين",
 };
 
 export const EG_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
-  "01_intro": ["إنت من مصر", "انت من مصر", "بساعد ناس يعملوا شوية دخل", "أهلا", "إنت من مصر؟"],
-  "02_how_it_works": ["تمام كده", "كود eg011", "365-550", "730-1100"],
-  "04_registration": ["هبعتلك اللينك دلوقتي", "جنيه مصري", "كود eg011"],
-  "05_link": ["tinyurl.com/egypt0011", "egypt0011"],
+  "01_intro": [
+    "إنت من مصر",
+    "انت من مصر",
+    "بساعد ناس يعملوا شوية دخل",
+    "ذكاء اصطناعي",
+    "نظام تحليلي",
+    "استراتيج",
+    "أهلا",
+  ],
+  "02_how_it_works": [
+    "تمام كده",
+    "80 جنيه",
+    "جنيهًا مصريًا",
+    "365-550",
+    "730-1100",
+    "كود eg011",
+  ],
+  "03_egp_table": ["جنيه مصري", "80", "700", "1200", "1700", "2600"],
+  "04_registration": [
+    "هبعتلك اللينك دلوقتي",
+    "جنيه مصري",
+    "كود eg011",
+    "eg011",
+    "google chrome",
+    "جوجل كروم",
+  ],
+  "05_link": ["tinyurl.com/eg011", "tinyurl.com/egypt0011", "egypt0011", "eg011"],
   "06_deposit": ["+ الأخضر", "ابعتلي سكرين لما يخلص"],
   "07_game_id": ["يبدأ ب 17", "رقم الحساب"],
   "08_app_or_browser": ["ينفع الاتنين", "تطبيق أو متصفح"],
@@ -45,8 +69,9 @@ export const EG_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
 
 export const EG_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
   "04_registration": ["تمام كده", "هتعمل إيداع"],
-  "05_link": ["هبعتلك اللينك", "تمام كده"],
-  "02_how_it_works": ["tinyurl.com", "هبعتلك اللينك"],
+  "05_link": ["هبعتلك اللينك", "تمام كده", "جوجل كروم", "google chrome"],
+  "02_how_it_works": ["tinyurl.com"],
+  "03_egp_table": ["tinyurl.com", "google chrome", "جوجل كروم"],
 };
 
 export const EG_FOLDER_NAME_HINTS = [
@@ -58,10 +83,147 @@ export const EG_FOLDER_NAME_HINTS = [
   "مصر",
 ];
 export const EG_REG_SEND_KEYS = new Set(["04_registration", "05_link"]);
-export const EG_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works"]);
+export const EG_EXPLAIN_SEND_KEYS = new Set(["02_how_it_works", "03_egp_table"]);
 
 export function scriptSnippet(key: string): string {
   return EG_SCRIPT_SNIPPETS[key] ?? "";
+}
+
+/** Pager EG folders often have nameless replies — classify by body / folder order. */
+export function isEgTierTableBody(text: string): boolean {
+  const body = (text || "").trim();
+  if (!body || body.length < 20) {
+    return false;
+  }
+  const pairs =
+    body.match(
+      /\d[\d\s.,]{0,10}\s*(?:جنيه(?:ًا)?\s*مصري(?:ًا)?|egp)?\s*[-–—→⬅←~]\s*\d/gi,
+    ) ?? [];
+  if (pairs.length >= 2) {
+    return true;
+  }
+  const egpLines = body
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => /\d/.test(line) && /جنيه|egp/i.test(line));
+  return egpLines.length >= 3;
+}
+
+export function classifyEgSavedReplyText(text: string): string | undefined {
+  const body = (text || "").trim();
+  if (!body) {
+    return undefined;
+  }
+  const lower = body.toLowerCase();
+
+  if (/^https?:\/\/\S+$/i.test(body)) {
+    return "05_link";
+  }
+  if (/tinyurl\.com\//i.test(lower) && body.length < 120 && !containsArabicScript(body)) {
+    return "05_link";
+  }
+  if (
+    /\+?\s*الأخضر/.test(body) ||
+    (lower.includes("إيداع") && (lower.includes("سكرين") || lower.includes("الأخضر")))
+  ) {
+    return "06_deposit";
+  }
+  if (/يبدأ ب\s*17/.test(body) || lower.includes("رقم الحساب")) {
+    return "07_game_id";
+  }
+  if (
+    lower.includes("ينفع الاتنين") ||
+    (lower.includes("تطبيق") && lower.includes("متصفح"))
+  ) {
+    return "08_app_or_browser";
+  }
+  if (isEgTierTableBody(body)) {
+    return "03_egp_table";
+  }
+
+  const hasNumberedSteps =
+    /^\s*1[\).\-\u060c]\s+/m.test(body) && /^\s*2[\).\-\u060c]\s+/m.test(body);
+  const looksLikeReg =
+    (lower.includes("eg011") || /كود\s*eg/i.test(lower)) &&
+    (lower.includes("chrome") ||
+      lower.includes("جوجل") ||
+      lower.includes("متصفح") ||
+      lower.includes("google") ||
+      lower.includes("تسجيل بنقرة"));
+  if (looksLikeReg && !hasNumberedSteps) {
+    return "04_registration";
+  }
+  if (lower.includes("هبعتلك اللينك") && !hasNumberedSteps) {
+    return "04_registration";
+  }
+  if (
+    hasNumberedSteps ||
+    lower.includes("تمام كده") ||
+    (/\b80\b/.test(lower) && lower.includes("جنيه") && !isEgTierTableBody(body))
+  ) {
+    return "02_how_it_works";
+  }
+  if (
+    lower.includes("ذكاء") ||
+    lower.includes("استراتيج") ||
+    lower.includes("تحليلي") ||
+    lower.includes("إنت من مصر") ||
+    lower.includes("انت من مصر") ||
+    (containsArabicScript(body) && body.length > 160)
+  ) {
+    return "01_intro";
+  }
+  return undefined;
+}
+
+/**
+ * Map nameless EG saved replies → script keys (content first, folder order as fallback).
+ * Does not import Melbet folder-preset logic — 1xBET-only classifier.
+ */
+export function buildEgScriptTextMap(
+  replies: Array<{ text?: string; order?: number; name?: string }>,
+): Map<string, string> {
+  const sorted = [...replies]
+    .filter((reply) => (reply.text || "").trim())
+    .sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
+  const map = new Map<string, string>();
+
+  for (const reply of sorted) {
+    const name = (reply.name ?? "").trim().toLowerCase().replace(/\.txt$/, "");
+    const text = (reply.text || "").trim();
+    if (name && EG_SCRIPT_SNIPPETS[name] && !map.has(name)) {
+      map.set(name, text);
+      continue;
+    }
+    const key = classifyEgSavedReplyText(text);
+    if (key && !map.has(key)) {
+      map.set(key, text);
+    }
+  }
+
+  const used = new Set(map.values());
+  const leftover = sorted.filter((reply) => !used.has((reply.text || "").trim()));
+  const orderKeys = ["01_intro", "02_how_it_works", "03_egp_table", "04_registration"] as const;
+  let slot = 0;
+  for (const reply of leftover) {
+    const text = (reply.text || "").trim();
+    if (/^https?:\/\/\S+$/i.test(text) || (/tinyurl\.com\//i.test(text) && text.length < 120)) {
+      if (!map.has("05_link")) {
+        map.set("05_link", text);
+      }
+      continue;
+    }
+    while (slot < orderKeys.length && map.has(orderKeys[slot]!)) {
+      slot += 1;
+    }
+    if (slot >= orderKeys.length) {
+      break;
+    }
+    map.set(orderKeys[slot]!, text);
+    slot += 1;
+  }
+
+  return map;
 }
 
 /** Reject Latin/ZM templates masquerading as Egypt saved replies. */
@@ -124,7 +286,12 @@ export function egScriptSentInHistory(outgoingTexts: string[], scriptKey: string
 }
 
 export function explainScriptsSentInHistory(outgoingTexts: string[]): boolean {
-  return egScriptSentInHistory(outgoingTexts, "02_how_it_works");
+  return (
+    egScriptSentInHistory(outgoingTexts, "02_how_it_works") ||
+    egScriptSentInHistory(outgoingTexts, "03_egp_table") ||
+    outgoingTexts.some((text) => classifyEgSavedReplyText(text) === "02_how_it_works") ||
+    outgoingTexts.some((text) => classifyEgSavedReplyText(text) === "03_egp_table")
+  );
 }
 
 export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
@@ -132,7 +299,12 @@ export function regLinkSentInHistory(outgoingTexts: string[]): boolean {
     return true;
   }
   const blob = outgoingTexts.join("\n").toLowerCase();
-  return blob.includes("tinyurl.com/egypt0011") || blob.includes("egypt0011");
+  return (
+    blob.includes("tinyurl.com/egypt0011") ||
+    blob.includes("tinyurl.com/eg011") ||
+    blob.includes("egypt0011") ||
+    /https?:\/\/\S*eg011/i.test(blob)
+  );
 }
 
 export function egRegistrationInstructionsSentInHistory(outgoingTexts: string[]): boolean {
@@ -144,42 +316,24 @@ export function egFullRegistrationInstructionsSentInHistory(outgoingTexts: strin
   return outgoingTexts.some((text) => isEgFullRegistrationBody(text));
 }
 
-/** 02_how_it_works mentions EG011 + جنيه — must not count as 04_registration sent. */
+/** 02_how_it_works / table — must not count as 04_registration sent. */
 export function isEgHowItWorksPitchBody(text: string): boolean {
-  const lower = (text || "").trim().toLowerCase();
-  if (!lower.includes("تمام كده")) {
-    return false;
-  }
-  return (
-    lower.includes("365-550") ||
-    lower.includes("730-1100") ||
-    lower.includes("هتعمل إيداع") ||
-    lower.includes("باخد 5%") ||
-    lower.includes("هتعمل حساب من اللينك")
-  );
+  const key = classifyEgSavedReplyText(text);
+  return key === "02_how_it_works" || key === "03_egp_table";
 }
 
 function isEgFullRegistrationBody(text: string): boolean {
   const body = (text || "").trim();
-  if (!body || !containsArabicScript(body) || body.length < 40) {
+  if (!body || body.length < 40) {
     return false;
   }
-  const lower = body.toLowerCase();
   if (/^https?:\/\/\S+$/i.test(body)) {
     return false;
   }
-  if (isEgHowItWorksPitchBody(body)) {
+  if (isEgHowItWorksPitchBody(body) || isEgTierTableBody(body)) {
     return false;
   }
-  return (
-    lower.includes("هبعتلك اللينك") ||
-    (lower.includes("انسخه") &&
-      (lower.includes("chrome") || lower.includes("google") || lower.includes("متصفح"))) ||
-    (lower.includes("egp") && lower.includes("جنيه مصري")) ||
-    (lower.includes("كود eg011") &&
-      lower.includes("خلصت") &&
-      (lower.includes("chrome") || lower.includes("متصفح") || lower.includes("إيميل")))
-  );
+  return classifyEgSavedReplyText(body) === "04_registration";
 }
 
 export function depositSentInHistory(outgoingTexts: string[]): boolean {
@@ -373,6 +527,11 @@ function egRegScripts(linkSent: boolean, force = false): string[] {
   return ["04_registration", "05_link"];
 }
 
+/** How-it-works + optional tier table (nameless Pager bubbles). Missing keys are skipped at send. */
+function egExplainScripts(): string[] {
+  return ["02_how_it_works", "03_egp_table"];
+}
+
 /**
  * Egypt funnel from pager-ai-bot:
  * 01_intro → 02_how_it_works → 04+05 reg → (08_app_or_browser) → 06_deposit → 07_game_id
@@ -404,7 +563,7 @@ export function resolveEgFunnelScripts(
       return ["01_intro"];
     }
     if (!howSent) {
-      return ["02_how_it_works"];
+      return egExplainScripts();
     }
     return registrationResendScriptKeys("EG", linkSent);
   }
@@ -414,7 +573,7 @@ export function resolveEgFunnelScripts(
       return ["01_intro"];
     }
     if (!howSent) {
-      return ["02_how_it_works"];
+      return egExplainScripts();
     }
     return egRegScripts(linkSent, true);
   }
@@ -498,7 +657,7 @@ export function resolveEgFunnelScripts(
       /استثمر|أريد أن|اريد ان|أنا مهتم|موضوع|شغل|ازاي|إزاي/i.test(t) ||
       t.length > 0
     ) {
-      return ["02_how_it_works"];
+      return egExplainScripts();
     }
     return resolveEgBacklogFallback(effectiveStep, out, intent, t, options);
   }
@@ -621,7 +780,7 @@ export function resolveEgBacklogFallback(
       intent === "ready" ||
       intent === "question"
     ) {
-      return ["02_how_it_works"];
+      return egExplainScripts();
     }
     return [];
   }
@@ -676,7 +835,8 @@ export function limitEgScriptsForCustomerTurn(
     scriptKeys.some((key) => EG_EXPLAIN_SEND_KEYS.has(key)) &&
     !explainScriptsSentInHistory(outgoingTexts)
   ) {
-    return ["02_how_it_works"];
+    const explain = scriptKeys.filter((key) => EG_EXPLAIN_SEND_KEYS.has(key));
+    return explain.length ? explain : ["02_how_it_works"];
   }
   if (scriptKeys.includes("08_app_or_browser")) {
     return ["08_app_or_browser"];

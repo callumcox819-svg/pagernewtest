@@ -23,6 +23,7 @@ import {
   scriptSearchNeedles as egScriptSearchNeedles,
   scriptSnippet as egScriptSnippet,
 } from "./eg-script-engine.js";
+import { buildNamelessScriptTextMap } from "./nameless-saved-replies.js";
 import {
   ZM_FOLDER_NAME_HINTS,
   ZM_SCRIPT_EXCLUDE_SNIPPETS,
@@ -355,6 +356,20 @@ export async function resolveScriptTextByKey(
     // Always re-fetch from Pager unless caller explicitly opts into cache.
     const forceRefresh = options.refreshSavedReplies !== false;
     const replies = await loadFolderReplies(client, folderId, forceRefresh);
+
+    // Pager presets have no titles — map by body / folder order for every 1xBET geo.
+    const namelessMap = buildNamelessScriptTextMap(replies, country, {
+      needlesForKey: (key) => scriptSearchNeedlesForCountry(country)(key),
+      excludesForKey: (key) => scriptExcludesForCountry(country, key),
+    });
+    const mapped = namelessMap.get(options.scriptKey)?.trim();
+    if (mapped) {
+      console.log(
+        `${country} script from nameless saved replies key=${options.scriptKey} chars=${mapped.length} folder=${folderId.slice(0, 8)} mapped=${[...namelessMap.keys()].join(",")}`,
+      );
+      return finalizeScriptText(mapped, options.scriptKey, country);
+    }
+
     const exactName = findReplyByExactScriptName(replies, options.scriptKey, country);
     if (
       exactName?.text?.trim() &&
@@ -472,6 +487,19 @@ async function loadFolderReplies(
     replyCache.delete(folderId);
   }
   return replies;
+}
+
+/** Force-refresh one folder into the in-memory cache (used by 3–4h sync). */
+export async function prefetchSavedReplyFolder(
+  client: PagerClient,
+  folderId: string,
+): Promise<number> {
+  const replies = await loadFolderReplies(client, folderId, true);
+  return replies.length;
+}
+
+export function getCachedSavedReplyFolderCount(): number {
+  return replyCache.size;
 }
 
 function finalizeScriptText(text: string, scriptKey: string, country: ScriptResolveCountry): string {

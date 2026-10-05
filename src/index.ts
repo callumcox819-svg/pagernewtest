@@ -15,6 +15,7 @@ import { runPagerWorker, runPagerWorkerOnceForChat } from "./pager-worker.js";
 import { CATCH_UP_READ_ACTIVE_MS, isIncomingDirection } from "./conversation-reply.js";
 import { classifyProofFromImage } from "./proof-classifier.js";
 import { clearTemplateReplyCache, isForeignBrandTemplateBank } from "./template-resolver.js";
+import { startSavedRepliesSyncLoop } from "./saved-replies-sync.js";
 import { createStateStore, type ChannelRuntimeState, type ChatState, type StateStore } from "./state-store.js";
 import { createAppMetaStore, type AppMetaStore } from "./app-meta-store.js";
 import {
@@ -174,6 +175,7 @@ async function main() {
   warmupXPartnersSession(env);
   startXPartnersKeepAlive(env);
   startXPartnersPostbackServer(env, appMetaStore);
+  startSavedRepliesSyncLoop({ env, config, stateStore });
 
   await Promise.all([
     runTelegramBot(),
