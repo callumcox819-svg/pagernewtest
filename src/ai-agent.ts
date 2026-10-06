@@ -205,7 +205,7 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
     !cmTierSentInHistory(ctx.recentOutgoingTexts ?? []) &&
     !cmRegLinkSentInHistory(ctx.recentOutgoingTexts ?? [])
   ) {
-    // After age question → table script only (incl. split «19» / «Ans»).
+    // After the age answer the money table goes out. No AI until that preset is in the thread.
     return false;
   }
   if (
@@ -218,6 +218,7 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
   if (
     ctx.country === "CM" &&
     !ctx.support?.active &&
+    !cmTierSentInHistory(ctx.recentOutgoingTexts ?? []) &&
     cmAgeGivenFromThread(ctx.customerText.trim(), ctx.recentCustomerTexts ?? []) &&
     cmAgeQuestionSent(ctx.recentOutgoingTexts ?? [])
   ) {

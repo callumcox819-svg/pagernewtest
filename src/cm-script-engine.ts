@@ -66,20 +66,14 @@ export const CM_SCRIPT_SNIPPETS: Record<string, string> = {
 export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "01_intro": ["tu es du cameroun", "bonjour ! tu es du cameroun", "bonjour !tu es du cameroun"],
   "01_intro_2": [
-    "l'ia analyse",
-    "l ia analyse",
-    "approche « insider »",
-    'approche "insider"',
-    "gagner ensemble",
+    "l'ia analyse de grands volumes",
+    "l ia analyse de grands volumes",
   ],
   "01_intro_3": [
     "mon équipe cumule",
     "mon equipe cumule",
     "ans d'expérience sur le terrain",
     "ans d'experience sur le terrain",
-    "pour moi, c'est un business",
-    "personnes sérieuses",
-    "gagner ensemble",
   ],
   "02_age": ["quel âge", "quel age", "age avez-vous", "age as-tu"],
   "03_steps": [
@@ -132,6 +126,10 @@ export const CM_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
 };
 
 export const CM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
+  // Script 1 and script 2 share the closing paragraph. Match each preset by its own opening.
+  "01_intro": ["mon équipe cumule", "mon equipe cumule"],
+  "01_intro_2": ["mon équipe cumule", "mon equipe cumule", "tu es du cameroun"],
+  "01_intro_3": ["tu es du cameroun", "je souhaite te montrer"],
   // Never pick the short promo-only scrap as the full registration preset.
   "05_registration": [
     "voici comment ça fonctionne",
@@ -153,8 +151,24 @@ export const CM_SCRIPT_EXCLUDE_SNIPPETS: Record<string, string[]> = {
     "cash056",
     "code promotionnel",
   ],
-  "03_steps": ["cash056", "cmr056", "camerun01", "google chrome"],
-  "04_tier": ["cash056", "cmr056", "camerun01", "google chrome"],
+  "03_steps": [
+    "cash056",
+    "cmr056",
+    "camerun01",
+    "google chrome",
+    "140 000 cfa",
+    "que vas-tu choisir",
+    "voici ce que tu peux obtenir",
+  ],
+  "04_tier": [
+    "cash056",
+    "cmr056",
+    "camerun01",
+    "google chrome",
+    "voici comment ça fonctionne",
+    "voici comment ca fonctionne",
+    "d'accord, voici comment",
+  ],
 };
 
 export const CM_FOLDER_NAME_HINTS = [
@@ -216,13 +230,13 @@ export function cmScriptSentInHistory(outgoingTexts: string[], scriptKey: string
   }
   if (scriptKey === "01_intro_3") {
     const blob = outgoingTexts.join("\n").toLowerCase();
-    if (blob.includes("gagner ensemble")) {
-      return true;
-    }
-    if (blob.includes("mon équipe") || blob.includes("mon equipe")) {
-      return blob.includes("pour moi, c'est un business") || blob.includes("personnes sérieuses");
-    }
-    return false;
+    // Script 1 ends with the same «gagner ensemble» paragraph. Only the team opening counts.
+    return (
+      blob.includes("mon équipe cumule") ||
+      blob.includes("mon equipe cumule") ||
+      blob.includes("ans d'expérience sur le terrain") ||
+      blob.includes("ans d'experience sur le terrain")
+    );
   }
   if (scriptKey === "04_tier") {
     return tierSentInHistory(outgoingTexts);
@@ -373,7 +387,8 @@ function canSendCmRegistration(
   if (cmRegistrationInstructionsSentInHistory(outgoingTexts) && !regLinkSentInHistory(outgoingTexts)) {
     return true;
   }
-  if (!tierSent) {
+  // Steps («comment ça fonctionne») or the legacy money table both count as the offer.
+  if (!tierSent && !stepsSentInHistory(outgoingTexts)) {
     return false;
   }
   if (tierChoice) {
@@ -542,10 +557,11 @@ export function funnelStepFromScriptGaps(
     return Math.min(step, 1);
   }
   step = Math.max(step, 2);
-  // Age → table (04_tier); 03_steps is optional / legacy only.
+  // Age answer → money table, then wait for a sum or an agreement.
   if (!tierSentInHistory(outgoingTexts)) {
     return Math.min(step, 2);
   }
+  step = Math.max(step, 4);
   if (!regLinkSentInHistory(outgoingTexts)) {
     return Math.min(step, 4);
   }
@@ -617,6 +633,9 @@ export function cmAgeGivenFromThread(
   if (cmAgeJustGiven(joined)) {
     return true;
   }
+  if (recent.some((line) => isAgeAnswer(line))) {
+    return true;
+  }
   const hasAgeNumber = recent.some(
     (line) => /^\d{1,2}$/.test(line) && isAgeAnswer(line),
   );
@@ -637,6 +656,20 @@ export function cmAgeGivenFromThread(
 export function cmAgeQuestionSent(outgoingTexts: string[]): boolean {
   return (
     cmScriptSentInHistory(outgoingTexts, "02_age") || ageQuestionSentInHistory(outgoingTexts)
+  );
+}
+
+/** After script 4: a deposit amount or a plain agreement, in any common wording. */
+export function cmCustomerAcceptedOffer(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t || isAgeAnswer(t)) {
+    return false;
+  }
+  return (
+    isDepositTierChoice(t) ||
+    customerAgreedAfterOfferTable(t) ||
+    isClientReadyPhrase(t) ||
+    isReadyForRegistration(t)
   );
 }
 
@@ -672,10 +705,11 @@ export function resolveCmFunnelScripts(
   const positive = cmPositiveAdvance(t, intent, effectiveStep);
 
   // ── Early funnel (strict one script / customer turn) ─────────────────
-  // 1) Any first reply to the ad → 01_intro
-  // 2) Positive reply → 01_intro_3
+  // 1) Any first reply → 01_intro only
+  // 2) Positive reply → 01_intro_3 only («Mon équipe»)
   // 3) Positive reply → 02_age
-  // 4) Age answer → 04_tier (table), then reg…
+  // 4) Age answer → 04_tier (money table), nothing else in that turn
+  // 5) Sum or agreement → registration + link
   if (!introSent) {
     if (t.length > 0 || options?.hasImage || options?.messageReaction) {
       return ["01_intro"];
@@ -698,11 +732,10 @@ export function resolveCmFunnelScripts(
     if (cmAgeGivenFromThread(t, recentTexts)) {
       return ["04_tier"];
     }
-    // Legacy chats where 03_steps already went out: continue on positive.
-    if (stepsSent && (positive || t.length > 0)) {
-      return ["04_tier"];
-    }
     return [];
+  }
+  if (!linkSent && cmCustomerAcceptedOffer(t)) {
+    return [...CM_REG_BUNDLE];
   }
 
   // Broken short-link / black screen / «envoie encore le lien» + screenshot →
@@ -824,6 +857,9 @@ export function resolveCmFunnelScripts(
       return [...CM_REG_BUNDLE];
     }
     if (isCmProfitFigure(t) && !linkSent) {
+      if (stepsSent) {
+        return [];
+      }
       if (!tierSent) {
         return ["04_tier"];
       }
@@ -835,7 +871,7 @@ export function resolveCmFunnelScripts(
     if (tierSent && tierChoice && !linkSent) {
       return [...CM_REG_BUNDLE];
     }
-    if (tierSent && !linkSent && t.length > 0 && t.length <= 24) {
+    if (tierSent && !stepsSent && !linkSent && t.length > 0 && t.length <= 24) {
       return ["04_tier"];
     }
     return [];

@@ -18,7 +18,7 @@ export type CmIntent =
   | "image_only";
 
 const FR_POSITIVE =
-  /\b(oui|ok|okay|okey|d'accord|dac|dacc|bien|super|parfait|merci|yes|yeah|yep)\b/i;
+  /\b(oui|ouais|ouaip|ouai|ok|okay|okey|d'accord|daccord|dac|dacc|bien|super|parfait|merci|yes|yeah|yep|vas-y|allez|go)\b/i;
 const FR_GREETING =
   /^(bonjour|bonsoir|salut|saluu+t|bjr|slt|hello|hi)([\s,!.]|$)/i;
 const FR_INTERESTED =
@@ -275,7 +275,10 @@ export function isClientReadyPhrase(text: string): boolean {
     /\b(je suis partant|je suis partante)\b/i.test(t) ||
     /\b(d'accord compris|d accord compris|compris|bien compris|ok compris)\b/i.test(t) ||
     /\bje veux commencer|je veux continuer\b/i.test(t) ||
-    /^(pret|prete|ok|oui|d'accord|d accord)\.?$/i.test(t)
+    /\b(ouais|ouaip|ouai|vas-y|vas y|allez|allons-y|allons y|on y va|c'est bon|c est bon|ca me va|je suis d'accord|je suis d accord|bien sur|carrement)\b/i.test(
+      t,
+    ) ||
+    /^(pret|prete|ok|oui|ouais|ouaip|d'accord|d accord|vas-y|allez|go|yes)\.?$/i.test(t)
   );
 }
 
@@ -555,10 +558,10 @@ export function isFunnelPositiveReaction(text: string, funnelStep: number): bool
   if (POSITIVE_EMOJI.test(t)) {
     return true;
   }
-  if (/^(oui|ok|okay|okey|yes|d'accord)\.?$/i.test(t)) {
+  if (/^(oui|ouais|ouaip|ok|okay|okey|yes|d'accord|vas-y|allez|go)\.?$/i.test(t)) {
     return true;
   }
-  if (/\boui\b/i.test(t) && t.split(/\s+/).length <= 12) {
+  if (/\b(oui|ouais|ouaip)\b/i.test(t) && t.split(/\s+/).length <= 12) {
     return true;
   }
   return false;

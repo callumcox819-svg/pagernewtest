@@ -129,6 +129,7 @@ import {
   cmLinkTroubleHelpScripts,
   cmAgeGivenFromThread,
   cmAgeQuestionSent,
+  cmCustomerAcceptedOffer,
   CM_REG_SEND_KEYS,
   tierSentInHistory,
   depositSentInHistory as cmDepositSentInHistory,
@@ -2505,28 +2506,24 @@ async function processCmConversation(
     outgoingTexts,
     { hasImage: Boolean(imageUrl), messageReaction, recentCustomerTexts },
   );
-  // Hard guarantee after age: never stall / never AI → money table.
-  // Handles split bubbles «19» + «Ans».
+  // After the age answer: money table only. Reg waits for a sum or an agreement.
   const ageAsked = cmAgeQuestionSent(outgoingTexts);
   const ageGiven = cmAgeGivenFromThread(latestCustomerText, recentCustomerTexts);
+  const tierSent = tierSentInHistory(outgoingTexts);
   if (
     ageAsked &&
-    !tierSentInHistory(outgoingTexts) &&
+    !tierSent &&
     !cmRegLinkSentInHistory(outgoingTexts) &&
     ageGiven
   ) {
     scriptKeys = ["04_tier"];
   }
   if (
-    tierSentInHistory(outgoingTexts) &&
+    tierSent &&
     !cmRegLinkSentInHistory(outgoingTexts) &&
-    (isDepositTierChoice(latestCustomerText) ||
-      /\b(1000|1500|2000|2500|3000|1\s?000|1\s?500|2\s?000|2\s?500|3\s?000)\b/i.test(
-        latestCustomerText,
-      ) ||
+    (cmCustomerAcceptedOffer(latestCustomerText) ||
       cmWantsRegistrationLink(latestCustomerText) ||
-      isCmRegistrationHelpRequest(latestCustomerText) ||
-      customerAgreedAfterOfferTable(latestCustomerText)) &&
+      isCmRegistrationHelpRequest(latestCustomerText)) &&
     !scriptKeys.some((key) => CM_REG_SEND_KEYS.has(key))
   ) {
     scriptKeys = ["05_registration", "06_link", "07_chrome"];
@@ -2561,7 +2558,7 @@ async function processCmConversation(
   const cmInitialRegBatch = scriptKeys.includes("05_registration");
   const waitingAgeTable =
     ageAsked &&
-    !tierSentInHistory(outgoingTexts) &&
+    !tierSent &&
     !cmRegLinkSentInHistory(outgoingTexts);
   const skipEarlySupportAi =
     supportAgentSkipsEarlyAi("CM", scriptKeys, support) ||
@@ -2570,16 +2567,16 @@ async function processCmConversation(
         key === "05_registration" ||
         key === "06_link" ||
         key === "04_tier" ||
+        key === "03_steps" ||
         key === "02_age" ||
         key === "01_intro" ||
         key === "01_intro_3",
     ) ||
     // Between «Quel âge» and the money table — scripts only, never AI chatter.
     waitingAgeTable ||
-    (tierSentInHistory(outgoingTexts) &&
+    (tierSent &&
       !cmRegLinkSentInHistory(outgoingTexts) &&
-      (isDepositTierChoice(latestCustomerText) ||
-        /\b(1000|1500|2000|2500|3000)\b/.test(latestCustomerText)));
+      cmCustomerAcceptedOffer(latestCustomerText));
 
   if (!skipEarlySupportAi) {
     const aiHandledEarly = await tryRunAiAgentTurn(
