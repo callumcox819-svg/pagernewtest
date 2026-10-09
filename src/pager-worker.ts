@@ -7961,7 +7961,7 @@ async function ensureCustomerMessageEligible(
       ? "CM"
       : country === "JO"
         ? "EG"
-        : country === "KE" || country === "RW" || country === "ZM"
+        : country === "KE" || country === "ZM"
           ? "ZM"
           : country === "CM" || country === "EG"
             ? country
