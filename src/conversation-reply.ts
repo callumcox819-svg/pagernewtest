@@ -316,6 +316,11 @@ export function shouldQueueMgConversation(conv: PagerConversation): boolean {
   return shouldQueueCmConversation(conv);
 }
 
+/** KE: same no-status queue bias as MG (English Kenya leads). */
+export function shouldQueueKeConversation(conv: PagerConversation): boolean {
+  return shouldQueueMgConversation(conv);
+}
+
 /** DJ: same queue bias as MG (French no-status leads). */
 export function shouldQueueDjConversation(conv: PagerConversation): boolean {
   return shouldQueueMgConversation(conv);

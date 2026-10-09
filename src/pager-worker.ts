@@ -43,6 +43,7 @@ import {
   isClChannelName,
   isDjChannelName,
   isJoChannelName,
+  isKeChannelName,
   isMgChannelName,
   resolveWorkerCountryForChannel,
   type WorkerCountry,
@@ -101,6 +102,7 @@ import {
   shouldQueueClConversation,
   shouldQueueZmConversation,
   shouldQueueMgConversation,
+  shouldQueueKeConversation,
   shouldQueueDjConversation,
   shouldQueueJoConversation,
   shouldSkipConversationBotSpokeLast,
@@ -273,6 +275,7 @@ import {
   explainScriptsSentInHistory as keExplainScriptsSentInHistory,
   KE_FOLDER_NAME_HINTS,
   keAllowsMultiSend,
+  keFunnelNeedsContinuation,
   funnelStepFromScriptGaps as keFunnelStepFromScriptGaps,
   inferStepFromThread as keInferStepFromThread,
   keScriptSentInHistory,
@@ -1113,7 +1116,8 @@ async function buildWorkQueue(
     const isEg = channel.runtime.country === "EG";
     const isCm = channel.runtime.country === "CM";
     const isCl = channel.runtime.country === "CL";
-    const isZm = channel.runtime.country === "ZM" || channel.runtime.country === "KE";
+    const isZm = channel.runtime.country === "ZM";
+    const isKe = channel.runtime.country === "KE";
     const isMg = channel.runtime.country === "MG";
     const isDj =
       channel.runtime.country === "DJ" ||
@@ -1161,7 +1165,7 @@ async function buildWorkQueue(
         }
 
           if (
-          (isCm || isCl || isZm || isMg || isDj || isJo || isRw || isEg) &&
+          (isCm || isCl || isZm || isKe || isMg || isDj || isJo || isRw || isEg) &&
           isInProgressStatusConversation(conv)
         ) {
           const statusFolders = resolveChannelStatusFolders(chatState, channel.channelId);
@@ -1198,7 +1202,7 @@ async function buildWorkQueue(
         if (
           catchUpActive &&
           catchUpAdded < CATCH_UP_INBOX_CAP &&
-          (isCm || isCl || isZm || isMg || isDj || isJo || isRw || isEg) &&
+          (isCm || isCl || isZm || isKe || isMg || isDj || isJo || isRw || isEg) &&
           shouldQueueCatchUpConversation(conv)
         ) {
           if (!selected.has(conv.id)) {
@@ -1223,6 +1227,9 @@ async function buildWorkQueue(
         if (isZm && !shouldQueueZmConversation(conv)) {
           continue;
         }
+        if (isKe && !shouldQueueKeConversation(conv)) {
+          continue;
+        }
         if (isMg && !shouldQueueMgConversation(conv)) {
           continue;
         }
@@ -1236,7 +1243,7 @@ async function buildWorkQueue(
           continue;
         }
         if (
-          (isCm || isCl || isZm || isMg || isDj || isJo || isEg || isRw) &&
+          (isCm || isCl || isZm || isKe || isMg || isDj || isJo || isEg || isRw) &&
           isOutgoingDirection(conv.lastMessageDirection) &&
           !hasUnreadMarkers(conv)
         ) {
@@ -1255,7 +1262,9 @@ async function buildWorkQueue(
             ? shouldQueueCmConversation(conv)
             : isZm
               ? shouldQueueZmConversation(conv)
-              : isMg
+              : isKe
+                ? shouldQueueKeConversation(conv)
+                : isMg
                 ? shouldQueueMgConversation(conv)
                 : isDj
                   ? shouldQueueDjConversation(conv)
@@ -1277,7 +1286,7 @@ async function buildWorkQueue(
           continue;
         }
 
-        if ((isCm || isCl || isZm || isMg || isDj || isJo || isRw) && followUpAdded < followUpCap) {
+        if ((isCm || isCl || isZm || isKe || isMg || isDj || isJo || isRw) && followUpAdded < followUpCap) {
           const lastAt = resolveLastMessageAt(conv);
           if (
             !isInProgressStatusConversation(conv) ||
@@ -1325,8 +1334,12 @@ async function buildWorkQueue(
       if (!shouldQueueCmConversation(conv) && !catchUpEligible) {
         continue;
       }
-    } else if (runtime?.runtime.country === "ZM" || runtime?.runtime.country === "KE") {
+    } else if (runtime?.runtime.country === "ZM") {
       if (!shouldQueueZmConversation(conv) && !catchUpEligible) {
+        continue;
+      }
+    } else if (runtime?.runtime.country === "KE") {
+      if (!shouldQueueKeConversation(conv) && !catchUpEligible) {
         continue;
       }
     } else if (runtime?.runtime.country === "MG") {
@@ -1906,6 +1919,12 @@ async function processConversation(
     return processJoConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (workerCountry === "KE") {
+    return processKeConversation(deps, state, client, workingConv, runtime, channel);
+  }
+  if (isKeChannelName(runtime.channelName)) {
+    console.warn(
+      `Pager worker: ${runtime.channelName} is a Kenya channel but country=${workerCountry} — routing KE`,
+    );
     return processKeConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (workerCountry === "GT") {
@@ -4086,7 +4105,7 @@ async function processKeConversation(
       }
       if (scriptKey === "05_link") {
         const fallbackLink =
-          loadLocalKeScript("05_link")?.trim() || "https://tinyurl.com/ZAM577";
+          loadLocalKeScript("05_link")?.trim() || "https://tinyurl.com/KEN577";
         const sent = await client.sendMessageReliable(convId, fallbackLink, {
           channelId: runtime.channelId,
           conv,
@@ -4094,6 +4113,29 @@ async function processKeConversation(
         if (sent) {
           sentAny = true;
           sentScriptKeys.push(scriptKey);
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            conversationId: convId,
+            channelId: runtime.channelId,
+            lastCustomerMessageId: lastIncoming.id,
+            lastCustomerMessageAt: lastIncoming.createdAt,
+            lastReplyAt: new Date().toISOString(),
+            lastReplyRole: scriptKey,
+            sendFailures: 0,
+          });
+          await sleep(500);
+        }
+        continue;
+      }
+      const localFallback = loadLocalKeScript(scriptKey)?.trim();
+      if (localFallback) {
+        const sent = await client.sendMessageReliable(convId, localFallback, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          sentAny = true;
+          sentScriptKeys.push(scriptKey);
+          coveredOutgoing.push(localFallback);
           await patchConversationState(deps.stateStore, state.chatId, convId, {
             conversationId: convId,
             channelId: runtime.channelId,
@@ -7738,6 +7780,18 @@ async function dropScriptKeysAlreadyInThread(
     const out = collectJoOutgoingTexts(messages);
     return unique.filter((key) => !joScriptSentInHistory(out, key));
   }
+  if (country === "KE") {
+    const out = collectKeOutgoingTexts(messages);
+    return unique.filter((key) => !keScriptSentInHistory(out, key));
+  }
+  if (country === "GT") {
+    const out = collectGtOutgoingTexts(messages);
+    return unique.filter((key) => !gtScriptSentInHistory(out, key));
+  }
+  if (country === "EC") {
+    const out = collectEcOutgoingTexts(messages);
+    return unique.filter((key) => !ecScriptSentInHistory(out, key));
+  }
   if (country === "RW") {
     const out = collectRwOutgoingTexts(messages);
     return unique.filter(
@@ -7903,11 +7957,15 @@ async function ensureCustomerMessageEligible(
   const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | "CL" | "MG" | "DJ" | "JO" | "KE" | "GT" | "EC" | undefined);
   const catchUpRead = Boolean(options?.catchUpRead);
   const threadCountry: CountryCode | undefined =
-    country === "CL" || country === "MG" || country === "DJ"
+    country === "CL" || country === "MG" || country === "DJ" || country === "GT" || country === "EC"
       ? "CM"
       : country === "JO"
         ? "EG"
-        : (country as CountryCode | undefined);
+        : country === "KE" || country === "RW" || country === "ZM"
+          ? "ZM"
+          : country === "CM" || country === "EG"
+            ? country
+            : undefined;
   const customerText = (lastIncoming.text || "").trim();
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
   const alreadyRepliedInState =
@@ -7935,24 +7993,31 @@ async function ensureCustomerMessageEligible(
   const unreadNeedsScriptPass =
     unreadOrIncoming && !botAlreadyReplied && actionable;
 
+  const proofImage = Boolean(extractProofImageUrl(lastIncoming));
   const funnelContinuation =
     actionable &&
     ((country === "EG" &&
       egFunnelNeedsContinuation(customerText, collectEgOutgoingTexts(sorted))) ||
       (country === "CM" &&
         cmFunnelNeedsContinuation(customerText, collectCmOutgoingTexts(sorted), {
-          hasImage: Boolean(extractProofImageUrl(lastIncoming)),
+          hasImage: proofImage,
         })) ||
       (country === "CL" &&
         clFunnelNeedsContinuation(customerText, collectClOutgoingTexts(sorted), {
-          hasImage: Boolean(extractProofImageUrl(lastIncoming)),
+          hasImage: proofImage,
         })) ||
       (country === "ZM" &&
         zmFunnelNeedsContinuation(customerText, collectZmOutgoingTexts(sorted), {
-          hasImage: Boolean(extractProofImageUrl(lastIncoming)),
+          hasImage: proofImage,
+        })) ||
+      (country === "KE" &&
+        keFunnelNeedsContinuation(customerText, collectKeOutgoingTexts(sorted), {
+          hasImage: proofImage,
         })));
 
-  if ((options?.bypass && actionable) || unreadNeedsScriptPass || funnelContinuation) {
+  // New-lead / in-progress bypass must not also require the 30m fresh window —
+  // that buried «Без статусу» KE/MG backlogs even when the operator enabled the folder.
+  if (options?.bypass || unreadNeedsScriptPass || funnelContinuation) {
     return true;
   }
 

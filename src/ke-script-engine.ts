@@ -41,12 +41,19 @@ export const KE_SCRIPT_SNIPPETS: Record<string, string> = {
 
 export const KE_SCRIPT_SEARCH_NEEDLES: Record<string, string[]> = {
   "01_intro": ["hi! i want to show you", "analytical systems", "artificial intelligence"],
-  "02_how_it_works": ["how it works:", "first deposit up from k30", "your own account"],
+  "02_how_it_works": [
+    "how it works:",
+    "first deposit up from",
+    "first deposit up from k30",
+    "first deposit up from 30 kes",
+    "your own account",
+  ],
   "03_kes_table": [
     "30 kes - 300 kes",
     "50 kes - 500 kes",
     "100 kes - 1000 kes",
     "200 kes - 2000 kes",
+    "30 zmw - 300 zmw",
     "ready to start today",
     "here's what you can get",
   ],
@@ -600,4 +607,28 @@ export function classifyKeMessage(
   },
 ): KeIntent {
   return classifyKeIntent(text, options);
+}
+
+/** Re-open mid-funnel KE chats when the customer gave a clear next-step signal. */
+export function keFunnelNeedsContinuation(
+  customerText: string,
+  outgoingTexts: string[],
+  options?: { hasImage?: boolean },
+): boolean {
+  const text = (customerText || "").trim();
+  if (!text && !options?.hasImage) {
+    return false;
+  }
+  const intent = classifyKeMessage(text, {
+    hasImage: options?.hasImage,
+    funnelStep: funnelStepFromScriptGaps(outgoingTexts, 0),
+  });
+  const keys = resolveKeFunnelScripts(
+    funnelStepFromScriptGaps(outgoingTexts, 0),
+    text,
+    intent,
+    outgoingTexts,
+    { hasImage: options?.hasImage },
+  );
+  return keys.length > 0;
 }
