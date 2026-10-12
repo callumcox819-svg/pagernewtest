@@ -197,6 +197,7 @@ import {
   inferStepFromThread as mgInferStepFromThread,
   limitMgScriptsForCustomerTurn,
   mgAllowsMultiSend,
+  mgFunnelNeedsContinuation,
   MG_FOLDER_NAME_HINTS,
   mgScriptSentInHistory,
   mgStatusMoveTarget,
@@ -3902,8 +3903,11 @@ async function processKeConversation(
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
   const keNewLeadBypass =
     isNoStatusConversation(conv) &&
-    !keScriptSentInHistory(outgoingTexts, "01_intro") &&
-    Boolean(latestCustomerText);
+    Boolean(latestCustomerText) &&
+    (!keScriptSentInHistory(outgoingTexts, "01_intro") ||
+      // Any unread/incoming no-status KE lead with customer text must stay processable.
+      hasUnreadMarkers(conv) ||
+      isIncomingDirection(conv.lastMessageDirection));
 
   const operatorUserId = operatorUserIdEarly;
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
@@ -4806,6 +4810,14 @@ async function processMgConversation(
     isNoStatusConversation(conv) &&
     !mgScriptSentInHistory(outgoingTexts, "01_intro") &&
     Boolean(latestCustomerText);
+  // After the MGA table: «le premier» / «6000MGA» must not die behind the 30m fresh gate.
+  const mgTableReplyBypass =
+    Boolean(latestCustomerText) &&
+    mgExplainScriptsSentInHistory(outgoingTexts) &&
+    !mgRegLinkSentInHistory(outgoingTexts) &&
+    (isMgOfferTableChoice(latestCustomerText) ||
+      isMgDepositAmountChoice(latestCustomerText) ||
+      customerAgreedAfterOfferTable(latestCustomerText));
 
   const operatorUserId = operatorUserIdEarly;
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
@@ -4831,7 +4843,7 @@ async function processMgConversation(
       lastIncoming,
       sorted,
       {
-        bypass: mgNewLeadBypass || mgInProgressBypass,
+        bypass: mgNewLeadBypass || mgTableReplyBypass || mgInProgressBypass,
         operatorUserId,
         countryLabel: "MG",
         country: "MG",
@@ -8012,6 +8024,10 @@ async function ensureCustomerMessageEligible(
         })) ||
       (country === "KE" &&
         keFunnelNeedsContinuation(customerText, collectKeOutgoingTexts(sorted), {
+          hasImage: proofImage,
+        })) ||
+      (country === "MG" &&
+        mgFunnelNeedsContinuation(customerText, collectMgOutgoingTexts(sorted), {
           hasImage: proofImage,
         })));
 

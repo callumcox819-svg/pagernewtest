@@ -89,13 +89,22 @@ export function scriptSearchNeedles(key: string): string[] {
   return MG_SCRIPT_SEARCH_NEEDLES[key] ?? [scriptSnippet(key)].filter(Boolean);
 }
 
+function foldMgNeedle(text: string): string {
+  return (text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function scriptSentInHistory(outgoingTexts: string[], snippet: string): boolean {
-  const needle = snippet.trim().toLowerCase();
+  const needle = foldMgNeedle(snippet);
   if (!needle) {
     return false;
   }
   return outgoingTexts.some((text) => {
-    const body = text.toLowerCase();
+    const body = foldMgNeedle(text);
     return body.includes(needle) || needle.includes(body.slice(0, 80));
   });
 }
@@ -570,6 +579,30 @@ export function classifyMgMessage(
   },
 ): MgIntent {
   return classifyMgIntent(text, options);
+}
+
+/** Re-open mid-funnel MG chats when the customer answered the MGA table / next step. */
+export function mgFunnelNeedsContinuation(
+  customerText: string,
+  outgoingTexts: string[],
+  options?: { hasImage?: boolean },
+): boolean {
+  const text = (customerText || "").trim();
+  if (!text && !options?.hasImage) {
+    return false;
+  }
+  const intent = classifyMgMessage(text, {
+    hasImage: options?.hasImage,
+    funnelStep: funnelStepFromScriptGaps(outgoingTexts, 0),
+  });
+  const keys = resolveMgFunnelScripts(
+    funnelStepFromScriptGaps(outgoingTexts, 0),
+    text,
+    intent,
+    outgoingTexts,
+    { hasImage: options?.hasImage },
+  );
+  return keys.length > 0;
 }
 
 export { MG_REG_BUNDLE };

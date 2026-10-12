@@ -27,7 +27,9 @@ export const MG_CUSTOM_DEPOSIT_RULES: CustomDepositRules = {
   min: 500,
   max: 500_000,
   bareMin: 800,
-  currencyPattern: /(?:\b(?:mga|ariary)\b)|(?:\d\s*(?:mga|ariary|ar)\b)|(?:^|[^a-z])ar(?:[^a-z]|$)/i,
+  // Glued «6000mga» has no word-boundary between digit and letter.
+  currencyPattern:
+    /(?:\b(?:mga|ariary)\b)|(?:\d\s*(?:mga|ariary|ar)\b)|(?:\d(?:mga|ariary|ar)\b)|(?:^|[^a-z])ar(?:[^a-z]|$)/i,
   depositIntentPattern:
     /\b(deposit|depot|start with|begin with|invest|put in|with|can i start|want to start|ready to start|mets|mettre|investir|avec|pour|commencer|prefere|choisir|maintenant)\b/i,
 };
@@ -193,8 +195,9 @@ export function isMgOfferTableChoice(text: string): boolean {
     return true;
   }
   const t = normalizeMgText(raw);
+  // «Le premier.» / «le premier montant» / trailing emoji/punct.
   if (
-    /^(le\s+)?(1|2|3|4|1er|1ere|2e|2eme|3e|3eme|4e|4eme|premier|premiere|deuxieme|second|troisieme|quatrieme)\.?$/i.test(
+    /^(le\s+)?(1|2|3|4|1er|1ere|2e|2eme|3e|3eme|4e|4eme|premier|premiere|deuxieme|second|troisieme|quatrieme)\b/i.test(
       t,
     )
   ) {
@@ -207,35 +210,54 @@ export function isMgOfferTableChoice(text: string): boolean {
   ) {
     return true;
   }
+  if (/\b(premier|premiere|1er|1ere)\s+(option|choix|montant|variante|ligne)?\b/i.test(t)) {
+    return true;
+  }
   if (
     /\b(je choisis|je prends|je veux|je prefere|prefere|choisis|prends|celui|celle)\b/i.test(t) &&
-    /(?:^|[^\d])(5000|4000|8000|15000|30000|1|2|3|4)(?:[^\d]|$)/i.test(t)
+    /(?:^|[^\d])(5000|4000|6000|8000|15000|30000|1|2|3|4)(?:[^\d]|$)/i.test(t)
   ) {
     return true;
   }
   return isMgDepositAmountChoice(raw);
 }
 
-/** Table amounts: «5000 MGA», «5000ar», «8 000» — glued currency OK (JS `\b` breaks on 5000ar). */
+/** Table amounts: «5000 MGA», «6000MGA», «5000ar», «8 000» — glued currency OK. */
 export function isMgDepositAmountChoice(text: string): boolean {
   const folded = normalizeMgText(normalizeDepositText(text));
   if (!folded) {
     return false;
   }
+  const compact = folded.replace(/\s+/g, "");
+  // Glued currency: «6000mga», «8000ar» — JS `\b` does not split digit→letter.
+  if (/^\d{3,6}(?:mga|ariary|ar)\.?$/i.test(compact)) {
+    const amount = Number(compact.replace(/[^\d]/g, ""));
+    if (Number.isFinite(amount) && amount >= 500 && amount <= 500_000) {
+      return true;
+    }
+  }
   // Optional space before mga/ar/ariary; no word-boundary required after digits.
   const hasTableAmount =
-    /(?:^|[^\d])(5\s*000|4\s*000|8\s*000|15\s*000|30\s*000|5000|4000|8000|15000|30000)(?:\s*(?:mga|ariary|ar))?(?![0-9])/i.test(
+    /(?:^|[^\d])(5\s*000|4\s*000|6\s*000|8\s*000|15\s*000|30\s*000|5000|4000|6000|8000|15000|30000)(?:\s*(?:mga|ariary|ar))?(?![0-9])/i.test(
       folded,
     );
   if (hasTableAmount) {
     if (
       /(?:mga|ariary|(?:^|[^a-z])ar(?:[^a-z]|$))/i.test(folded) ||
-      /(?:5000|4000|8000|15000|30000|5\s*000|4\s*000|8\s*000|15\s*000|30\s*000)\s*(?:mga|ariary|ar)/i.test(
+      /(?:5000|4000|6000|8000|15000|30000|5\s*000|4\s*000|6\s*000|8\s*000|15\s*000|30\s*000)\s*(?:mga|ariary|ar)/i.test(
         folded,
       ) ||
+      /\d{3,6}\s*(?:mga|ariary|ar)\b/i.test(folded) ||
       /\b(deposit|depot|choisir|prefere|celui|celle|maintenant|veux|prends|prend|mets)\b/i.test(folded) ||
       folded.length < 56
     ) {
+      return true;
+    }
+  }
+  // Any plausible MGA amount with currency after the offer table (free picks / typos).
+  if (/\d{3,6}\s*(?:mga|ariary|ar)\b/i.test(folded) || /\d{3,6}(?:mga|ariary|ar)\b/i.test(compact)) {
+    const amount = Number((folded.match(/\d[\d\s]{2,8}/)?.[0] || "").replace(/[^\d]/g, ""));
+    if (Number.isFinite(amount) && amount >= 500 && amount <= 500_000 && folded.length < 80) {
       return true;
     }
   }

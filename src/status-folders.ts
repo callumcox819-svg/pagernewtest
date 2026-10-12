@@ -12,12 +12,27 @@ export type StatusFolderState = {
   aiEnabled?: boolean;
 };
 
+/** Folder / status labels that mean «no status» across UA/RU/EN. */
+export function isNoStatusFolderName(name: string | undefined): boolean {
+  const normalized = (name || "").trim().toLowerCase();
+  if (!normalized || normalized === "—" || normalized === "-") {
+    return true;
+  }
+  return (
+    normalized.includes("без статус") ||
+    normalized.includes("нет статус") ||
+    normalized.includes("no status") ||
+    normalized.includes("without status") ||
+    normalized === "none" ||
+    normalized === "null"
+  );
+}
+
 export function isNoStatusConversation(conv: PagerConversation): boolean {
   if (!conv.statusId) {
     return true;
   }
-  const name = (conv.status?.name || "").trim().toLowerCase();
-  return name.includes("без статус") || name === "" || name === "—" || name === "-";
+  return isNoStatusFolderName(conv.status?.name);
 }
 
 export function conversationFolderKey(conv: PagerConversation): string {
@@ -55,7 +70,25 @@ export function conversationAllowedInFolders(
     return false;
   }
 
-  return specific.has(conversationFolderKey(conv));
+  const key = conversationFolderKey(conv);
+  if (specific.has(key)) {
+    return true;
+  }
+
+  // Pager often exposes «Без статусу» as a real UUID status while the menu also has
+  // synthetic id "". Operators may enable either — both must match no-status chats.
+  if (isNoStatusConversation(conv)) {
+    if (specific.has(NO_STATUS_FOLDER_ID)) {
+      return true;
+    }
+    const statusId = (conv.statusId || "").trim();
+    if (statusId && specific.has(statusId)) {
+      return true;
+    }
+  }
+
+  const statusId = (conv.statusId || "").trim();
+  return Boolean(statusId && specific.has(statusId));
 }
 
 export function hasEnabledStatusFolders(state: {
@@ -75,7 +108,13 @@ export function getEnabledFolderIds(state: {
     return null;
   }
 
-  return new Set(folders.filter((folder) => folder.enabled).map((folder) => folder.id));
+  const ids = new Set(folders.filter((folder) => folder.enabled).map((folder) => folder.id));
+  for (const folder of folders) {
+    if (folder.enabled && isNoStatusFolderName(folder.name)) {
+      ids.add(NO_STATUS_FOLDER_ID);
+    }
+  }
+  return ids;
 }
 
 /** Catalog of folder ids/names from Pager (global), with per-channel enabled flags when set. */
@@ -119,7 +158,15 @@ export function getChannelEnabledFolderIds(
   if (!folders.length) {
     return null;
   }
-  return new Set(folders.filter((folder) => folder.enabled).map((folder) => folder.id));
+  const ids = new Set(folders.filter((folder) => folder.enabled).map((folder) => folder.id));
+  // Enabling any live «Без статусу» UUID folder also unlocks the synthetic "" key
+  // used by conversationFolderKey for no-status chats.
+  for (const folder of folders) {
+    if (folder.enabled && isNoStatusFolderName(folder.name)) {
+      ids.add(NO_STATUS_FOLDER_ID);
+    }
+  }
+  return ids;
 }
 
 export function unionEnabledFolderIdsForChannels(

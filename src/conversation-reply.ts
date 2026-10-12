@@ -318,7 +318,21 @@ export function shouldQueueMgConversation(conv: PagerConversation): boolean {
 
 /** KE: same no-status queue bias as MG (English Kenya leads). */
 export function shouldQueueKeConversation(conv: PagerConversation): boolean {
-  return shouldQueueMgConversation(conv);
+  if (
+    isNoStatusConversation(conv) &&
+    (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection))
+  ) {
+    return true;
+  }
+  // Also pick up read-but-customer-last no-status within the catch-up window.
+  if (
+    isNoStatusConversation(conv) &&
+    isIncomingDirection(conv.lastMessageDirection) &&
+    isWithinCatchUpReadWindow(resolveLastMessageAt(conv))
+  ) {
+    return true;
+  }
+  return shouldQueueCmConversation(conv);
 }
 
 /** DJ: same queue bias as MG (French no-status leads). */
@@ -749,7 +763,11 @@ export function cmFunnelNeedsContinuation(
     return ready || /explique|comment|gagner/i.test(text);
   }
   if (!stepsSent) {
-    return isAgeAnswer(text) || ready || /\d{1,2}\s*ans?\b/i.test(text);
+    return (
+      isAgeAnswer(text) ||
+      ready ||
+      /\d{1,2}\s*(?:an[s]?|ens|anse|annees?|années?)\b/i.test(text)
+    );
   }
   if (!tierSent) {
     return ready || /applique|lien|aide|explique|comment|pr[eê]t/i.test(text);

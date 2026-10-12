@@ -57,6 +57,10 @@ export function isCustomMarketDepositAmount(text: string, rules: CustomDepositRu
   const wordCount = t.split(/\s+/).filter(Boolean).length;
   const bareMin = rules.bareMin ?? rules.min;
 
+  // Treat glued currency as currency present («6000mga», «5000ar»).
+  const gluedCurrency = /\d(?:zmw|kwacha|clp|pesos?|cfa|frs?|f|fc|mga|ariary|ar)\.?$/i.test(compact);
+  const hasCurrencyOrGlued = hasCurrency || gluedCurrency;
+
   const bareAmountMatch = compact.match(
     /^(\d{1,3}(?:[.,]\d{3})*|\d+)(?:zmw|kwacha|k|clp|pesos?|cfa|frs?|f|fc|mga|ariary|ar)?\.?$/i,
   );
@@ -65,7 +69,7 @@ export function isCustomMarketDepositAmount(text: string, rules: CustomDepositRu
     if (amount === null || !amountInRange(amount, rules)) {
       return false;
     }
-    if (!hasCurrency && !hasIntent) {
+    if (!hasCurrencyOrGlued && !hasIntent) {
       if (amount < bareMin) {
         return false;
       }
@@ -76,7 +80,7 @@ export function isCustomMarketDepositAmount(text: string, rules: CustomDepositRu
     return true;
   }
 
-  if (wordCount <= 14 && (hasIntent || hasCurrency) && /\d/.test(t)) {
+  if (wordCount <= 14 && (hasIntent || hasCurrencyOrGlued) && /\d/.test(t)) {
     const match = t.match(
       /\b(\d{1,3}(?:[.,]\d{3})*|\d+)\s*(?:zmw|kwacha|k|clp|pesos?|cfa|frs?|f|fc|mga|ariary|ar)?\b|(?:^|[^\d])(\d{3,6})(?:mga|ariary|ar)\b/i,
     );

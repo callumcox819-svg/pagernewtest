@@ -375,20 +375,27 @@ export function isAgeAnswer(text: string): boolean {
   };
   const isValidAge = (age?: number): boolean => age !== undefined && age >= 15 && age <= 99;
 
+  // Year-word typos: «22 ens», «22 anse», «22an» (common phone typos for «ans»).
+  const yearWord = String.raw`(?:an[s]?|ens|anse|annees?|années?)`;
   if (/^\d{1,2}$/.test(t)) {
     return isValidAge(Number(t));
   }
-  if (/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\s*an[s]?\b/i.test(t)) {
-    return isValidAge(ageFromMatch(t.match(/\b(?:j'ai|jai|j'?ai|ai)\s*(\d{1,2})\s*an[s]?\b/i), 1));
+  if (new RegExp(String.raw`^\d{1,2}\s*${yearWord}\.?$`, "i").test(t)) {
+    return isValidAge(Number(t.match(/^(\d{1,2})/i)?.[1]));
+  }
+  if (new RegExp(String.raw`\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\s*${yearWord}\b`, "i").test(t)) {
+    return isValidAge(
+      ageFromMatch(t.match(new RegExp(String.raw`\b(?:j'ai|jai|j'?ai|ai)\s*(\d{1,2})\s*${yearWord}\b`, "i")), 1),
+    );
   }
   if (/\b(j'ai|jai|j'?ai|ai)\s*(\d{1,2})\b/i.test(t)) {
     return isValidAge(ageFromMatch(t.match(/\b(?:j'ai|jai|j'?ai|ai)\s*(\d{1,2})\b/i), 1));
   }
-  if (/\b(\d{1,2})\s*an[s]?\b/i.test(t)) {
-    return isValidAge(ageFromMatch(t.match(/\b(\d{1,2})\s*an[s]?\b/i), 1));
+  if (new RegExp(String.raw`\b(\d{1,2})\s*${yearWord}\b`, "i").test(t)) {
+    return isValidAge(ageFromMatch(t.match(new RegExp(String.raw`\b(\d{1,2})\s*${yearWord}\b`, "i")), 1));
   }
-  if (/(\d{1,2})an[s]?\b/i.test(t)) {
-    return isValidAge(ageFromMatch(t.match(/(\d{1,2})an[s]?\b/i), 1));
+  if (new RegExp(String.raw`(\d{1,2})${yearWord}\b`, "i").test(t)) {
+    return isValidAge(ageFromMatch(t.match(new RegExp(String.raw`(\d{1,2})${yearWord}\b`, "i")), 1));
   }
   // Written-out French ages: "j'ai vingt trois ans", "vingt-deux ans"
   const FR_AGE_WORDS: Record<string, number> = {

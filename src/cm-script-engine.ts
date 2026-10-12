@@ -615,7 +615,11 @@ function cmPositiveAdvance(
 
 function cmAgeJustGiven(text: string): boolean {
   const t = (text || "").trim();
-  return isAgeAnswer(t) || /^\d{1,2}\s*ans?\b/i.test(t);
+  return (
+    isAgeAnswer(t) ||
+    /^\d{1,2}\s*(?:an[s]?|ens|anse|annees?|années?)\.?$/i.test(t) ||
+    /^\d{1,2}\s*(?:an[s]?|ens|anse)\b/i.test(t)
+  );
 }
 
 /** «19» + «Ans» in separate bubbles still counts as an age answer. */
@@ -639,12 +643,12 @@ export function cmAgeGivenFromThread(
   const hasAgeNumber = recent.some(
     (line) => /^\d{1,2}$/.test(line) && isAgeAnswer(line),
   );
-  const hasAnsWord = recent.some((line) => /^ans?\.?$/i.test(line));
+  const hasAnsWord = recent.some((line) => /^(?:an[s]?|ens|anse)\.?$/i.test(line));
   if (hasAgeNumber && hasAnsWord) {
     return true;
   }
-  // Latest is «Ans», a recent bubble was bare «19» / «20».
-  if (/^ans?\.?$/i.test((text || "").trim())) {
+  // Latest is «Ans» / typo «ens», a recent bubble was bare «19» / «20».
+  if (/^(?:an[s]?|ens|anse)\.?$/i.test((text || "").trim())) {
     return recentCustomerTexts.some((line) => {
       const t = (line || "").trim();
       return /^\d{1,2}$/.test(t) && isAgeAnswer(t);
