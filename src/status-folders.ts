@@ -139,11 +139,24 @@ export function resolveChannelStatusFolders(
   const aiById = new Map(
     channelFolders.map((folder) => [folder.id, folder.aiEnabled]),
   );
-  return catalog.map((folder) => ({
+  const resolved = catalog.map((folder) => ({
     ...folder,
     enabled: enabledById.has(folder.id) ? Boolean(enabledById.get(folder.id)) : false,
     aiEnabled: aiById.has(folder.id) ? aiById.get(folder.id) : folder.aiEnabled,
   }));
+  // Keep synthetic "" in sync with any live Pager «Без статусу» UUID the operator enabled.
+  const noStatusLiveEnabled = resolved.some(
+    (folder) =>
+      folder.id !== NO_STATUS_FOLDER_ID &&
+      folder.enabled &&
+      isNoStatusFolderName(folder.name),
+  );
+  if (noStatusLiveEnabled) {
+    return resolved.map((folder) =>
+      folder.id === NO_STATUS_FOLDER_ID ? { ...folder, enabled: true } : folder,
+    );
+  }
+  return resolved;
 }
 
 export function getChannelEnabledFolderIds(

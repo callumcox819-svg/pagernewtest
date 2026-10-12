@@ -110,7 +110,7 @@ const DJ_CHANNEL_HINTS = ["djibouti", "djibout"];
 const JO_CHANNEL_HINTS = ["jordan", "الأردن", "الاردن"];
 
 /** Kenya / Guatemala / Ecuador — Pager saved-reply folder markets. */
-const KE_CHANNEL_HINTS = ["kenya", "kenia", "кени", "nairobi"];
+const KE_CHANNEL_HINTS = ["kenya", "kenia", "кени", "nairobi", "kipchoge", "keino"];
 const GT_CHANNEL_HINTS = ["guatemala", "гватемал", "guate"];
 const EC_CHANNEL_HINTS = ["ecuador", "эквадор", "еквадор", "quito"];
 
@@ -157,7 +157,7 @@ export function isJoChannelName(name: string): boolean {
 
 export function isKeChannelName(name: string): boolean {
   const normalized = name.toLowerCase();
-  if (/\bkenya\b|\bkenia\b|\bkes\b|\bnairobi\b/.test(normalized)) {
+  if (/\bkenya\b|\bkenia\b|\bkes\b|\bnairobi\b|\bkipchoge\b|\bkeino\b/.test(normalized)) {
     return true;
   }
   return KE_CHANNEL_HINTS.some((hint) => normalized.includes(hint));

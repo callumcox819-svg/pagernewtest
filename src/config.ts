@@ -267,6 +267,8 @@ export function statusMapForCountry(
     country === "CL" ||
     country === "MG" ||
     country === "DJ" ||
+    country === "GT" ||
+    country === "EC" ||
     country === "MR" ||
     country === "BF" ||
     country === "BJ" ||
@@ -277,6 +279,9 @@ export function statusMapForCountry(
   }
   if (country === "JO") {
     return statusMapForCountry(config, "EG");
+  }
+  if (country === "KE") {
+    return statusMapForCountry(config, "ZM");
   }
   const channel = config.channels.find((item) => item.country === country);
   if (channel) {

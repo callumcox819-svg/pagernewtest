@@ -8211,6 +8211,21 @@ async function patchConversationState(
   });
 }
 
+function playbookCountryForWorker(country: WorkerCountry): CountryCode {
+  // Playbooks only exist for ZM/CM/EG — map every extended geo onto one of them.
+  if (country === "JO") {
+    return "EG";
+  }
+  if (country === "KE" || country === "ZM") {
+    return "ZM";
+  }
+  if (country === "EG") {
+    return "EG";
+  }
+  // CM + French/Spanish sister markets + folder-only Melbet geos.
+  return "CM";
+}
+
 function buildRuntimeChannelConfig(
   config: BotConfig,
   state: ChatState,
@@ -8219,17 +8234,7 @@ function buildRuntimeChannelConfig(
   const mapped = getChannelConfig(config, runtime.channelId);
   const country = runtime.runtime.country;
   const templateBank = resolveYamlTemplateBankName(config, country, runtime.channelId);
-  const yamlCountry = (
-    country === "RW" ||
-    country === "CL" ||
-    country === "MG" ||
-    country === "DJ" ||
-    isFolderOnlyCountry(country)
-      ? "CM"
-      : country === "JO"
-        ? "EG"
-        : country
-  ) as CountryCode;
+  const yamlCountry = playbookCountryForWorker(country);
 
   return {
     id: runtime.channelId,
