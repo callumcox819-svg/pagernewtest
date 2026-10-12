@@ -40,6 +40,7 @@ import { applyPagerPause } from "./pager-pause.js";
 import {
   TelegramApi,
   buildChannelKeyboard,
+  buildChannelSettingsKeyboard,
   buildCountryKeyboard,
   buildFoldersKeyboard,
   buildAiFoldersKeyboard,
@@ -322,6 +323,18 @@ async function handleCallback(
     }
   }
 
+  if (kind === "channel_open" && value) {
+    const latestState = (await stateStore.get(chatId)) ?? state;
+    const channel = getChannelFromCallback(latestState, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден — жми «Обновить»");
+      return;
+    }
+    await telegram.answerCallbackQuery(callbackId);
+    await showChannelSettingsMenu(chatId, latestState, channel.id, messageId);
+    return;
+  }
+
   if (kind === "channel_toggle" && value) {
     const latestState = (await stateStore.get(chatId)) ?? state;
     const channel = getChannelFromCallback(latestState, value);
@@ -330,11 +343,16 @@ async function handleCallback(
       return;
     }
 
+    const fromSettings = extra === "settings";
     const page = Number(extra ?? "0");
     const runtime = getChannelRuntime(latestState, channel.id, channel.country);
     const nextEnabled = !isChannelEnabled(latestState, channel.id, runtime.enabled);
     const nextState = await setChannelEnabled(chatId, latestState, channel.id, nextEnabled);
     await telegram.answerCallbackQuery(callbackId, nextEnabled ? "🟢 Включено" : "🔴 Выключено");
+    if (fromSettings) {
+      await showChannelSettingsMenu(chatId, nextState ?? latestState, channel.id, messageId);
+      return;
+    }
     if (messageId) {
       await telegram.editMessageReplyMarkup(
         chatId,
@@ -540,7 +558,7 @@ async function handleCallback(
                     ? `${CHANNEL_COUNTRY_DISPLAY[country]} · сохранённые ответы`
                     : `Страна: ${country}`,
     );
-    await showChannelsMenu(chatId, nextState, messageId);
+    await showChannelSettingsMenu(chatId, nextState, channel.id, messageId);
     return;
   }
 
@@ -715,7 +733,7 @@ async function handleCallback(
     });
     const nextState = await stateStore.get(chatId) ?? state;
     await telegram.answerCallbackQuery(callbackId, `Папка: ${bank.name}`);
-    await showChannelsMenu(chatId, nextState, messageId);
+    await showChannelSettingsMenu(chatId, nextState, channel.id, messageId);
     return;
   }
 
@@ -1570,6 +1588,51 @@ async function showChannelsMenu(chatId: number, state: ChatState, messageId?: nu
   }
 }
 
+async function showChannelSettingsMenu(
+  chatId: number,
+  state: ChatState,
+  channelId: string,
+  messageId?: number,
+) {
+  const row = getSelectableRowForChannel(state, channelId);
+  const channel = getChannelFromCallback(state, channelId);
+  if (!row || !channel) {
+    await telegram.sendMessage(chatId, "Канал не найден — обнови список каналов.");
+    return;
+  }
+  const num = getChannelDisplayNumber(state, channelId);
+  const countryLabel = CHANNEL_COUNTRY_DISPLAY[row.country] ?? row.country;
+  const folders = resolveChannelStatusFolders(state, channelId);
+  const foldersOn = folders.filter((folder) => folder.enabled).length;
+  const text = [
+    `⚙️ ${num}. ${channel.name}`,
+    `Статус: ${row.enabled ? "✅ включён" : "❌ выключен"}`,
+    `Страна: ${countryLabel}`,
+    `Шаблоны: ${row.templateBank ?? "не выбраны"}`,
+    `Папки бота: ${foldersOn} из ${folders.length}`,
+    "",
+    "Выбери настройку ниже.",
+  ].join("\n");
+  const keyboard = buildChannelSettingsKeyboard({
+    id: channel.id,
+    name: channel.name,
+    country: row.country,
+    enabled: row.enabled,
+    templateBank: row.templateBank,
+    foldersEnabledCount: foldersOn,
+  });
+  try {
+    if (!messageId) {
+      await telegram.sendMessage(chatId, text, keyboard);
+      return;
+    }
+    await safeEditMenu(chatId, messageId, text, keyboard);
+  } catch (error) {
+    console.error("showChannelSettingsMenu failed:", formatError(error));
+    await telegram.sendMessage(chatId, text, keyboard);
+  }
+}
+
 async function ensureStatusFolderCatalog(
   chatId: number,
   state: ChatState,
@@ -2196,11 +2259,11 @@ function buildChannelsMenuCaption(state: ChatState, page = 0): string {
 
   const base = `Каналы ${enabled}/${channels.length}${pageLabel} · build ${getDeployLabel()}`;
   const hints = [
-    "Нажми на имя канала — вкл/выкл.",
-    "Под именем: ℹ️ · страна · шаблоны · папки.",
+    "Слева — канал (настройки).",
+    "Справа — тумблер вкл/выкл.",
   ];
   if (hasDuplicateNames) {
-    hints.push("Одинаковые имена — жми ℹ️.");
+    hints.push("Одинаковые имена — открой канал → ℹ️.");
   }
   return `${base}\n${hints.join("\n")}`;
 }

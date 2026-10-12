@@ -390,10 +390,11 @@ function truncateLabel(value: string, max = 14): string {
 }
 
 /**
- * Mobile-first: 2 rows per channel (name full-width, then actions).
- * Telegram ~100 inline-button limit → 5 channels × 2 + footer ≈ safe.
+ * List: [channel name → settings] [toggle].
+ * Settings (country / templates / folders / info) live in a separate screen.
+ * ~100 inline-button limit → 10 channels × 2 + footer ≈ safe.
  */
-export const CHANNELS_PAGE_SIZE = 5;
+export const CHANNELS_PAGE_SIZE = 10;
 
 export function buildChannelKeyboard(
   channels: Array<{
@@ -414,35 +415,15 @@ export function buildChannelKeyboard(
   const rows: InlineKeyboardButton[][] = [];
   for (const [offset, channel] of slice.entries()) {
     const index = start + offset;
-    const activeStyle: ButtonStyle | undefined = channel.enabled ? "success" : undefined;
-    const foldersCount = channel.foldersEnabledCount ?? 0;
-    const foldersLabel = foldersCount > 0 ? `${foldersCount} пап` : "Папки";
-    const statusMark = channel.enabled ? "✅" : "⬜";
-    // Full-width name row — readable on phone; tap toggles on/off.
     rows.push([
       inlineBtn(
-        truncateLabel(`${statusMark} ${index + 1}. ${channel.name}`, 34),
-        `channel_toggle|${channel.id}|${safePage}`,
-        {
-          emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
-          style: activeStyle,
-        },
+        truncateLabel(`${index + 1}. ${channel.name}`, 28),
+        `channel_open|${channel.id}|${safePage}`,
+        { emojiId: PREMIUM_EMOJI.openFolder },
       ),
-    ]);
-    // Compact action row under the name.
-    rows.push([
-      inlineBtn("ℹ️", `channel_info|${channel.id}`, { style: activeStyle }),
-      inlineBtn(COUNTRY_LABELS[channel.country] ?? channel.country, `channel_country|${channel.id}`, {
-        emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
-        style: activeStyle,
-      }),
-      inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 12), `channel_bank|${channel.id}`, {
-        emojiId: PREMIUM_EMOJI.openFolder,
-        style: activeStyle,
-      }),
-      inlineBtn(truncateLabel(foldersLabel, 10), `ch_folders|${channel.id}`, {
-        emojiId: PREMIUM_EMOJI.folder,
-        style: foldersCount > 0 ? "success" : activeStyle,
+      inlineBtn(channel.enabled ? "✅" : "❌❌", `channel_toggle|${channel.id}|${safePage}`, {
+        emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+        style: channel.enabled ? "success" : "danger",
       }),
     ]);
   }
@@ -478,6 +459,56 @@ export function buildChannelKeyboard(
   ]);
 
   return { inline_keyboard: rows };
+}
+
+/** Per-channel settings hub opened from the channel name button. */
+export function buildChannelSettingsKeyboard(channel: {
+  id: string;
+  name: string;
+  country: string;
+  enabled: boolean;
+  templateBank?: string;
+  foldersEnabledCount?: number;
+}): ReplyMarkup {
+  const foldersCount = channel.foldersEnabledCount ?? 0;
+  const foldersLabel = foldersCount > 0 ? `Папки · ${foldersCount}` : "Папки";
+  const countryLabel = COUNTRY_LABELS[channel.country] ?? channel.country;
+  const bankLabel = truncateLabel(channel.templateBank ?? "Шаблоны", 18);
+  const powerStyle: ButtonStyle | undefined = channel.enabled ? "success" : "danger";
+
+  return {
+    inline_keyboard: [
+      [
+        inlineBtn(channel.enabled ? "✅ Канал включён" : "❌ Канал выключен", `channel_toggle|${channel.id}|settings`, {
+          emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+          style: powerStyle,
+        }),
+      ],
+      [
+        inlineBtn("ℹ️ Инфо / последний чат", `channel_info|${channel.id}`, {
+          emojiId: PREMIUM_EMOJI.chart,
+        }),
+      ],
+      [
+        inlineBtn(`Страна · ${countryLabel}`, `channel_country|${channel.id}`, {
+          emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
+          style: "primary",
+        }),
+      ],
+      [
+        inlineBtn(`Шаблоны · ${bankLabel}`, `channel_bank|${channel.id}`, {
+          emojiId: PREMIUM_EMOJI.openFolder,
+        }),
+      ],
+      [
+        inlineBtn(foldersLabel, `ch_folders|${channel.id}`, {
+          emojiId: PREMIUM_EMOJI.folder,
+          style: foldersCount > 0 ? "success" : undefined,
+        }),
+      ],
+      [inlineBtn("◀️ К списку каналов", "channels:back", { emojiId: PREMIUM_EMOJI.back })],
+    ],
+  };
 }
 
 export function buildCountryKeyboard(channelId: string): ReplyMarkup {
@@ -530,7 +561,7 @@ export function buildCountryKeyboard(channelId: string): ReplyMarkup {
           style: "primary",
         }),
       ],
-      [inlineBtn("Назад", "channels:back", { emojiId: PREMIUM_EMOJI.back })],
+      [inlineBtn("◀️ Назад", `channel_open|${channelId}`, { emojiId: PREMIUM_EMOJI.back })],
     ],
   };
 }
@@ -545,7 +576,7 @@ export function buildTemplateKeyboard(
     }),
   ]);
 
-  rows.push([inlineBtn("Назад", "channels:back", { emojiId: PREMIUM_EMOJI.back })]);
+  rows.push([inlineBtn("◀️ Назад", `channel_open|${channelId}`, { emojiId: PREMIUM_EMOJI.back })]);
 
   return {
     inline_keyboard: rows,
@@ -643,7 +674,7 @@ export function buildFoldersKeyboard(
     ]);
   }
   rows.push([
-    inlineBtn("Назад", scoped ? "channels:back" : "menu:main", {
+    inlineBtn("◀️ Назад", scoped ? `channel_open|${channelId}` : "menu:main", {
       emojiId: PREMIUM_EMOJI.back,
     }),
   ]);
