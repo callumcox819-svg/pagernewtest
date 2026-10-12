@@ -93,7 +93,6 @@ import {
   usesPostbackStatsForFetch,
 } from "./xpartners-postback.js";
 
-import { isFolderOnlyCountry } from "./folder-presets.js";
 import {
   defaultCountryForChannelName,
   formatRwLearningSummary,
