@@ -2195,7 +2195,14 @@ function buildChannelsMenuCaption(state: ChatState, page = 0): string {
   const pageLabel = totalPages > 1 ? ` · стр. ${safePage + 1}/${totalPages}` : "";
 
   const base = `Каналы ${enabled}/${channels.length}${pageLabel} · build ${getDeployLabel()}`;
-  return hasDuplicateNames ? `${base}\nОдинаковые имена — жми ℹ️.` : base;
+  const hints = [
+    "Нажми на имя канала — вкл/выкл.",
+    "Под именем: ℹ️ · страна · шаблоны · папки.",
+  ];
+  if (hasDuplicateNames) {
+    hints.push("Одинаковые имена — жми ℹ️.");
+  }
+  return `${base}\n${hints.join("\n")}`;
 }
 
 async function sendPagerAccountMenu(chatId: number, state: ChatState) {

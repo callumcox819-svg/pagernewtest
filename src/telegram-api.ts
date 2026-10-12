@@ -372,6 +372,14 @@ const COUNTRY_LABELS: Record<string, string> = {
   MG: "MG",
   DJ: "DJ",
   JO: "JO",
+  KE: "KE",
+  GT: "GT",
+  EC: "EC",
+  MR: "MR",
+  BF: "BF",
+  BJ: "BJ",
+  CR: "CR",
+  SN: "SN",
 };
 
 function truncateLabel(value: string, max = 14): string {
@@ -381,8 +389,11 @@ function truncateLabel(value: string, max = 14): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
-/** Keep under Telegram's ~100 inline-button limit (5 buttons per channel row). */
-export const CHANNELS_PAGE_SIZE = 7;
+/**
+ * Mobile-first: 2 rows per channel (name full-width, then actions).
+ * Telegram ~100 inline-button limit → 5 channels × 2 + footer ≈ safe.
+ */
+export const CHANNELS_PAGE_SIZE = 5;
 
 export function buildChannelKeyboard(
   channels: Array<{
@@ -400,46 +411,56 @@ export function buildChannelKeyboard(
   const start = safePage * CHANNELS_PAGE_SIZE;
   const slice = channels.slice(start, start + CHANNELS_PAGE_SIZE);
 
-  const rows: InlineKeyboardButton[][] = slice.map((channel, offset) => {
+  const rows: InlineKeyboardButton[][] = [];
+  for (const [offset, channel] of slice.entries()) {
     const index = start + offset;
     const activeStyle: ButtonStyle | undefined = channel.enabled ? "success" : undefined;
     const foldersCount = channel.foldersEnabledCount ?? 0;
     const foldersLabel = foldersCount > 0 ? `${foldersCount} пап` : "Папки";
-    return [
-      inlineBtn(truncateLabel(`${index + 1}. ${channel.name}`, 18), `channel_toggle|${channel.id}|${safePage}`, {
-        emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
-        style: activeStyle,
-      }),
+    const statusMark = channel.enabled ? "✅" : "⬜";
+    // Full-width name row — readable on phone; tap toggles on/off.
+    rows.push([
+      inlineBtn(
+        truncateLabel(`${statusMark} ${index + 1}. ${channel.name}`, 34),
+        `channel_toggle|${channel.id}|${safePage}`,
+        {
+          emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+          style: activeStyle,
+        },
+      ),
+    ]);
+    // Compact action row under the name.
+    rows.push([
       inlineBtn("ℹ️", `channel_info|${channel.id}`, { style: activeStyle }),
       inlineBtn(COUNTRY_LABELS[channel.country] ?? channel.country, `channel_country|${channel.id}`, {
         emojiId: FLAG_EMOJI[channel.country] ?? PREMIUM_EMOJI.globe,
         style: activeStyle,
       }),
-      inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 8), `channel_bank|${channel.id}`, {
+      inlineBtn(truncateLabel(channel.templateBank ?? "Шаблоны", 12), `channel_bank|${channel.id}`, {
         emojiId: PREMIUM_EMOJI.openFolder,
         style: activeStyle,
       }),
-      inlineBtn(truncateLabel(foldersLabel, 8), `ch_folders|${channel.id}`, {
+      inlineBtn(truncateLabel(foldersLabel, 10), `ch_folders|${channel.id}`, {
         emojiId: PREMIUM_EMOJI.folder,
         style: foldersCount > 0 ? "success" : activeStyle,
       }),
-    ];
-  });
+    ]);
+  }
 
   if (totalPages > 1) {
     const nav: InlineKeyboardButton[] = [];
     if (safePage > 0) {
-      nav.push(inlineBtn("◀", `channels:page:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }));
+      nav.push(inlineBtn("◀ Назад", `channels:page:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }));
     }
     nav.push(inlineBtn(`${safePage + 1}/${totalPages}`, "channels:noop", { emojiId: PREMIUM_EMOJI.chart }));
     if (safePage < totalPages - 1) {
-      nav.push(inlineBtn("▶", `channels:page:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }));
+      nav.push(inlineBtn("Далее ▶", `channels:page:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }));
     }
     rows.push(nav);
   }
 
   rows.push([
-    inlineBtn("Обновить каналы", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh }),
+    inlineBtn("Обновить", "channels:refresh", { emojiId: PREMIUM_EMOJI.refresh }),
     inlineBtn("Догнать чаты", "channels:catchup", {
       emojiId: PREMIUM_EMOJI.robot,
       style: "primary",
