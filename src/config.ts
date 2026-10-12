@@ -123,13 +123,55 @@ export function getChannelConfig(
   return config.channels.find((channel) => channel.id === channelId);
 }
 
+/**
+ * Map any worker/operator geo onto a YAML playbook country (ZM|CM|EG).
+ * Extended markets reuse a sibling playbook for OCR / proof / special templates.
+ */
+export function resolvePlaybookCountry(country: string | undefined): CountryCode {
+  const code = (country || "").trim().toUpperCase();
+  if (code === "EG" || code === "JO") {
+    return "EG";
+  }
+  if (code === "ZM" || code === "KE" || code === "RW") {
+    return "ZM";
+  }
+  if (
+    code === "CM" ||
+    code === "CL" ||
+    code === "MG" ||
+    code === "DJ" ||
+    code === "GT" ||
+    code === "EC" ||
+    code === "MR" ||
+    code === "BF" ||
+    code === "BJ" ||
+    code === "CR" ||
+    code === "SN"
+  ) {
+    return "CM";
+  }
+  // Unknown / future geos — English playbook is the safest default.
+  return "ZM";
+}
+
 export function getPlaybook(
   config: BotConfig,
-  country: CountryCode,
+  country: CountryCode | string,
 ): PlaybookConfig {
-  const playbook = config.playbooks.find((item) => item.country === country);
+  const mapped = resolvePlaybookCountry(String(country));
+  const playbook =
+    config.playbooks.find((item) => item.country === mapped) ??
+    config.playbooks.find((item) => item.country === "ZM") ??
+    config.playbooks.find((item) => item.country === "CM") ??
+    config.playbooks[0];
   if (!playbook) {
-    throw new Error(`Missing playbook for country ${country}`);
+    // Should be unreachable — config always ships at least one playbook.
+    throw new Error(`Missing playbook for country ${country} (mapped=${mapped})`);
+  }
+  if (playbook.country !== mapped) {
+    console.warn(
+      `Playbook fallback: requested=${country} mapped=${mapped} using=${playbook.country}`,
+    );
   }
   return playbook;
 }

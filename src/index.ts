@@ -5,6 +5,7 @@ import {
   getDefaultEnabledChannel,
   getPlaybook,
   loadConfig,
+  resolvePlaybookCountry,
   statusMapForCountry,
 } from "./config.js";
 import { ClerkPasswordAuthClient, enrichPagerCookies, parseCookieHeader } from "./clerk-auth.js";
@@ -1015,36 +1016,11 @@ async function handleMessage(message: TelegramMessage) {
   }
 
   const effectiveChannel = getEffectiveChannel(state);
-  const playbookCountry =
-    effectiveChannel.country === "RW" ||
-    effectiveChannel.country === "CL" ||
-    effectiveChannel.country === "MG" ||
-    effectiveChannel.country === "DJ" ||
-    effectiveChannel.country === "GT" ||
-    effectiveChannel.country === "EC" ||
-    isFolderOnlyCountry(effectiveChannel.country)
-      ? "CM"
-      : effectiveChannel.country === "JO"
-        ? "EG"
-        : effectiveChannel.country === "KE"
-          ? "ZM"
-          : effectiveChannel.country;
+  const playbookCountry = resolvePlaybookCountry(effectiveChannel.country);
   const playbook = getPlaybook(config, playbookCountry);
   const channelForDecision = {
     ...effectiveChannel,
-    country: (effectiveChannel.country === "RW" ||
-    effectiveChannel.country === "CL" ||
-    effectiveChannel.country === "MG" ||
-    effectiveChannel.country === "DJ" ||
-    effectiveChannel.country === "GT" ||
-    effectiveChannel.country === "EC" ||
-    isFolderOnlyCountry(effectiveChannel.country)
-      ? "CM"
-      : effectiveChannel.country === "JO"
-        ? "EG"
-        : effectiveChannel.country === "KE"
-          ? "ZM"
-          : effectiveChannel.country) as "ZM" | "CM" | "EG",
+    country: playbookCountry,
   };
 
   if (message.photo?.length) {

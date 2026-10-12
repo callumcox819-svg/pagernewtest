@@ -8,10 +8,21 @@ import {
   isOutgoingDirection,
   parseMessageTimestamp,
 } from "./conversation-reply.js";
-import type { CountryCode } from "./config.js";
+import { resolvePlaybookCountry, type CountryCode } from "./config.js";
 
 /** Markets that get delayed «в процессе» check-ins (each in its own language). */
-export type InProgressFollowUpCountry = "ZM" | "CM" | "EG" | "RW" | "CL" | "MG" | "DJ" | "JO";
+export type InProgressFollowUpCountry =
+  | "ZM"
+  | "CM"
+  | "EG"
+  | "RW"
+  | "CL"
+  | "MG"
+  | "DJ"
+  | "JO"
+  | "KE"
+  | "GT"
+  | "EC";
 
 export const IN_PROGRESS_FOLLOWUP_MIN_MS = 20 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_MAX_MS = 22 * 60 * 1000;
@@ -19,14 +30,17 @@ export const IN_PROGRESS_FOLLOWUP_MAX_MS = 22 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 export const IN_PROGRESS_FOLLOWUP_ATTEMPT_COOLDOWN_MS = 60 * 60 * 1000;
 
-/** ZM/RW English, CM/MG/DJ French, CL Spanish, EG/JO Arabic. */
+/** ZM/RW/KE English, CM/MG/DJ French, CL/GT/EC Spanish, EG/JO Arabic. */
 const FOLLOWUP_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   ZM: ["have you already registered", "when will you complete registration"],
   RW: ["have you already registered", "when will you complete registration"],
+  KE: ["have you already registered", "when will you complete registration"],
   CM: ["déjà inscrit", "terminer l'inscription", "terminer votre inscription"],
   MG: ["déjà inscrit", "terminer l'inscription", "terminer votre inscription"],
   DJ: ["déjà inscrit", "terminer l'inscription", "terminer votre inscription"],
   CL: ["ya te registraste", "terminarás el registro", "terminaras el registro"],
+  GT: ["ya te registraste", "terminarás el registro", "terminaras el registro"],
+  EC: ["ya te registraste", "terminarás el registro", "terminaras el registro"],
   EG: ["هل قمت بالتسجيل", "متى ستنهي التسجيل", "متى ستكمل التسجيل"],
   JO: ["هل قمت بالتسجيل", "متى ستنهي التسجيل", "متى ستكمل التسجيل"],
 };
@@ -34,10 +48,13 @@ const FOLLOWUP_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
 const FOLLOWUP_MESSAGES: Record<InProgressFollowUpCountry, [string, string]> = {
   ZM: ["Have you already registered?", "When will you complete registration?"],
   RW: ["Have you already registered?", "When will you complete registration?"],
+  KE: ["Have you already registered?", "When will you complete registration?"],
   CM: ["Vous êtes déjà inscrit(e) ?", "Quand allez-vous terminer l'inscription ?"],
   MG: ["Vous êtes déjà inscrit(e) ?", "Quand allez-vous terminer l'inscription ?"],
   DJ: ["Vous êtes déjà inscrit(e) ?", "Quand allez-vous terminer l'inscription ?"],
   CL: ["¿Ya te registraste?", "¿Cuándo terminarás el registro?"],
+  GT: ["¿Ya te registraste?", "¿Cuándo terminarás el registro?"],
+  EC: ["¿Ya te registraste?", "¿Cuándo terminarás el registro?"],
   EG: ["هل قمت بالتسجيل بالفعل؟", "متى ستنهي التسجيل؟"],
   JO: ["هل قمت بالتسجيل بالفعل؟", "متى ستنهي التسجيل؟"],
 };
@@ -45,10 +62,13 @@ const FOLLOWUP_MESSAGES: Record<InProgressFollowUpCountry, [string, string]> = {
 const PLAN_ASK_MESSAGES: Record<InProgressFollowUpCountry, string> = {
   ZM: "When do you plan to register?",
   RW: "When do you plan to register?",
+  KE: "When do you plan to register?",
   CM: "Quand comptez-vous vous enregistrer ?",
   MG: "Quand comptez-vous vous enregistrer ?",
   DJ: "Quand comptez-vous vous enregistrer ?",
   CL: "¿Cuándo planeas registrarte?",
+  GT: "¿Cuándo planeas registrarte?",
+  EC: "¿Cuándo planeas registrarte?",
   EG: "متى تخطط للتسجيل؟",
   JO: "متى تخطط للتسجيل؟",
 };
@@ -56,10 +76,13 @@ const PLAN_ASK_MESSAGES: Record<InProgressFollowUpCountry, string> = {
 const PLAN_ASK_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   ZM: ["when do you plan to register"],
   RW: ["when do you plan to register"],
+  KE: ["when do you plan to register"],
   CM: ["comptez-vous vous enregistrer", "comptez-vous terminer votre inscription"],
   MG: ["comptez-vous vous enregistrer", "comptez-vous terminer votre inscription"],
   DJ: ["comptez-vous vous enregistrer", "comptez-vous terminer votre inscription"],
   CL: ["cuándo planeas registrarte", "cuando planeas registrarte"],
+  GT: ["cuándo planeas registrarte", "cuando planeas registrarte"],
+  EC: ["cuándo planeas registrarte", "cuando planeas registrarte"],
   EG: ["متى تخطط للتسجيل"],
   JO: ["متى تخطط للتسجيل"],
 };
@@ -130,7 +153,7 @@ export function isInProgressBotAutomatedText(
   if (!t) {
     return false;
   }
-  if (isAutomatedFunnelOutgoing(t, country as CountryCode)) {
+  if (isAutomatedFunnelOutgoing(t, resolvePlaybookCountry(country))) {
     return true;
   }
   const lower = t.toLowerCase();
@@ -474,7 +497,10 @@ export function isInProgressFollowUpCountry(
     country === "CL" ||
     country === "MG" ||
     country === "DJ" ||
-    country === "JO"
+    country === "JO" ||
+    country === "KE" ||
+    country === "GT" ||
+    country === "EC"
   );
 }
 

@@ -8,6 +8,7 @@ import {
   getConfigEnabledChannelIds,
   isChannelConfigured,
   getPlaybook,
+  resolvePlaybookCountry,
   resolveYamlTemplateBankName,
   statusMapForCountry,
 } from "./config.js";
@@ -7968,16 +7969,9 @@ async function ensureCustomerMessageEligible(
 ): Promise<boolean> {
   const country = options?.country ?? (options?.countryLabel as "ZM" | "CM" | "EG" | "CL" | "MG" | "DJ" | "JO" | "KE" | "GT" | "EC" | undefined);
   const catchUpRead = Boolean(options?.catchUpRead);
-  const threadCountry: CountryCode | undefined =
-    country === "CL" || country === "MG" || country === "DJ" || country === "GT" || country === "EC"
-      ? "CM"
-      : country === "JO"
-        ? "EG"
-        : country === "KE" || country === "ZM"
-          ? "ZM"
-          : country === "CM" || country === "EG"
-            ? country
-            : undefined;
+  const threadCountry: CountryCode | undefined = country
+    ? resolvePlaybookCountry(country)
+    : undefined;
   const customerText = (lastIncoming.text || "").trim();
   const isNewCustomerTurn = convState.lastCustomerMessageId !== lastIncoming.id;
   const alreadyRepliedInState =
@@ -8211,21 +8205,6 @@ async function patchConversationState(
   });
 }
 
-function playbookCountryForWorker(country: WorkerCountry): CountryCode {
-  // Playbooks only exist for ZM/CM/EG — map every extended geo onto one of them.
-  if (country === "JO") {
-    return "EG";
-  }
-  if (country === "KE" || country === "ZM") {
-    return "ZM";
-  }
-  if (country === "EG") {
-    return "EG";
-  }
-  // CM + French/Spanish sister markets + folder-only Melbet geos.
-  return "CM";
-}
-
 function buildRuntimeChannelConfig(
   config: BotConfig,
   state: ChatState,
@@ -8234,7 +8213,8 @@ function buildRuntimeChannelConfig(
   const mapped = getChannelConfig(config, runtime.channelId);
   const country = runtime.runtime.country;
   const templateBank = resolveYamlTemplateBankName(config, country, runtime.channelId);
-  const yamlCountry = playbookCountryForWorker(country);
+  // ChannelConfig.country is the playbook key (ZM|CM|EG). Localization uses runtime.country.
+  const yamlCountry = resolvePlaybookCountry(country);
 
   return {
     id: runtime.channelId,
@@ -8369,11 +8349,13 @@ async function trySendSpecialCustomerResponse(
   let templateRole: TemplateRole | undefined;
   let nextStage: Stage = ctx.convState.currentStage;
 
+  // Localize refusals by worker geo (KE/GT/…), not playbook key (ZM/CM/EG).
+  const localeCountry = ctx.runtime.runtime.country || ctx.channel.country;
   if (special === "money_request") {
-    replyText = moneyRefusalText(ctx.channel.country);
+    replyText = moneyRefusalText(localeCountry);
     nextStage = "engaged";
   } else if (special === "phone_request") {
-    replyText = phoneChatOnlyText(ctx.channel.country);
+    replyText = phoneChatOnlyText(localeCountry);
     nextStage = "engaged";
   } else {
     templateRole = specialIntentTemplateRole(special);
