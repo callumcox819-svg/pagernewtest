@@ -22,6 +22,7 @@ import {
 } from "./ai-agent.js";
 import { RW_AI_COUNTRY } from "./ai-country-language.js";
 import {
+  aiLooksLikeAgeAnswer,
   cmVisionExtractToCombinedText,
   maybeAiVisionExtractCmProof,
 } from "./ai-assist.js";
@@ -2529,8 +2530,27 @@ async function processCmConversation(
   );
   // After the age answer: money table only. Reg waits for a sum or an agreement.
   const ageAsked = cmAgeQuestionSent(outgoingTexts);
-  const ageGiven = cmAgeGivenFromThread(latestCustomerText, recentCustomerTexts);
+  let ageGiven = cmAgeGivenFromThread(latestCustomerText, recentCustomerTexts);
   const tierSent = tierSentInHistory(outgoingTexts);
+  // Phonetics / wrong DeepL lang (e.g. «Trantan») — AI can still confirm age and unlock the table.
+  if (
+    ageAsked &&
+    !tierSent &&
+    !cmRegLinkSentInHistory(outgoingTexts) &&
+    !ageGiven &&
+    latestCustomerText.trim()
+  ) {
+    ageGiven = await aiLooksLikeAgeAnswer(
+      deps.env,
+      latestCustomerText,
+      recentCustomerTexts,
+    );
+    if (ageGiven) {
+      console.log(
+        `Pager worker: CM ${convId.slice(0, 8)} AI age accept text=${truncate(latestCustomerText)}`,
+      );
+    }
+  }
   if (
     ageAsked &&
     !tierSent &&

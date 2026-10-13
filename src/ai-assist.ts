@@ -303,6 +303,61 @@ function sanitizeAiReply(
   return trimmed;
 }
 
+/**
+ * Cheap YES/NO classifier: after «Quel âge», is this message stating an age?
+ * Covers phonetics / typos / wrong DeepL language (e.g. «Trantan» = trente ans).
+ * Does not send a customer reply — only advances the funnel when true.
+ */
+export async function aiLooksLikeAgeAnswer(
+  env: AppEnv,
+  customerText: string,
+  recentCustomerTexts: string[] = [],
+): Promise<boolean> {
+  if (!env.AI_ENABLED || !env.AI_API_KEY?.trim()) {
+    return false;
+  }
+  const t = (customerText || "").trim();
+  if (!t || t.length > 80) {
+    return false;
+  }
+  // Pure noise / long questions are not ages.
+  if (/[?]/.test(t) && t.length > 20) {
+    return false;
+  }
+  const recent = recentCustomerTexts
+    .slice(-3)
+    .map((line) => (line || "").trim())
+    .filter(Boolean)
+    .join(" | ");
+  const system = [
+    "You classify whether a customer message answers an age question.",
+    "Context: bot asked age in French (Quel âge avez-vous?). Market often Cameroon / French Africa.",
+    "Accept: digits (30), French words (trente ans), glued phonetics (Trantan, trentans), typos (22 ens), other languages stating age 15-99.",
+    "Reject: greetings, yes/no alone, deposit amounts, questions, random words unrelated to age.",
+    "Reply with exactly YES or NO. No other text.",
+  ].join(" ");
+  const user = recent
+    ? `Recent customer lines: ${recent}\nLatest message: ${t}`
+    : `Latest message: ${t}`;
+  try {
+    const raw = await openAiChatCompletion(env, env.AI_MODEL, system, user);
+    const verdict = (raw || "").trim().toUpperCase();
+    if (verdict.startsWith("YES")) {
+      return true;
+    }
+    if (verdict.startsWith("NO")) {
+      return false;
+    }
+    return /\bYES\b/.test(verdict);
+  } catch (error) {
+    console.warn(
+      "AI age classify failed:",
+      error instanceof Error ? error.message : error,
+    );
+    return false;
+  }
+}
+
 /** OpenAI call — invoked only via ai-agent routing. */
 export async function maybeAiAssistReply(
   env: AppEnv,

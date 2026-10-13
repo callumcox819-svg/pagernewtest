@@ -432,44 +432,38 @@ export function isAgeAnswer(text: string): boolean {
   if (new RegExp(String.raw`(\d{1,2})${yearWord}\b`, "i").test(t)) {
     return isValidAge(ageFromMatch(t.match(new RegExp(String.raw`(\d{1,2})${yearWord}\b`, "i")), 1));
   }
-  // Written-out French ages: "j'ai vingt trois ans", "vingt-deux ans"
+  // Written-out / phonetic French ages: "trente ans", "Trantan", "vingtdeux"
   const FR_AGE_WORDS: Record<string, number> = {
     quinze: 15,
     seize: 16,
     dixsept: 17,
-    "dix-sept": 17,
     dixhuit: 18,
-    "dix-huit": 18,
     dixneuf: 19,
-    "dix-neuf": 19,
     vingt: 20,
-    "vingt et un": 21,
-    "vingt-et-un": 21,
-    "vingtetun": 21,
-    "vingt deux": 22,
-    "vingt-deux": 22,
+    vingtetun: 21,
     vingtdeux: 22,
-    "vingt trois": 23,
-    "vingt-trois": 23,
     vingttrois: 23,
-    "vingt quatre": 24,
-    "vingt-quatre": 24,
-    "vingt cinq": 25,
-    "vingt-cinq": 25,
-    "vingt six": 26,
-    "vingt-six": 26,
-    "vingt sept": 27,
-    "vingt-sept": 27,
-    "vingt huit": 28,
-    "vingt-huit": 28,
-    "vingt neuf": 29,
-    "vingt-neuf": 29,
+    vingtquatre: 24,
+    vingtcinq: 25,
+    vingtsix: 26,
+    vingtsept: 27,
+    vingthuit: 28,
+    vingtneuf: 29,
     trente: 30,
-    "trente cinq": 35,
-    "trente-cinq": 35,
+    trantan: 30,
+    trentans: 30,
+    trenteans: 30,
+    trentensan: 30,
+    trante: 30,
+    trentanc: 30,
+    trentecinq: 35,
     quarante: 40,
+    quarantans: 40,
+    quaranteans: 40,
+    cinquante: 50,
+    soixante: 60,
   };
-  const normalizedAge = t
+  const spaced = t
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -477,8 +471,32 @@ export function isAgeAnswer(text: string): boolean {
     .replace(/[^a-z0-9\s-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  const compact = spaced.replace(/[\s-]+/g, "");
+  if (compact && FR_AGE_WORDS[compact] !== undefined) {
+    return isValidAge(FR_AGE_WORDS[compact]);
+  }
   for (const [phrase, age] of Object.entries(FR_AGE_WORDS)) {
-    if (normalizedAge.includes(phrase) && (/\ban/.test(normalizedAge) || /j ?ai/.test(normalizedAge))) {
+    const key = phrase.replace(/[\s-]+/g, "");
+    if (!key || key.length < 4) {
+      continue;
+    }
+    if (
+      compact === key ||
+      compact === `${key}ans` ||
+      compact === `${key}an` ||
+      compact === `${key}ens` ||
+      compact === `jai${key}` ||
+      compact === `jai${key}ans` ||
+      compact === `jai${key}an`
+    ) {
+      return isValidAge(age);
+    }
+  }
+  for (const [phrase, age] of Object.entries(FR_AGE_WORDS)) {
+    if (!spaced.includes(phrase.replace(/-/g, " ")) && !spaced.includes(phrase)) {
+      continue;
+    }
+    if (/\ban/.test(spaced) || /j ?ai/.test(spaced) || compact.length <= 14) {
       return isValidAge(age);
     }
   }
