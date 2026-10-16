@@ -441,10 +441,12 @@ const INBOX_TOP = 40;
 function resolveConversationFolderGates(
   conv: PagerConversation,
   state: ChatState,
+  channelId?: string,
 ): { botFolderEnabled: boolean; aiFolderEnabled: boolean } {
+  const resolvedChannelId = channelId || conv.channelId || conv.channel?.id || undefined;
   return {
     botFolderEnabled: isConversationInOperatorEnabledFolders(conv, state),
-    aiFolderEnabled: isConversationInAiEnabledFolders(conv, state),
+    aiFolderEnabled: isConversationInAiEnabledFolders(conv, state, resolvedChannelId),
   };
 }
 /** Soft fill after unread sweep — read/in-progress follow-ups. */
@@ -2019,7 +2021,11 @@ async function processRwFunnelConversation(
     !rwScriptSentInHistory(outgoingTexts, "01_intro", drafts) &&
     Boolean(latestCustomerText);
 
-  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(conv, state);
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
+    conv,
+    state,
+    runtime.channelId,
+  );
   const support = buildSupportSnapshot(RW_AI_COUNTRY, isInProgressStatusConversation(conv), outgoingTexts, {
     operatorFolderEnabled: aiFolderEnabled,
   });
@@ -2394,6 +2400,7 @@ async function processCmConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -3074,6 +3081,7 @@ async function processGtConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -3375,6 +3383,7 @@ async function processEcConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -3676,6 +3685,7 @@ async function processClConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("CM", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -3934,6 +3944,7 @@ async function processKeConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("ZM", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -4397,6 +4408,7 @@ async function processZmConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("ZM", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -4866,6 +4878,7 @@ async function processMgConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("MG", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -5330,6 +5343,7 @@ async function processDjConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("DJ", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -5836,6 +5850,7 @@ async function processJoConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("JO", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -6486,6 +6501,7 @@ async function processEgConversation(
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
+    runtime.channelId,
   );
   const imageUrl = extractProofImageUrl(lastIncoming);
   const support = buildSupportSnapshot("EG", isInProgressStatusConversation(conv), outgoingTexts, {
@@ -8889,11 +8905,21 @@ async function tryHandleCustomerImage(
     isInProgressStatusConversation(ctx.conv),
     ctx.outgoingTexts,
     {
-      operatorFolderEnabled: isConversationInAiEnabledFolders(ctx.conv, ctx.state),
+      operatorFolderEnabled: isConversationInAiEnabledFolders(
+        ctx.conv,
+        ctx.state,
+        ctx.runtime.channelId,
+      ),
     },
   );
 
-  if (ctx.channel.country === "CM" && deps.env.AI_ENABLED && image.length > 0 && cmRegLinkSentInHistory(ctx.outgoingTexts) && isConversationInAiEnabledFolders(ctx.conv, ctx.state)) {
+  if (
+    ctx.channel.country === "CM" &&
+    deps.env.AI_ENABLED &&
+    image.length > 0 &&
+    cmRegLinkSentInHistory(ctx.outgoingTexts) &&
+    isConversationInAiEnabledFolders(ctx.conv, ctx.state, ctx.runtime.channelId)
+  ) {
     const extract = await maybeAiVisionExtractCmProof(deps.env, {
       imageBase64: image.toString("base64"),
       mimeType: detectImageMimeType(image),
@@ -8913,7 +8939,11 @@ async function tryHandleCustomerImage(
     }
   }
 
-  if (deps.env.AI_ENABLED && image.length > 0 && isConversationInAiEnabledFolders(ctx.conv, ctx.state)) {
+  if (
+    deps.env.AI_ENABLED &&
+    image.length > 0 &&
+    isConversationInAiEnabledFolders(ctx.conv, ctx.state, ctx.runtime.channelId)
+  ) {
     const sorted = ctx.sortedMessages ?? [];
     const botAlreadyAnswered =
       sorted.length > 0 &&

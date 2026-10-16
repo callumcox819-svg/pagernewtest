@@ -683,6 +683,111 @@ async function handleCallback(
     return;
   }
 
+  if (kind === "ch_ai_folders" && value) {
+    const channel = getChannelFromCallback(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+    await telegram.answerCallbackQuery(callbackId);
+    await showChannelAiFoldersMenu(chatId, state, channel.id, channel.name, messageId, 0);
+    return;
+  }
+
+  if (kind === "ch_ai_folders_noop") {
+    await telegram.answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (kind === "ch_ai_folders_page" && value && extra !== undefined) {
+    const channel = getChannelFromCallback(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+    await telegram.answerCallbackQuery(callbackId);
+    await showChannelAiFoldersMenu(
+      chatId,
+      state,
+      channel.id,
+      channel.name,
+      messageId,
+      Number(extra) || 0,
+    );
+    return;
+  }
+
+  if (kind === "ch_ai_folders_all" && value && extra) {
+    const channel = getChannelFromCallback(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+    const latestState = (await stateStore.get(chatId)) ?? state;
+    const folders = setAllAiStatusFolders(
+      resolveChannelStatusFolders(latestState, channel.id),
+      extra === "on",
+    );
+    const runtime = getChannelRuntime(
+      latestState,
+      channel.id,
+      inferCountryFromName(channel.name),
+    );
+    const nextState =
+      (await stateStore.patch(chatId, {
+        channels: {
+          ...(latestState.channels ?? {}),
+          [channel.id]: {
+            ...runtime,
+            statusFolders: folders,
+          },
+        },
+      })) ?? latestState;
+    await telegram.answerCallbackQuery(
+      callbackId,
+      extra === "on" ? "AI во все папки канала" : "AI выкл. для папок канала",
+    );
+    await showChannelAiFoldersMenu(chatId, nextState, channel.id, channel.name, messageId, 0);
+    return;
+  }
+
+  if (kind === "ch_ai_folder_toggle" && value && extra !== undefined) {
+    const channel = getChannelFromCallback(state, value);
+    if (!channel) {
+      await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+      return;
+    }
+    const latestState = (await stateStore.get(chatId)) ?? state;
+    const index = Number(extra);
+    const folders = toggleAiStatusFolder(
+      resolveChannelStatusFolders(latestState, channel.id),
+      index,
+    );
+    const runtime = getChannelRuntime(
+      latestState,
+      channel.id,
+      inferCountryFromName(channel.name),
+    );
+    const nextState =
+      (await stateStore.patch(chatId, {
+        channels: {
+          ...(latestState.channels ?? {}),
+          [channel.id]: {
+            ...runtime,
+            statusFolders: folders,
+          },
+        },
+      })) ?? latestState;
+    const folder = folders[index];
+    await telegram.answerCallbackQuery(
+      callbackId,
+      folder ? `AI: ${isAiFolderEnabled(folder) ? "вкл" : "выкл"} — ${folder.name}` : "Готово",
+    );
+    const page = Math.floor(index / FOLDERS_PAGE_SIZE);
+    await showChannelAiFoldersMenu(chatId, nextState, channel.id, channel.name, messageId, page);
+    return;
+  }
+
   if (kind === "channel_bank" && value) {
     const channel = getChannelFromCallback(state, value);
     if (!channel) {
@@ -782,48 +887,9 @@ async function handleCallback(
     return;
   }
 
-  if (kind === "ai_folders") {
-    await telegram.answerCallbackQuery(callbackId);
-
-    if (value === "page" && extra) {
-      await showAiFoldersMenu(chatId, state, messageId, Number(extra));
-      return;
-    }
-
-    if (value === "noop") {
-      return;
-    }
-
-    if (value === "all_on" || value === "all_off") {
-      const baseFolders = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
-      const folders = setAllAiStatusFolders(baseFolders, value === "all_on");
-      const nextState =
-        (await stateStore.patch(chatId, {
-          statusFolders: folders,
-          operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
-        })) ?? state;
-      await showAiFoldersMenu(chatId, nextState, messageId);
-      return;
-    }
-    return;
-  }
-
-  if (kind === "ai_folder_toggle" && value) {
-    const index = Number(value);
-    const baseFolders = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
-    const folders = toggleAiStatusFolder(baseFolders, index);
-    const folder = folders[index];
-    const nextState =
-      (await stateStore.patch(chatId, {
-        statusFolders: folders,
-        operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
-      })) ?? state;
-    const page = Math.floor(index / FOLDERS_PAGE_SIZE);
-    await telegram.answerCallbackQuery(
-      callbackId,
-      folder ? `AI: ${isAiFolderEnabled(folder) ? "вкл" : "выкл"} — ${folder.name}` : "Готово",
-    );
-    await showAiFoldersMenu(chatId, nextState, messageId, page);
+  if (kind === "ai_folders" || kind === "ai_folder_toggle") {
+    await telegram.answerCallbackQuery(callbackId, "Папки AI — в настройках канала");
+    await showAiFoldersMenu(chatId, state, messageId);
     return;
   }
 
@@ -874,7 +940,11 @@ async function handleCallback(
     }
 
     if (value === "ai_folders") {
-      await showAiFoldersMenu(chatId, state);
+      await telegram.sendMessage(
+        chatId,
+        "Папки AI теперь выбираются в «Каналы» → настройки канала → «Папки AI». У каждого канала свой набор.",
+        buildMainMenuKeyboard(),
+      );
       return;
     }
 
@@ -1604,12 +1674,14 @@ async function showChannelSettingsMenu(
   const countryLabel = CHANNEL_COUNTRY_DISPLAY[row.country] ?? row.country;
   const folders = resolveChannelStatusFolders(state, channelId);
   const foldersOn = folders.filter((folder) => folder.enabled).length;
+  const aiFoldersOn = folders.filter((folder) => isAiFolderEnabled(folder)).length;
   const text = [
     `⚙️ ${num}. ${channel.name}`,
     `Статус: ${row.enabled ? "✅ включён" : "❌ выключен"}`,
     `Страна: ${countryLabel}`,
     `Шаблоны: ${row.templateBank ?? "не выбраны"}`,
     `Папки бота: ${foldersOn} из ${folders.length}`,
+    `Папки AI: ${aiFoldersOn} из ${folders.length}`,
     "",
     "Выбери настройку ниже.",
   ].join("\n");
@@ -1620,6 +1692,7 @@ async function showChannelSettingsMenu(
     enabled: row.enabled,
     templateBank: row.templateBank,
     foldersEnabledCount: foldersOn,
+    aiFoldersEnabledCount: aiFoldersOn,
   });
   try {
     if (!messageId) {
@@ -1774,42 +1847,81 @@ async function showFoldersMenu(
   await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
-async function showAiFoldersMenu(
+async function showChannelAiFoldersMenu(
   chatId: number,
   state: ChatState,
+  channelId: string,
+  channelName: string,
   messageId?: number,
   page = 0,
 ) {
-  const folders = stripChannelNamesFromFolders(
-    state.operatorSettings?.statusFolders ?? state.statusFolders ?? [],
-    state.pagerAccount?.liveChannels,
-  );
-  if (!folders.length) {
-    await telegram.sendMessage(
-      chatId,
-      "Сначала открой 📁 папки у канала в «Каналы» и нажми «Обновить папки».",
-      buildFoldersRetryKeyboard(),
-    );
+  const ensured = await ensureStatusFolderCatalog(chatId, state);
+  if (ensured.error) {
+    await telegram.sendMessage(chatId, ensured.error, buildFoldersRetryKeyboard());
     return;
   }
+  const currentState = ensured.state;
+  const runtime = getChannelRuntime(
+    currentState,
+    channelId,
+    inferCountryFromName(channelName),
+  );
+  let menuState = currentState;
+  if (!runtime.statusFolders?.length) {
+    const seeded = resolveChannelStatusFolders(currentState, channelId);
+    menuState =
+      (await stateStore.patch(chatId, {
+        channels: {
+          ...(currentState.channels ?? {}),
+          [channelId]: {
+            ...runtime,
+            statusFolders: seeded,
+          },
+        },
+      })) ?? currentState;
+  }
 
+  const latest = (await stateStore.get(chatId)) ?? menuState;
+  const foldersState =
+    latest.channels?.[channelId]?.statusFolders?.length
+      ? latest
+      : menuState.channels?.[channelId]?.statusFolders?.length
+        ? menuState
+        : latest;
+  const folders = resolveChannelStatusFolders(foldersState, channelId);
   const aiOn = folders.filter((folder) => isAiFolderEnabled(folder)).length;
   const text = [
-    "Папки AI — где бот может отвечать через AI:",
-    "🤖 включено | ⬜ выключено",
+    `Папки AI канала «${channelName}» — где AI отвечает:`,
+    "Галочки только для этого канала.",
+    "🤖 AI вкл | ⬜ AI выкл",
     "",
     `AI включён в ${aiOn} из ${folders.length} папок`,
-    "Скрипты (обработка) — папки у каждого канала в «Каналы».",
-    "Если папку не трогали — AI повторяет настройку бота для неё.",
-    "Пример: скрипты в «Без статусу», AI только в «В процесі реєстрації».",
+    "Папки бота (скрипты) — соседняя кнопка «Папки».",
+    "Пример: скрипты в «Без статусу», AI только в «В процесі».",
   ].join("\n");
-  const keyboard = buildAiFoldersKeyboard(folders, page);
+  const keyboard = buildAiFoldersKeyboard(folders, page, channelId);
 
   if (!messageId) {
     await telegram.sendMessage(chatId, text, keyboard);
     return;
   }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
 
+/** Legacy global AI folders menu — redirects operators to per-channel settings. */
+async function showAiFoldersMenu(
+  chatId: number,
+  _state: ChatState,
+  messageId?: number,
+  _page = 0,
+) {
+  const text =
+    "Папки AI теперь у каждого канала отдельно.\nОткрой «Каналы» → канал → «Папки AI».";
+  const keyboard = buildMainMenuKeyboard();
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
   await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
@@ -2386,7 +2498,11 @@ async function dispatchMenuAction(
     return;
   }
   if (action === "ai_folders") {
-    await showAiFoldersMenu(chatId, state);
+    await telegram.sendMessage(
+      chatId,
+      "Папки AI теперь в «Каналы» → открой канал → «Папки AI». У каждого канала свой AI.",
+      buildMainMenuKeyboard(),
+    );
     return;
   }
   if (action === "status") {

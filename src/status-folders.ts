@@ -219,14 +219,40 @@ export function getAiEnabledFolderIds(state: {
   return new Set(folders.filter((folder) => isAiFolderEnabled(folder)).map((folder) => folder.id));
 }
 
+/** Per-channel AI folder ids (where AI may reply for this channel). */
+export function getChannelAiEnabledFolderIds(
+  state: {
+    statusFolders?: StatusFolderState[];
+    operatorSettings?: { statusFolders?: StatusFolderState[] };
+    channels?: Record<string, { statusFolders?: StatusFolderState[] }>;
+  },
+  channelId: string,
+): Set<string> | null {
+  const folders = resolveChannelStatusFolders(state, channelId);
+  if (!folders.length) {
+    return null;
+  }
+  const ids = new Set(folders.filter((folder) => isAiFolderEnabled(folder)).map((folder) => folder.id));
+  for (const folder of folders) {
+    if (isAiFolderEnabled(folder) && isNoStatusFolderName(folder.name)) {
+      ids.add(NO_STATUS_FOLDER_ID);
+    }
+  }
+  return ids;
+}
+
 export function isConversationInAiEnabledFolders(
   conv: PagerConversation,
   state: {
     statusFolders?: StatusFolderState[];
     operatorSettings?: { statusFolders?: StatusFolderState[] };
+    channels?: Record<string, { statusFolders?: StatusFolderState[] }>;
   },
+  channelId?: string,
 ): boolean {
-  const enabled = getAiEnabledFolderIds(state);
+  const enabled = channelId
+    ? getChannelAiEnabledFolderIds(state, channelId)
+    : getAiEnabledFolderIds(state);
   if (!enabled || enabled.size === 0) {
     return false;
   }
