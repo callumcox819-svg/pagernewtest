@@ -96,6 +96,14 @@ export function isComplexCustomerMessage(text: string): boolean {
   ) {
     return true;
   }
+  // French confusion even with short typos («Je ne comprend pas rien du tout»).
+  if (
+    /(je\s*ne\s*comprends?|je\s*comprends?\s*pas|comprends?\s*rien|rien\s*du\s*tout|pas\s*compris)/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
   return false;
 }
 

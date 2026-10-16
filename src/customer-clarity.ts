@@ -3,8 +3,8 @@
 const CLARITY_PATTERNS = [
   // Arabic
   /مش\s*فاهم|مش\s*عارف|مش\s*مقتنع|هل\s*ده\s*حق|هل\s*هذا\s*حق|ممكن\s*تشرح|اشرح\s*لي|ازاي\s*بالظبط|إزاي\s*بالظبط|مش\s*واضح|مش\s*متاك|متأكد|مضمون|نصب|احتيال|حقيق|واثق/i,
-  // French
-  /pas\s*compris|je\s*ne\s*comprends|vraiment\s*vrai|est-ce\s*(que\s*)?(vrai|s[eé]rieux|sûr|sur)|arnaque|escroc|comment\s*faire|explique|pas\s*clair/i,
+  // French (incl. phone typos: «comprend» without -s, «rien du tout»)
+  /pas\s*compris|je\s*ne\s*comprends?|je\s*comprends?\s*pas|j['’]?\s*comprends?\s*pas|rien\s*du\s*tout|ne\s*comprends?\s*pas|vraiment\s*vrai|est-ce\s*(que\s*)?(vrai|s[eé]rieux|sûr|sur)|arnaque|escroc|comment\s*faire|explique|pas\s*clair|comprends?\s*rien/i,
   // English
   /don'?t\s*understand|do\s*not\s*understand|not\s*clear|is\s*this\s*(real|true|legit|a\s*scam|scam)|are\s*you\s*sure|how\s*exactly|what\s*do\s*i\s*need|confus|scam|trust|fraud|fake|legit/i,
   // Russian / Ukrainian (common in operator chats)

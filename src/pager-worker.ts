@@ -4827,6 +4827,27 @@ async function processMgConversation(
   const outgoingTexts = collectMgOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+
+  if (
+    await tryHandleTrollCustomerToIgnore(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "MG",
+      latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      convState.funnelStep ?? 0,
+      Boolean(extractProofImageUrl(lastIncoming)),
+    )
+  ) {
+    return true;
+  }
+
   const mgNewLeadBypass =
     isNoStatusConversation(conv) &&
     !mgScriptSentInHistory(outgoingTexts, "01_intro") &&
@@ -5278,6 +5299,27 @@ async function processDjConversation(
   const outgoingTexts = collectDjOutgoingTexts(messages);
   const latestCustomerText = (lastIncoming.text || "").trim();
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+
+  if (
+    await tryHandleTrollCustomerToIgnore(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "DJ",
+      latestCustomerText,
+      recentCustomerTexts,
+      outgoingTexts,
+      convState.funnelStep ?? 0,
+      Boolean(extractProofImageUrl(lastIncoming)),
+    )
+  ) {
+    return true;
+  }
+
   const djNewLeadBypass =
     isNoStatusConversation(conv) &&
     !djScriptSentInHistory(outgoingTexts, "01_intro") &&
@@ -7393,6 +7435,20 @@ function hasTrollFunnelProgress(country: string, outgoingTexts: string[]): boole
       cmDepositSentInHistory(outgoingTexts)
     );
   }
+  if (country === "DJ") {
+    return (
+      djOfferScriptsSentInHistory(outgoingTexts) ||
+      djRegLinkSentInHistory(outgoingTexts) ||
+      djScriptSentInHistory(outgoingTexts, "03_djf_table")
+    );
+  }
+  if (country === "MG") {
+    return (
+      mgScriptSentInHistory(outgoingTexts, "03_mga_table") ||
+      mgRegLinkSentInHistory(outgoingTexts) ||
+      mgDepositSentInHistory(outgoingTexts)
+    );
+  }
   return false;
 }
 
@@ -7432,7 +7488,7 @@ async function tryHandleTrollCustomerToIgnore(
   }
 
   console.log(
-    `Pager worker: ${country} ${convId.slice(0, 8)} troll detected — moving to ignore (text=${truncate(latestCustomerText)})`,
+    `Pager worker: ${country} ${convId.slice(0, 8)} spam/troll — moving to SPAM/ignore (text=${truncate(latestCustomerText)})`,
   );
 
   const moved = await tryMoveConversationToIgnore(

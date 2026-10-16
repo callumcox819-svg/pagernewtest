@@ -11,11 +11,11 @@ import {
 import { isCustomerClarificationMessage, isLinkAccessProblemMessage } from "./customer-clarity.js";
 import { extractCmClientLoginId17 } from "./cm-proof.js";
 
-/** Markets where off-topic troll detection is enabled (French funnels). */
-export type TrollDetectionCountry = "CM" | "CL";
+/** Markets where off-topic / spam detection is enabled (French funnels). */
+export type TrollDetectionCountry = "CM" | "CL" | "DJ" | "MG";
 
 export function isTrollDetectionCountry(country: string): country is TrollDetectionCountry {
-  return country === "CM" || country === "CL";
+  return country === "CM" || country === "CL" || country === "DJ" || country === "MG";
 }
 
 const FUNNEL_TOPIC =
@@ -98,6 +98,23 @@ export function scoreOffTopicTrollMessage(text: string): number {
   if (/^(windows|nike|hyy+|lol+|mdr+|haha+)[.!\s]*$/i.test(t)) {
     score += 2;
   }
+  // Soft refusals / sob stories after the money table — not a deposit choice.
+  if (
+    /\b(orphelin|orphelins|je\s*travail+e?\s*pas|travaille?\s*pas|ch[oô]meur|pas\s*d['']?argent|n['']ai\s*pas\s*(d['']?)?argent|d[eé]sol[eé]\s*(frère|frere|ami)?)\b/i.test(
+      t,
+    )
+  ) {
+    score += 2;
+  }
+  // Short broken gibberish: «Toi Cèst», «Aussi» alone, random fragments.
+  if (
+    raw.length <= 18 &&
+    !/\d/.test(raw) &&
+    !FUNNEL_TOPIC.test(t) &&
+    !/^(oui|non|ok|d['']accord|je\s*veux|pr[eê]t|yes)\b/i.test(t)
+  ) {
+    score += 1;
+  }
   if (t.length > 80 && !FUNNEL_TOPIC.test(t) && /\b(je vous souhaite|tu veux que je|musique|vacances|famille)\b/i.test(t)) {
     score += 1;
   }
@@ -147,8 +164,18 @@ export function shouldIgnoreTrollCustomer(
     return true;
   }
 
-  // Mid-funnel: need stronger proof so we never drop real deposit/reg threads.
+  // After offer/table: short gibberish or «can't work / orphan / sorry» → SPAM, not hang unread.
   if (options.hasFunnelProgress) {
+    const joined = recent.join(" ");
+    if (
+      /\b(orphelin|orphelins|je\s*travail+e?\s*pas|travaille?\s*pas|pas\s*d['']?argent)\b/i.test(joined) &&
+      !isLegitimateCustomerMessage(latestText, funnelStep)
+    ) {
+      return true;
+    }
+    if (latestScore >= 1 && latestText.trim().length <= 18 && !/\d/.test(latestText)) {
+      return true;
+    }
     return latestScore >= 2 && offTopicHits >= 2;
   }
 

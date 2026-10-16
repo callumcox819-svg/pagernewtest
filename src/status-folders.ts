@@ -350,9 +350,17 @@ export function isRwCompletedConversation(conv: PagerConversation): boolean {
   return name.length > 0 && isRwCompletedStatusName(name);
 }
 
+export function isSpamStatusName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return /спам|\bspam\b/i.test(normalized);
+}
+
 export function isIgnoreStatusName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
-  return /^игнор$|^ignore$|игнорир|не\s*серьез|not\s*serious|troll|spam/i.test(normalized);
+  // «СПАМ» (Cyrillic) must match — /spam/ alone does not.
+  return (
+    /^игнор$|^ignore$|игнорир|не\s*серьез|not\s*serious|troll|\bspam\b|спам/i.test(normalized)
+  );
 }
 
 export function isIgnoreStatusConversation(conv: PagerConversation): boolean {
@@ -364,7 +372,17 @@ export function findIgnoreStatusId(state: {
   statusFolders?: StatusFolderState[];
   operatorSettings?: { statusFolders?: StatusFolderState[] };
 }): string | undefined {
-  for (const folder of state.operatorSettings?.statusFolders ?? state.statusFolders ?? []) {
+  const folders = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+  // Prefer explicit SPAM / СПАМ over generic «Игнор».
+  for (const folder of folders) {
+    if (!folder.id || folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
+      continue;
+    }
+    if (isSpamStatusName(folder.name)) {
+      return folder.id;
+    }
+  }
+  for (const folder of folders) {
     if (!folder.id || folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
       continue;
     }
