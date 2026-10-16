@@ -1,6 +1,6 @@
 import type { CountryCode } from "./config.js";
 import type { AppEnv } from "./env.js";
-import type { SupportSnapshot } from "./ai-support-phase.js";
+import type { SupportCountry, SupportSnapshot } from "./ai-support-phase.js";
 import { describeSupportPhase } from "./ai-support-phase.js";
 import {
   aiReplyLooksWrongLanguage,
@@ -91,7 +91,70 @@ const COUNTRY_RULES: Record<CountryCode, string> = {
   ].join(" "),
 };
 
+/** MG/DJ/JO reuse CM/EG language routing in the worker — currency rules must follow the real market. */
+const MARKET_RULES: Partial<Record<SupportCountry, string>> = {
+  MG: [
+    buildAiLanguageLockRule("CM"),
+    SERVICE_FRAMING,
+    "Market: Madagascar (MG). Currency is MGA (Ariary) ONLY.",
+    "NEVER write CFA, FCFA, francs CFA, or Cameroon deposit amounts (1 000 / 1 500 CFA).",
+    "Use amounts from the MGA table already in the thread (e.g. 5000 / 8000 / 15000 / 30000 MGA). Typical minimum deposit is 5000 MGA.",
+    "Promo in scripts is MAD778 — do not invent other promo codes.",
+    "Guide deposit on the platform (Déposer / green $). Ask for a screenshot after top-up.",
+    "Link issues: Wi‑Fi, Google Chrome — never paste a new URL.",
+    "If they say NOT registered yet / no account — do NOT ask for ID or deposit; registration scripts handle that.",
+    "On «arnaque»: calm reassurance.",
+    "Max 4 short sentences. No markdown. No URLs.",
+    buildAiLanguageLockRule("CM"),
+  ].join(" "),
+  DJ: [
+    buildAiLanguageLockRule("CM"),
+    SERVICE_FRAMING,
+    "Market: Djibouti (DJ). Currency is DJF ONLY.",
+    "NEVER write CFA, FCFA, MGA, or Cameroon/Madagascar amounts.",
+    "Use amounts from the DJF table already in the thread (e.g. 100 / 200 / 500 / 1000 DJF). Typical starter amounts are around 40–300 DJF as in scripts.",
+    "Promo in scripts is BJI777 — do not invent other promo codes.",
+    "Guide deposit on the platform. Ask for a screenshot after top-up.",
+    "Link issues: Wi‑Fi, Google Chrome — never paste a new URL.",
+    "If they say NOT registered yet / no account — do NOT ask for ID or deposit; registration scripts handle that.",
+    "On «arnaque»: calm reassurance.",
+    "Max 4 short sentences. No markdown. No URLs.",
+    buildAiLanguageLockRule("CM"),
+  ].join(" "),
+  JO: [
+    buildAiLanguageLockRule("EG"),
+    SERVICE_FRAMING,
+    "Market: Jordan (JO). Currency is JOD ONLY.",
+    "NEVER write CFA, MGA, DJF, or invent foreign currency amounts.",
+    "Use deposit amounts from the JOD table already in the thread — do not invent new amounts.",
+    "Link issues: Wi‑Fi, browser — never paste a new URL.",
+    "If they say NOT registered yet / no account — do NOT ask for ID or deposit; registration scripts handle that.",
+    "Max 4 short sentences. No markdown. No URLs.",
+    buildAiLanguageLockRule("EG"),
+  ].join(" "),
+};
+
+function resolveAiMarket(country: CountryCode, ctx?: AiAssistContext): SupportCountry {
+  return ctx?.support?.country ?? country;
+}
+
+function resolveAiLanguageCountry(market: SupportCountry): CountryCode {
+  if (market === "MG" || market === "DJ") {
+    return "CM";
+  }
+  if (market === "JO") {
+    return "EG";
+  }
+  return market;
+}
+
+function resolveAiMarketRules(country: CountryCode, ctx?: AiAssistContext): string {
+  const market = resolveAiMarket(country, ctx);
+  return MARKET_RULES[market] ?? COUNTRY_RULES[country] ?? COUNTRY_RULES.CM;
+}
+
 function buildSystemPrompt(country: CountryCode, ctx?: AiAssistContext): string {
+  const market = resolveAiMarket(country, ctx);
   const supportMode =
     ctx?.support?.active ||
     ctx?.agentTrigger === "deposit_script_just_sent" ||
@@ -100,12 +163,12 @@ function buildSystemPrompt(country: CountryCode, ctx?: AiAssistContext): string 
   const supportBlock =
     supportMode && ctx?.support
       ? [
-          `MODE: SUPPORT AGENT (${country}, post-scripts, «в процессе регистрации»).`,
+          `MODE: SUPPORT AGENT (${market}, post-scripts, «в процессе регистрации»).`,
           describeSupportPhase(ctx.support),
           "Automated scripts sent mechanical steps; YOU coach deposit, handle doubts, operator/network issues, waiting for screenshots.",
         ].join(" ")
       : supportMode
-        ? `MODE: SUPPORT AGENT (${country}) — short human follow-up after an automated script.`
+        ? `MODE: SUPPORT AGENT (${market}) — short human follow-up after an automated script.`
         : "";
 
   const baseRole = supportMode
@@ -120,7 +183,8 @@ function buildSystemPrompt(country: CountryCode, ctx?: AiAssistContext): string 
     baseRole,
     baseJob,
     supportBlock,
-    COUNTRY_RULES[country],
+    `Active market code: ${market}. Follow that market's currency and promo only.`,
+    resolveAiMarketRules(country, ctx),
     supportMode ? "" : "Max 5 short sentences. No markdown. No JSON. No URLs.",
   ]
     .filter(Boolean)
@@ -128,12 +192,25 @@ function buildSystemPrompt(country: CountryCode, ctx?: AiAssistContext): string 
 }
 
 function buildUserPrompt(ctx: AiAssistContext): string {
+  const market = resolveAiMarket(ctx.country, ctx);
+  const languageCountry = resolveAiLanguageCountry(market);
   const parts = [
-    `Country: ${ctx.country}`,
-    `Required reply language: ${describeAiMarketLanguage(ctx.country)}`,
+    `Country: ${market}`,
+    `Required reply language: ${describeAiMarketLanguage(languageCountry)}`,
     `Funnel step: ${ctx.funnelStep}`,
     `Classifier intent: ${ctx.intent}`,
   ];
+  if (market === "MG") {
+    parts.push(
+      "Currency lock: MGA only. Never mention CFA/FCFA. Match deposit amounts to the MGA table in recent outgoings.",
+    );
+  } else if (market === "DJ") {
+    parts.push(
+      "Currency lock: DJF only. Never mention CFA/FCFA/MGA. Match amounts to the DJF table in recent outgoings.",
+    );
+  } else if (market === "JO") {
+    parts.push("Currency lock: JOD only. Never mention CFA/MGA/DJF.");
+  }
   if (ctx.support?.active) {
     parts.push(`Support phase: ${ctx.support.phase}`);
   }
@@ -177,32 +254,36 @@ async function completeWithLanguageGuard(
   system: string,
   user: string | Array<{ type: string; text?: string; image_url?: { url: string } }>,
   model?: string,
+  market?: SupportCountry,
 ): Promise<string | undefined> {
   const apiKey = env.AI_API_KEY!.trim();
   const resolvedModel = model?.trim() || env.AI_MODEL;
+  const languageCountry = resolveAiLanguageCountry(market ?? country);
   let reply = sanitizeAiReply(
     await openAiChatCompletion(env, resolvedModel, system, user),
-    country,
+    languageCountry,
+    market ?? country,
   );
-  if (reply && aiReplyLooksWrongLanguage(country, reply)) {
-    console.warn(`AI assist wrong language for ${country}, retrying once`);
+  if (reply && aiReplyLooksWrongLanguage(languageCountry, reply)) {
+    console.warn(`AI assist wrong language for ${market ?? country}, retrying once`);
     reply = sanitizeAiReply(
       await openAiChatCompletion(
         env,
         resolvedModel,
         system,
         typeof user === "string"
-          ? `${user}\n\n${buildLanguageRetryUserPrompt(country)}`
+          ? `${user}\n\n${buildLanguageRetryUserPrompt(languageCountry)}`
           : [
               ...(user as Array<{ type: string; text?: string; image_url?: { url: string } }>),
-              { type: "text", text: buildLanguageRetryUserPrompt(country) },
+              { type: "text", text: buildLanguageRetryUserPrompt(languageCountry) },
             ],
       ),
-      country,
+      languageCountry,
+      market ?? country,
     );
   }
-  if (reply && aiReplyLooksWrongLanguage(country, reply)) {
-    console.warn(`AI assist still wrong language for ${country} — dropping reply`);
+  if (reply && aiReplyLooksWrongLanguage(languageCountry, reply)) {
+    console.warn(`AI assist still wrong language for ${market ?? country} — dropping reply`);
     return undefined;
   }
   return reply;
@@ -216,7 +297,7 @@ function buildVisionSystemPrompt(country: CountryCode, support?: SupportSnapshot
     "You see a customer screenshot (registration / app / deposit proof).",
     "If the image shows a Telegram/chat thread: ignore operator/bot bubbles (our scripts) — only react to the customer's new app screenshot or their caption.",
     "Do not reply to or repeat text visible from our own automated messages in the screenshot.",
-    buildSystemPrompt(country, support ? { country, support } as AiAssistContext : undefined),
+    buildSystemPrompt(country, support ? ({ country, support } as AiAssistContext) : undefined),
     supportHint,
     "Plain text reply only. No URLs.",
   ].join(" ");
@@ -288,6 +369,7 @@ async function openAiChatCompletion(
 function sanitizeAiReply(
   reply: string | undefined,
   country?: CountryCode,
+  market?: SupportCountry,
 ): string | undefined {
   if (!reply?.trim()) {
     return undefined;
@@ -297,6 +379,21 @@ function sanitizeAiReply(
     return undefined;
   }
   const trimmed = reply.trim();
+  const resolvedMarket = market ?? country;
+  if (
+    resolvedMarket === "MG" &&
+    /\b(cfa|fcfa|francs?\s*cfa)\b/i.test(trimmed)
+  ) {
+    console.warn("AI assist rejected MG reply containing CFA");
+    return undefined;
+  }
+  if (
+    resolvedMarket === "DJ" &&
+    /\b(cfa|fcfa|mga|ariary)\b/i.test(trimmed)
+  ) {
+    console.warn("AI assist rejected DJ reply containing wrong currency");
+    return undefined;
+  }
   if (country && aiReplyLooksWrongLanguage(country, trimmed)) {
     return undefined;
   }
@@ -371,11 +468,14 @@ export async function maybeAiAssistReply(
   }
 
   try {
+    const market = resolveAiMarket(ctx.country, ctx);
     return await completeWithLanguageGuard(
       env,
       ctx.country,
       buildSystemPrompt(ctx.country, ctx),
       buildUserPrompt(ctx),
+      undefined,
+      market,
     );
   } catch (error) {
     console.warn("AI assist failed:", error instanceof Error ? error.message : error);
@@ -391,17 +491,27 @@ export async function maybeAiAssistVision(
     return undefined;
   }
   const model = env.AI_VISION_MODEL?.trim() || env.AI_MODEL;
+  const market = resolveAiMarket(ctx.country, {
+    country: ctx.country,
+    support: ctx.support,
+  } as AiAssistContext);
+  const languageCountry = resolveAiLanguageCountry(market);
   const dataUrl = `data:${ctx.mimeType};base64,${ctx.imageBase64}`;
   const userParts = [
     {
       type: "text",
       text: [
-        `Country: ${ctx.country}`,
-        `Required reply language: ${describeAiMarketLanguage(ctx.country)}`,
+        `Country: ${market}`,
+        `Required reply language: ${describeAiMarketLanguage(languageCountry)}`,
         `Funnel step: ${ctx.funnelStep}`,
         `OCR/proof classifier: ${ctx.proofKind}`,
         `Caption: ${ctx.caption || "(none)"}`,
         ctx.support?.active ? `Support phase: ${ctx.support.phase}` : "",
+        market === "MG"
+          ? "Currency lock: MGA only. Never mention CFA/FCFA."
+          : market === "DJ"
+            ? "Currency lock: DJF only. Never mention CFA/MGA."
+            : "",
       ]
         .filter(Boolean)
         .join("\n"),
@@ -416,6 +526,7 @@ export async function maybeAiAssistVision(
       buildVisionSystemPrompt(ctx.country, ctx.support),
       userParts,
       model,
+      market,
     );
   } catch (error) {
     console.warn("AI vision failed:", error instanceof Error ? error.message : error);

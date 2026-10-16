@@ -517,8 +517,12 @@ export function resolveMgFunnelScripts(
   }
 
   if (!linkSent) {
-    // After the MGA table: tier pick / oui / prêt / «et alors» after pick → registration.
-    if (wantsRegistrationBundle(t, intent, effectiveStep, recentTexts)) {
+    // After the MGA table: tier pick / oui / prêt / «et alors» / «étapes» → registration.
+    if (
+      wantsRegistrationBundle(t, intent, effectiveStep, recentTexts) ||
+      isRegistrationHelpRequest(t) ||
+      wantsRegistrationLink(t)
+    ) {
       return ["04_registration", "05_link"];
     }
     return [];
