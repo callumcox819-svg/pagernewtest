@@ -191,10 +191,16 @@ export function isDjOfferTableChoice(text: string): boolean {
     return true;
   }
   const t = normalizeDjText(raw);
+  const compact = t.replace(/\s+/g, "");
+  // Phone glue: «Le1er», «le1ere»
+  if (/^(le)?(1er|1ere|2e|2eme|3e|3eme|4e|4eme|premier|premiere)\.?$/i.test(compact)) {
+    return true;
+  }
   if (
     /^(le\s+)?(1|2|3|4|1er|1ere|2e|2eme|3e|3eme|4e|4eme|premier|premiere|deuxieme|second|troisieme|quatrieme)\.?$/i.test(
       t,
-    )
+    ) ||
+    /\ble1er\b/i.test(t)
   ) {
     return true;
   }

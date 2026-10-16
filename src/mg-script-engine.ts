@@ -393,7 +393,15 @@ function wantsDepositNow(text: string, intent: MgIntent): boolean {
   );
 }
 
-function wantsRegistrationBundle(text: string, intent: MgIntent, effectiveStep: number): boolean {
+function wantsRegistrationBundle(
+  text: string,
+  intent: MgIntent,
+  effectiveStep: number,
+  recentCustomerTexts: string[] = [],
+): boolean {
+  const recentPick = recentCustomerTexts.some(
+    (line) => isMgOfferTableChoice(line) || isMgDepositAmountChoice(line),
+  );
   return (
     isReadyForRegistration(text) ||
     wantsRegistrationLink(text) ||
@@ -401,6 +409,7 @@ function wantsRegistrationBundle(text: string, intent: MgIntent, effectiveStep: 
     customerAgreedAfterOfferTable(text) ||
     isMgOfferTableChoice(text) ||
     isMgDepositAmountChoice(text) ||
+    recentPick ||
     intent === "ready" ||
     intent === "interested" ||
     intent === "positive" ||
@@ -508,8 +517,8 @@ export function resolveMgFunnelScripts(
   }
 
   if (!linkSent) {
-    // After the MGA table: tier pick / oui / prêt → registration scripts (not AI).
-    if (wantsRegistrationBundle(t, intent, effectiveStep)) {
+    // After the MGA table: tier pick / oui / prêt / «et alors» after pick → registration.
+    if (wantsRegistrationBundle(t, intent, effectiveStep, recentTexts)) {
       return ["04_registration", "05_link"];
     }
     return [];

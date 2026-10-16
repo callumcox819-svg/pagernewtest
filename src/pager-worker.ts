@@ -4859,7 +4859,8 @@ async function processMgConversation(
     !mgRegLinkSentInHistory(outgoingTexts) &&
     (isMgOfferTableChoice(latestCustomerText) ||
       isMgDepositAmountChoice(latestCustomerText) ||
-      customerAgreedAfterOfferTable(latestCustomerText));
+      customerAgreedAfterOfferTable(latestCustomerText) ||
+      recentCustomerTexts.some((line) => isMgOfferTableChoice(line)));
 
   const operatorUserId = operatorUserIdEarly;
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(

@@ -195,6 +195,11 @@ export function isMgOfferTableChoice(text: string): boolean {
     return true;
   }
   const t = normalizeMgText(raw);
+  const compact = t.replace(/\s+/g, "");
+  // Phone glue: «Le1er», «le1ere», «1er.»
+  if (/^(le)?(1er|1ere|2e|2eme|3e|3eme|4e|4eme|premier|premiere)\.?$/i.test(compact)) {
+    return true;
+  }
   // «Le premier.» / «le premier montant» / trailing emoji/punct.
   if (
     /^(le\s+)?(1|2|3|4|1er|1ere|2e|2eme|3e|3eme|4e|4eme|premier|premiere|deuxieme|second|troisieme|quatrieme)\b/i.test(
@@ -204,9 +209,10 @@ export function isMgOfferTableChoice(text: string): boolean {
     return true;
   }
   if (
-    /\b(le|la)\s+(1er|1ere|2e|2eme|3e|3eme|4e|4eme|premier|premiere|deuxieme|second|troisieme|quatrieme)\b/i.test(
+    /\b(le|la)\s*(1er|1ere|2e|2eme|3e|3eme|4e|4eme|premier|premiere|deuxieme|second|troisieme|quatrieme)\b/i.test(
       t,
-    )
+    ) ||
+    /\ble1er\b/i.test(t)
   ) {
     return true;
   }

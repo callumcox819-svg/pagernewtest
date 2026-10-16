@@ -44,11 +44,25 @@ export function customerRequestsRegistrationMaterials(text: string): boolean {
   return false;
 }
 
+/** Waiting nudge after a choice («et alors?») — continue funnel, never SPAM. */
+export function isWaitingNudgeAfterChoice(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t || t.length > 40) {
+    return false;
+  }
+  return /^(et\s*alors|et\s*puis|alors|bon|et\s*\?+|hello|allo|s['']il\s*te\s*plait|stp|svp)[.?!\s]*$/i.test(
+    t,
+  );
+}
+
 /** «Yes» / «ready» after offer table — proceed to registration, not free-form AI chat. */
 export function customerAgreedAfterOfferTable(text: string): boolean {
   const t = (text || "").trim();
   if (!t || /\b(not interested|no thanks|stop|scam|leave me alone)\b/i.test(t)) {
     return false;
+  }
+  if (isWaitingNudgeAfterChoice(t)) {
+    return true;
   }
   if (/^(yes|yeah|yep|ok|okay|okey|sure|alright|oui|d'accord|si|sí|listo|vale)[\s,!.]*$/i.test(t)) {
     return true;

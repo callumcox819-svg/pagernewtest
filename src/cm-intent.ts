@@ -120,9 +120,12 @@ export function classifyCmIntent(
   return "unknown";
 }
 
-/** «Le 2 ème», «1 er» → «2eme», «1er» so tier picks match after normalizeFrText. */
+/** «Le 2 ème», «1 er», «Le1er» → «2eme», «1er» so tier picks match after normalizeFrText. */
 function collapseFrenchOrdinals(t: string): string {
   return t
+    .replace(/\ble\s*1\s*e?r?e?\b/gi, "1er")
+    .replace(/\ble1er\b/gi, "1er")
+    .replace(/\ble1ere\b/gi, "1ere")
     .replace(/\b2\s*e?\s*me\b/g, "2eme")
     .replace(/\b1\s*e?\s*re\b/g, "1ere")
     .replace(/\b1\s*er\b/g, "1er")
@@ -307,7 +310,7 @@ export function isCmProfitFigure(text: string): boolean {
 }
 
 function isCmTier1000Choice(t: string): boolean {
-  if (/^(1er|1ere|premier|premiere)\.?$/i.test(t)) {
+  if (/^(1er|1ere|premier|premiere|le1er|le1ere)\.?$/i.test(t)) {
     return true;
   }
   if (
@@ -317,7 +320,7 @@ function isCmTier1000Choice(t: string): boolean {
   ) {
     return true;
   }
-  if (/\b(le|la)\s+(1er|premier|premiere|1ere)\b/i.test(t)) {
+  if (/\b(le|la)\s*(1er|1ere|premier|premiere)\b/i.test(t) || /\ble1er\b/i.test(t)) {
     return true;
   }
   if (/\b(1er|premier|premiere)\s+(option|choix|montant|variante)\b/i.test(t)) {
