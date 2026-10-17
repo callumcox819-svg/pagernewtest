@@ -940,13 +940,13 @@ export function buildAdminUserCardKeyboard(userId: number): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn("Посмотреть каналы", `admin:user_channels:${userId}`, {
+        inlineBtn("Каналы пользователя", `admin:uch:${userId}:0`, {
           emojiId: PREMIUM_EMOJI.channels,
           style: "primary",
         }),
       ],
       [
-        inlineBtn("Посмотреть папки", `admin:user_folders:${userId}`, {
+        inlineBtn("Папки пользователя", `admin:user_folders:${userId}`, {
           emojiId: PREMIUM_EMOJI.folder,
           style: "primary",
         }),
@@ -963,6 +963,57 @@ export function buildAdminUserCardKeyboard(userId: number): ReplyMarkup {
       ],
     ],
   };
+}
+
+export const ADMIN_CHANNELS_PAGE_SIZE = 8;
+
+export function buildAdminUserChannelsKeyboard(
+  userId: number,
+  channels: Array<{ name: string; country: string; enabled: boolean }>,
+  page = 0,
+): ReplyMarkup {
+  const totalPages = Math.max(1, Math.ceil(channels.length / ADMIN_CHANNELS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * ADMIN_CHANNELS_PAGE_SIZE;
+  const slice = channels.slice(start, start + ADMIN_CHANNELS_PAGE_SIZE);
+
+  const rows: InlineKeyboardButton[][] = slice.map((channel, offset) => {
+    const index = start + offset;
+    const mark = channel.enabled ? "✅ ВКЛ" : "⬜ ВЫКЛ";
+    const name =
+      channel.name.length > 22 ? `${channel.name.slice(0, 21)}…` : channel.name;
+    return [
+      inlineBtn(`${mark} · ${name} · ${channel.country}`, `admin:cht:${userId}:${index}`, {
+        emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+        style: channel.enabled ? "success" : undefined,
+      }),
+    ];
+  });
+
+  if (totalPages > 1) {
+    const nav: InlineKeyboardButton[] = [];
+    if (safePage > 0) {
+      nav.push(
+        inlineBtn("◀", `admin:uch:${userId}:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }),
+      );
+    }
+    nav.push(
+      inlineBtn(`${safePage + 1}/${totalPages}`, "admin:uch_noop", {
+        emojiId: PREMIUM_EMOJI.chart,
+      }),
+    );
+    if (safePage < totalPages - 1) {
+      nav.push(
+        inlineBtn("▶", `admin:uch:${userId}:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }),
+      );
+    }
+    rows.push(nav);
+  }
+
+  rows.push([
+    inlineBtn("◀️ Карточка", `admin:user:${userId}`, { emojiId: PREMIUM_EMOJI.back }),
+  ]);
+  return { inline_keyboard: rows };
 }
 
 /** @deprecated alias — use buildAdminUserCardKeyboard */

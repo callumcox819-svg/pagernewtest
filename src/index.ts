@@ -42,7 +42,9 @@ import {
   buildAdminPanelKeyboard,
   buildAdminRightsKeyboard,
   buildAdminUserCardKeyboard,
+  buildAdminUserChannelsKeyboard,
   buildAdminUsersKeyboard,
+  ADMIN_CHANNELS_PAGE_SIZE,
   buildChannelKeyboard,
   buildChannelSettingsKeyboard,
   buildCountryKeyboard,
@@ -72,7 +74,6 @@ import {
   parseTelegramUserId,
   revokeAdminRights,
   revokeBotAccess,
-  formatAdminEnabledChannels,
   formatAdminEnabledFolders,
   summarizeOperatorForAdmin,
 } from "./bot-access.js";
@@ -300,10 +301,10 @@ async function handleCallback(
   }
 
   const state = await getOrCreateState(chatId);
-  const { kind, value, extra } = parseCallbackData(data);
+  const { kind, value, extra, tail } = parseCallbackData(data);
 
   if (kind === "admin") {
-    await handleAdminCallback(chatId, callbackId, value, extra, messageId);
+    await handleAdminCallback(chatId, callbackId, value, extra, messageId, tail);
     return;
   }
 
@@ -1385,13 +1386,20 @@ function getEffectiveChannel(state: ChatState) {
   };
 }
 
-function parseCallbackData(data: string): { kind: string; value: string; extra?: string } {
-  if (data.includes("|")) {
-    const [kind, value, extra] = data.split("|");
-    return { kind: kind ?? "", value: value ?? "", extra };
-  }
-  const [kind, value, extra] = data.split(":");
-  return { kind: kind ?? "", value: value ?? "", extra };
+function parseCallbackData(data: string): {
+  kind: string;
+  value: string;
+  extra?: string;
+  tail?: string[];
+} {
+  const sep = data.includes("|") ? "|" : ":";
+  const parts = data.split(sep);
+  return {
+    kind: parts[0] ?? "",
+    value: parts[1] ?? "",
+    extra: parts[2],
+    tail: parts.length > 3 ? parts.slice(3) : undefined,
+  };
 }
 
 function getSelectableRowForChannel(
@@ -2453,6 +2461,7 @@ async function handleAdminCallback(
   value: string,
   extra: string | undefined,
   messageId?: number,
+  tail: string[] = [],
 ): Promise<void> {
   if (!(await requireAdmin(chatId, callbackId))) {
     return;
@@ -2470,7 +2479,7 @@ async function handleAdminCallback(
     return;
   }
 
-  if (value === "users_noop") {
+  if (value === "users_noop" || value === "uch_noop") {
     await telegram.answerCallbackQuery(callbackId);
     return;
   }
@@ -2485,6 +2494,32 @@ async function handleAdminCallback(
     const targetId = Number(extra);
     await telegram.answerCallbackQuery(callbackId);
     await showAdminUserCard(chatId, targetId, messageId);
+    return;
+  }
+
+  // admin:uch:userId:page — list all channels as toggle buttons
+  if (value === "uch" && extra) {
+    const targetId = Number(extra);
+    const page = Number(tail[0] ?? 0) || 0;
+    await telegram.answerCallbackQuery(callbackId);
+    await showAdminUserChannelsMenu(chatId, targetId, messageId, page);
+    return;
+  }
+
+  // admin:cht:userId:index — toggle channel enabled for that user
+  if (value === "cht" && extra && tail[0] !== undefined) {
+    const targetId = Number(extra);
+    const index = Number(tail[0]);
+    await toggleAdminTargetChannel(chatId, callbackId, targetId, index, messageId);
+    return;
+  }
+
+  // legacy alias from older button
+  if (value === "user_channels" && extra) {
+    const targetId = Number(extra);
+    const page = Number(tail[0] ?? 0) || 0;
+    await telegram.answerCallbackQuery(callbackId);
+    await showAdminUserChannelsMenu(chatId, targetId, messageId, page);
     return;
   }
 
@@ -2550,13 +2585,6 @@ async function handleAdminCallback(
       `Всего с доступом: ${snapshot.allowed.length}`,
     ].join("\n");
     await telegram.sendMessage(chatId, text, buildAdminRightsKeyboard());
-    return;
-  }
-
-  if (value === "user_channels" && extra) {
-    const targetId = Number(extra);
-    await telegram.answerCallbackQuery(callbackId);
-    await sendAdminUserChannels(chatId, targetId);
     return;
   }
 
@@ -2740,7 +2768,56 @@ async function showAdminUserCard(
   await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
-async function sendAdminUserChannels(chatId: number, targetId: number): Promise<void> {
+function listAdminTargetChannels(state: ChatState): Array<{
+  id: string;
+  name: string;
+  country: string;
+  enabled: boolean;
+}> {
+  const live = state.pagerAccount?.liveChannels ?? [];
+  const byId = new Map<string, { id: string; name: string; country: string }>();
+
+  for (const channel of live) {
+    byId.set(channel.id, {
+      id: channel.id,
+      name: channel.name,
+      country: inferCountryFromName(channel.name),
+    });
+  }
+  for (const [channelId, row] of Object.entries(state.channels ?? {})) {
+    if (!byId.has(channelId)) {
+      byId.set(channelId, {
+        id: channelId,
+        name: channelId.slice(0, 8),
+        country: row.country,
+      });
+    }
+  }
+
+  return [...byId.values()]
+    .map((channel) => {
+      const runtime = getChannelRuntime(state, channel.id, channel.country);
+      return {
+        id: channel.id,
+        name: channel.name,
+        country: runtime.country || channel.country,
+        enabled: isChannelEnabled(state, channel.id, runtime.enabled),
+      };
+    })
+    .sort((left, right) => {
+      if (left.enabled !== right.enabled) {
+        return left.enabled ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name, "ru");
+    });
+}
+
+async function showAdminUserChannelsMenu(
+  chatId: number,
+  targetId: number,
+  messageId?: number,
+  page = 0,
+): Promise<void> {
   const targetState = await stateStore.get(targetId);
   if (!targetState) {
     await telegram.sendMessage(
@@ -2750,8 +2827,47 @@ async function sendAdminUserChannels(chatId: number, targetId: number): Promise<
     );
     return;
   }
-  const text = [`Каналы ${targetId}`, "", formatAdminEnabledChannels(targetState)].join("\n");
-  await telegram.sendMessage(chatId, text, buildAdminUserCardKeyboard(targetId));
+  const channels = listAdminTargetChannels(targetState);
+  const on = channels.filter((channel) => channel.enabled).length;
+  const text = [
+    `Каналы пользователя ${targetId}`,
+    `Включено: ${on} из ${channels.length}`,
+    "Нажми канал — вкл/выкл у этого пользователя.",
+  ].join("\n");
+  const keyboard = buildAdminUserChannelsKeyboard(targetId, channels, page);
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function toggleAdminTargetChannel(
+  adminChatId: number,
+  callbackId: string,
+  targetId: number,
+  index: number,
+  messageId?: number,
+): Promise<void> {
+  const targetState = await stateStore.get(targetId);
+  if (!targetState) {
+    await telegram.answerCallbackQuery(callbackId, "Нет state");
+    return;
+  }
+  const channels = listAdminTargetChannels(targetState);
+  const channel = channels[index];
+  if (!channel) {
+    await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+    return;
+  }
+  const nextEnabled = !channel.enabled;
+  await setChannelEnabled(targetId, targetState, channel.id, nextEnabled);
+  await telegram.answerCallbackQuery(
+    callbackId,
+    nextEnabled ? `✅ ${channel.name}` : `⬜ ${channel.name}`,
+  );
+  const page = Math.floor(index / ADMIN_CHANNELS_PAGE_SIZE);
+  await showAdminUserChannelsMenu(adminChatId, targetId, messageId, page);
 }
 
 async function sendAdminUserFolders(chatId: number, targetId: number): Promise<void> {
