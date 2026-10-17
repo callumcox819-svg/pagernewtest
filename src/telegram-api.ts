@@ -796,35 +796,120 @@ export function buildFoldersRetryKeyboard(): ReplyMarkup {
   };
 }
 
-export function buildMainMenuKeyboard(): ReplyMarkup {
+export function buildMainMenuKeyboard(options?: { isAdmin?: boolean }): ReplyMarkup {
+  const rows: InlineKeyboardButton[][] = [
+    [
+      inlineBtn("Pager аккаунт", "menu:pager_account", {
+        emojiId: PREMIUM_EMOJI.lock,
+        style: "primary",
+      }),
+      inlineBtn("Каналы", "menu:channels", {
+        emojiId: PREMIUM_EMOJI.channels,
+        style: "primary",
+      }),
+    ],
+    [
+      inlineBtn("Статус", "menu:status", {
+        emojiId: PREMIUM_EMOJI.status,
+        style: "success",
+      }),
+      inlineBtn("Статистика", "menu:stats", {
+        emojiId: PREMIUM_EMOJI.chart,
+        style: "primary",
+      }),
+    ],
+    [
+      inlineBtn("Сброс", "menu:reset", {
+        emojiId: PREMIUM_EMOJI.reset,
+        style: "danger",
+      }),
+    ],
+  ];
+  if (options?.isAdmin) {
+    rows.push([
+      inlineBtn("Админ-панель", "menu:admin", {
+        emojiId: PREMIUM_EMOJI.lock,
+        style: "primary",
+      }),
+    ]);
+  }
+  return { inline_keyboard: rows };
+}
+
+export function buildAdminPanelKeyboard(): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn("Pager аккаунт", "menu:pager_account", {
-          emojiId: PREMIUM_EMOJI.lock,
-          style: "primary",
-        }),
-        inlineBtn("Каналы", "menu:channels", {
-          emojiId: PREMIUM_EMOJI.channels,
-          style: "primary",
-        }),
-      ],
-      [
-        inlineBtn("Статус", "menu:status", {
-          emojiId: PREMIUM_EMOJI.status,
-          style: "success",
-        }),
-        inlineBtn("Статистика", "menu:stats", {
+        inlineBtn("Статистика пользователей", "admin:stats", {
           emojiId: PREMIUM_EMOJI.chart,
           style: "primary",
         }),
       ],
       [
-        inlineBtn("Сброс", "menu:reset", {
-          emojiId: PREMIUM_EMOJI.reset,
+        inlineBtn("Доступ к боту", "admin:grant_access", {
+          emojiId: PREMIUM_EMOJI.check,
+          style: "success",
+        }),
+      ],
+      [
+        inlineBtn("Забрать доступ", "admin:revoke_access", {
+          emojiId: PREMIUM_EMOJI.cross,
           style: "danger",
         }),
       ],
+      [
+        inlineBtn("Админ-права (панель)", "admin:rights", {
+          emojiId: PREMIUM_EMOJI.lock,
+          style: "primary",
+        }),
+      ],
+      [inlineBtn("◀️ В меню", "menu:main", { emojiId: PREMIUM_EMOJI.back })],
+    ],
+  };
+}
+
+export function buildAdminRightsKeyboard(): ReplyMarkup {
+  return {
+    inline_keyboard: [
+      [
+        inlineBtn("Выдать админку", "admin:grant_admin", {
+          emojiId: PREMIUM_EMOJI.check,
+          style: "success",
+        }),
+      ],
+      [
+        inlineBtn("Снять админку", "admin:revoke_admin", {
+          emojiId: PREMIUM_EMOJI.cross,
+          style: "danger",
+        }),
+      ],
+      [
+        inlineBtn("Список админов", "admin:list_admins", {
+          emojiId: PREMIUM_EMOJI.chart,
+          style: "primary",
+        }),
+      ],
+      [inlineBtn("◀️ Админ-панель", "admin:panel", { emojiId: PREMIUM_EMOJI.back })],
+    ],
+  };
+}
+
+export function buildAdminUserStatsKeyboard(userId: number): ReplyMarkup {
+  return {
+    inline_keyboard: [
+      [
+        inlineBtn("Показать каналы пользователя", `admin:user_channels|${userId}`, {
+          emojiId: PREMIUM_EMOJI.channels,
+          style: "primary",
+        }),
+      ],
+      [
+        inlineBtn("Забрать доступ", `admin:revoke_user|${userId}`, {
+          emojiId: PREMIUM_EMOJI.cross,
+          style: "danger",
+        }),
+      ],
+      [inlineBtn("◀️ Админ-панель", "admin:panel", { emojiId: PREMIUM_EMOJI.back })],
     ],
   };
 }
@@ -907,18 +992,22 @@ export function buildStatsIntervalKeyboard(currentHours: number): ReplyMarkup {
 }
 
 /** Нижняя reply-клавиатура с premium emoji (Bot API 9.4+). */
-export function buildOperatorReplyKeyboard(): ReplyMarkup {
-  return {
-    keyboard: [
-      [
-        replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
-        replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
-      ],
-      [
-        replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
-        replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart, style: "primary" }),
-      ],
+export function buildOperatorReplyKeyboard(options?: { isAdmin?: boolean }): ReplyMarkup {
+  const rows: ReplyKeyboardButton[][] = [
+    [
+      replyBtn("Pager аккаунт", { emojiId: PREMIUM_EMOJI.lock, style: "primary" }),
+      replyBtn("Каналы", { emojiId: PREMIUM_EMOJI.channels, style: "primary" }),
     ],
+    [
+      replyBtn("Статус", { emojiId: PREMIUM_EMOJI.status, style: "success" }),
+      replyBtn("Статистика", { emojiId: PREMIUM_EMOJI.chart, style: "primary" }),
+    ],
+  ];
+  if (options?.isAdmin) {
+    rows.push([replyBtn("Админ-панель", { emojiId: PREMIUM_EMOJI.lock, style: "primary" })]);
+  }
+  return {
+    keyboard: rows,
     resize_keyboard: true,
     is_persistent: true,
   };

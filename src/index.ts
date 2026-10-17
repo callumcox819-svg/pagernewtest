@@ -39,6 +39,9 @@ import {
 import { applyPagerPause } from "./pager-pause.js";
 import {
   TelegramApi,
+  buildAdminPanelKeyboard,
+  buildAdminRightsKeyboard,
+  buildAdminUserStatsKeyboard,
   buildChannelKeyboard,
   buildChannelSettingsKeyboard,
   buildCountryKeyboard,
@@ -58,6 +61,18 @@ import {
   type TelegramMessage,
   type TelegramUpdate,
 } from "./telegram-api.js";
+import {
+  ensureAccessSeeded,
+  getAccessSnapshot,
+  grantAdminRights,
+  grantBotAccess,
+  hasBotAccess,
+  isAdmin,
+  parseTelegramUserId,
+  revokeAdminRights,
+  revokeBotAccess,
+  summarizeOperatorForAdmin,
+} from "./bot-access.js";
 import {
   configureXPartnersSessionStore,
   getXPartnersClient,
@@ -163,9 +178,11 @@ async function main() {
   stateStore = await createStateStore(env);
   appMetaStore = await createAppMetaStore(env);
   configureXPartnersSessionStore(appMetaStore);
+  await ensureAccessSeeded(env, appMetaStore, stateStore);
   console.log(`Starting ${env.TELEGRAM_BOT_NAME} build=${getDeployLabel()}...`);
   await telegram.setMyCommands([
     { command: "start", description: "Открыть меню" },
+    { command: "admin", description: "Админ-панель" },
     { command: "pause", description: "Пауза авто-ответов" },
     { command: "reset_pause", description: "Снять паузу" },
     { command: "learn", description: "RW: авто-воронка (справка)" },
@@ -180,7 +197,7 @@ async function main() {
 
   await Promise.all([
     runTelegramBot(),
-    runPagerWorker({ env, config, stateStore, telegram }),
+    runPagerWorker({ env, config, stateStore, telegram, appMetaStore }),
   ]);
 }
 
@@ -274,8 +291,18 @@ async function handleCallback(
     return;
   }
 
+  if (!(await ensureChatAllowed(chatId))) {
+    await telegram.answerCallbackQuery(callbackId, "Нет доступа");
+    return;
+  }
+
   const state = await getOrCreateState(chatId);
   const { kind, value, extra } = parseCallbackData(data);
+
+  if (kind === "admin") {
+    await handleAdminCallback(chatId, callbackId, value, extra, messageId);
+    return;
+  }
 
   if (kind === "channels") {
     if (value === "all_on" || value === "all_off") {
@@ -964,13 +991,18 @@ async function handleCallback(
       return;
     }
 
+    if (value === "admin") {
+      await showAdminPanel(chatId, messageId);
+      return;
+    }
+
     if (value === "reset") {
       await stateStore.delete(chatId);
       const nextState = await getOrCreateState(chatId);
       await telegram.sendMessage(
         chatId,
         `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
-        buildMainMenuKeyboard(),
+        await menuKeyboard(chatId),
       );
       return;
     }
@@ -1082,6 +1114,23 @@ async function handleCallback(
 
 async function handleMessage(message: TelegramMessage) {
   const chatId = message.chat.id;
+  const text = message.text?.trim() ?? "";
+
+  // Access gate — /start and /admin still reach the denial message helpers.
+  if (!(await hasBotAccess(env, appMetaStore, chatId))) {
+    if (text.startsWith("/start") || text.startsWith("/admin") || !text) {
+      await telegram.sendMessage(
+        chatId,
+        [
+          "⛔ Доступ к боту закрыт.",
+          `Твой Telegram ID: ${chatId}`,
+          "Напиши владельцу — он выдаст доступ в админ-панели.",
+        ].join("\n"),
+      );
+    }
+    return;
+  }
+
   const state = await getOrCreateState(chatId);
 
   if (message.text?.startsWith("/")) {
@@ -1196,7 +1245,22 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
   const command = normalizeTelegramCommand(commandText);
 
   if (command === "/start") {
+    if (state.pendingAction) {
+      await stateStore.patch(chatId, { pendingAction: undefined });
+    }
     await sendMainMenu(chatId, state);
+    return;
+  }
+
+  if (command === "/admin") {
+    if (state.pendingAction) {
+      await stateStore.patch(chatId, { pendingAction: undefined });
+    }
+    if (!(await isAdmin(env, appMetaStore, chatId))) {
+      await telegram.sendMessage(chatId, "⛔ Админ-панель только для админов.");
+      return;
+    }
+    await showAdminPanel(chatId);
     return;
   }
 
@@ -2118,6 +2182,10 @@ async function handlePendingInput(
   state: ChatState,
   text: string,
 ): Promise<boolean> {
+  if (await handleAdminPendingInput(chatId, state, text)) {
+    return true;
+  }
+
   if (state.pendingAction === "await_pager_email") {
     await stateStore.patch(chatId, {
       draftPagerEmail: text.trim(),
@@ -2316,17 +2384,313 @@ async function handlePendingInput(
   return false;
 }
 
+async function menuKeyboard(chatId: number) {
+  const admin = await isAdmin(env, appMetaStore, chatId);
+  return buildMainMenuKeyboard({ isAdmin: admin });
+}
+
+async function replyMenuKeyboard(chatId: number) {
+  const admin = await isAdmin(env, appMetaStore, chatId);
+  return buildOperatorReplyKeyboard({ isAdmin: admin });
+}
+
+async function ensureChatAllowed(chatId: number): Promise<boolean> {
+  return hasBotAccess(env, appMetaStore, chatId);
+}
+
 async function sendMainMenu(chatId: number, state: ChatState, messageId?: number) {
   const text = buildMainMenuCaption(state);
-  const keyboard = buildMainMenuKeyboard();
+  const keyboard = await menuKeyboard(chatId);
   if (!messageId) {
     await telegram.sendMessage(chatId, text, keyboard);
     await telegram
-      .sendMessage(chatId, "Меню", buildOperatorReplyKeyboard())
+      .sendMessage(chatId, "Меню", await replyMenuKeyboard(chatId))
       .catch(() => {});
     return;
   }
   await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function showAdminPanel(chatId: number, messageId?: number): Promise<void> {
+  if (!(await isAdmin(env, appMetaStore, chatId))) {
+    await telegram.sendMessage(chatId, "⛔ Админ-панель только для админов.");
+    return;
+  }
+  const snapshot = await getAccessSnapshot(env, appMetaStore);
+  const text = [
+    "👤 Админ-панель",
+    `Доступ: ${snapshot.allowed.length} польз.`,
+    `Админы: ${snapshot.admins.length}`,
+    `Владельцы (env): ${snapshot.owners.length ? snapshot.owners.join(", ") : "не заданы — добавь BOT_OWNER_IDS"}`,
+    "",
+    "Выбери действие ниже.",
+  ].join("\n");
+  const keyboard = buildAdminPanelKeyboard();
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function requireAdmin(chatId: number, callbackId?: string): Promise<boolean> {
+  if (await isAdmin(env, appMetaStore, chatId)) {
+    return true;
+  }
+  if (callbackId) {
+    await telegram.answerCallbackQuery(callbackId, "Нет прав админа");
+  }
+  await telegram.sendMessage(chatId, "⛔ Только для админов.");
+  return false;
+}
+
+async function handleAdminCallback(
+  chatId: number,
+  callbackId: string,
+  value: string,
+  extra: string | undefined,
+  messageId?: number,
+): Promise<void> {
+  if (!(await requireAdmin(chatId, callbackId))) {
+    return;
+  }
+
+  if (value === "panel") {
+    await telegram.answerCallbackQuery(callbackId);
+    await showAdminPanel(chatId, messageId);
+    return;
+  }
+
+  if (value === "stats") {
+    await stateStore.patch(chatId, { pendingAction: "await_admin_stats_id" });
+    await telegram.answerCallbackQuery(callbackId);
+    await telegram.sendMessage(
+      chatId,
+      "📊 Статистика пользователей\nОтправь Telegram ID пользователя (число).\nОтмена: /start",
+    );
+    return;
+  }
+
+  if (value === "grant_access") {
+    await stateStore.patch(chatId, { pendingAction: "await_admin_grant_access_id" });
+    await telegram.answerCallbackQuery(callbackId);
+    await telegram.sendMessage(
+      chatId,
+      "✅ Доступ к боту\nОтправь Telegram ID, кому выдать доступ.\nОтмена: /start",
+    );
+    return;
+  }
+
+  if (value === "revoke_access") {
+    await stateStore.patch(chatId, { pendingAction: "await_admin_revoke_access_id" });
+    await telegram.answerCallbackQuery(callbackId);
+    await telegram.sendMessage(
+      chatId,
+      "❌ Забрать доступ\nОтправь Telegram ID пользователя.\nОтмена: /start",
+    );
+    return;
+  }
+
+  if (value === "rights") {
+    await telegram.answerCallbackQuery(callbackId);
+    const text = "⭐ Админ-права\nВыдать / снять право открывать эту панель.";
+    if (!messageId) {
+      await telegram.sendMessage(chatId, text, buildAdminRightsKeyboard());
+      return;
+    }
+    await safeEditMenu(chatId, messageId, text, buildAdminRightsKeyboard());
+    return;
+  }
+
+  if (value === "grant_admin") {
+    await stateStore.patch(chatId, { pendingAction: "await_admin_grant_admin_id" });
+    await telegram.answerCallbackQuery(callbackId);
+    await telegram.sendMessage(chatId, "Выдай админку — отправь Telegram ID.\nОтмена: /start");
+    return;
+  }
+
+  if (value === "revoke_admin") {
+    await stateStore.patch(chatId, { pendingAction: "await_admin_revoke_admin_id" });
+    await telegram.answerCallbackQuery(callbackId);
+    await telegram.sendMessage(chatId, "Снять админку — отправь Telegram ID.\nОтмена: /start");
+    return;
+  }
+
+  if (value === "list_admins") {
+    await telegram.answerCallbackQuery(callbackId);
+    const snapshot = await getAccessSnapshot(env, appMetaStore);
+    const text = [
+      "⭐ Админы",
+      `Владельцы: ${snapshot.owners.join(", ") || "—"}`,
+      `Админы: ${snapshot.admins.join(", ") || "—"}`,
+      `Всего с доступом: ${snapshot.allowed.length}`,
+    ].join("\n");
+    await telegram.sendMessage(chatId, text, buildAdminRightsKeyboard());
+    return;
+  }
+
+  if (value === "user_channels" && extra) {
+    const targetId = Number(extra);
+    await telegram.answerCallbackQuery(callbackId);
+    await sendAdminUserChannels(chatId, targetId);
+    return;
+  }
+
+  if (value === "revoke_user" && extra) {
+    const targetId = Number(extra);
+    const result = await revokeBotAccess(env, appMetaStore, targetId);
+    await telegram.answerCallbackQuery(
+      callbackId,
+      result.ok ? "Доступ забран" : result.reason ?? "Ошибка",
+    );
+    await telegram.sendMessage(
+      chatId,
+      result.ok
+        ? `❌ Доступ у ${targetId} забран. Worker больше не обрабатывает его каналы.`
+        : `Не удалось: ${result.reason}`,
+      buildAdminPanelKeyboard(),
+    );
+    return;
+  }
+
+  await telegram.answerCallbackQuery(callbackId, "Неизвестное действие");
+}
+
+async function handleAdminPendingInput(
+  chatId: number,
+  state: ChatState,
+  text: string,
+): Promise<boolean> {
+  const action = state.pendingAction;
+  if (
+    action !== "await_admin_stats_id" &&
+    action !== "await_admin_grant_access_id" &&
+    action !== "await_admin_revoke_access_id" &&
+    action !== "await_admin_grant_admin_id" &&
+    action !== "await_admin_revoke_admin_id"
+  ) {
+    return false;
+  }
+
+  if (!(await isAdmin(env, appMetaStore, chatId))) {
+    await stateStore.patch(chatId, { pendingAction: undefined });
+    await telegram.sendMessage(chatId, "⛔ Нет прав админа.");
+    return true;
+  }
+
+  if (/^\/(start|admin|cancel)/i.test(text.trim())) {
+    await stateStore.patch(chatId, { pendingAction: undefined });
+    return false;
+  }
+
+  const targetId = parseTelegramUserId(text);
+  if (targetId === undefined) {
+    await telegram.sendMessage(chatId, "Нужен числовой Telegram ID. Пример: 5719081592");
+    return true;
+  }
+
+  await stateStore.patch(chatId, { pendingAction: undefined });
+
+  if (action === "await_admin_stats_id") {
+    const targetState = await stateStore.get(targetId);
+    const hasAccess = await hasBotAccess(env, appMetaStore, targetId);
+    const admin = await isAdmin(env, appMetaStore, targetId);
+    const textOut = [
+      summarizeOperatorForAdmin(targetState, targetId),
+      "",
+      `Доступ к боту: ${hasAccess ? "✅ есть" : "❌ нет"}`,
+      `Админ: ${admin ? "✅ да" : "нет"}`,
+    ].join("\n");
+    await telegram.sendMessage(chatId, textOut, buildAdminUserStatsKeyboard(targetId));
+    return true;
+  }
+
+  if (action === "await_admin_grant_access_id") {
+    await grantBotAccess(env, appMetaStore, targetId);
+    await telegram.sendMessage(
+      chatId,
+      `✅ Доступ выдан пользователю ${targetId}.\nПусть напишет /start.`,
+      buildAdminPanelKeyboard(),
+    );
+    return true;
+  }
+
+  if (action === "await_admin_revoke_access_id") {
+    const result = await revokeBotAccess(env, appMetaStore, targetId);
+    await telegram.sendMessage(
+      chatId,
+      result.ok ? `❌ Доступ у ${targetId} забран.` : `Не удалось: ${result.reason}`,
+      buildAdminPanelKeyboard(),
+    );
+    return true;
+  }
+
+  if (action === "await_admin_grant_admin_id") {
+    const result = await grantAdminRights(env, appMetaStore, targetId);
+    await telegram.sendMessage(
+      chatId,
+      result.ok
+        ? `⭐ Админка выдана ${targetId}. У него появится «Админ-панель».`
+        : `Не удалось: ${result.reason}`,
+      buildAdminRightsKeyboard(),
+    );
+    return true;
+  }
+
+  if (action === "await_admin_revoke_admin_id") {
+    const result = await revokeAdminRights(env, appMetaStore, targetId);
+    await telegram.sendMessage(
+      chatId,
+      result.ok ? `Админка снята с ${targetId}.` : `Не удалось: ${result.reason}`,
+      buildAdminRightsKeyboard(),
+    );
+    return true;
+  }
+
+  return false;
+}
+
+async function sendAdminUserChannels(chatId: number, targetId: number): Promise<void> {
+  const targetState = await stateStore.get(targetId);
+  if (!targetState) {
+    await telegram.sendMessage(
+      chatId,
+      `У ${targetId} нет сохранённого state — каналов нет.`,
+      buildAdminUserStatsKeyboard(targetId),
+    );
+    return;
+  }
+
+  const channels = Object.entries(targetState.channels ?? {});
+  const enabled = channels.filter(([, row]) => row.enabled);
+  const live = targetState.pagerAccount?.liveChannels ?? [];
+  const lines = [
+    `📁 Каналы пользователя ${targetId}`,
+    `Включено: ${enabled.length} / всего в state: ${channels.length}`,
+    "",
+  ];
+
+  if (!enabled.length) {
+    lines.push("Нет включённых каналов.");
+  } else {
+    for (const [channelId, row] of enabled) {
+      const name = live.find((channel) => channel.id === channelId)?.name ?? channelId;
+      const folders = row.statusFolders ?? [];
+      const botFolders = folders.filter((folder) => folder.enabled).map((folder) => folder.name);
+      const aiFolders = folders
+        .filter((folder) => folder.aiEnabled ?? folder.enabled)
+        .map((folder) => folder.name);
+      lines.push(`• ${name}`);
+      lines.push(`  geo=${row.country} · шаблоны=${row.templateBank ?? "—"}`);
+      lines.push(
+        `  папки бота (${botFolders.length}): ${botFolders.slice(0, 8).join(", ") || "—"}`,
+      );
+      lines.push(`  папки AI (${aiFolders.length}): ${aiFolders.slice(0, 8).join(", ") || "—"}`);
+      lines.push("");
+    }
+  }
+
+  await telegram.sendMessage(chatId, lines.join("\n").trim(), buildAdminUserStatsKeyboard(targetId));
 }
 
 function buildMainMenuCaption(state: ChatState): string {
@@ -2422,7 +2786,8 @@ type MenuAction =
   | "status"
   | "stats"
   | "learn"
-  | "reset";
+  | "reset"
+  | "admin";
 
 const XP_STATS_COUNTRIES: XPartnersCountry[] = ["CM", "EG", "ZM", "RW"];
 
@@ -2465,6 +2830,9 @@ function resolveMenuTextAction(text?: string): MenuAction | undefined {
   if (/^сброс$|^reset$/.test(normalized)) {
     return "reset";
   }
+  if (/админ|admin/.test(normalized)) {
+    return "admin";
+  }
   if (/^меню$|^menu$|^start$/.test(normalized)) {
     return "main";
   }
@@ -2481,6 +2849,10 @@ async function dispatchMenuAction(
     await sendMainMenu(chatId, state, messageId);
     return;
   }
+  if (action === "admin") {
+    await showAdminPanel(chatId, messageId);
+    return;
+  }
   if (action === "pager_account") {
     await sendPagerAccountMenu(chatId, state);
     return;
@@ -2493,7 +2865,7 @@ async function dispatchMenuAction(
     await telegram.sendMessage(
       chatId,
       "Папки обработки теперь в «Каналы» — кнопка 📁 у каждого канала (рядом с шаблонами).",
-      buildMainMenuKeyboard(),
+      await menuKeyboard(chatId),
     );
     return;
   }

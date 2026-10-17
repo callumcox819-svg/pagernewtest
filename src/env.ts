@@ -4,6 +4,12 @@ import { z } from "zod";
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_BOT_NAME: z.string().default("Pager Test Bot"),
+  /** Telegram user/chat IDs — owners (comma/space). Always admin + access; cannot revoke via panel. */
+  BOT_OWNER_IDS: z.string().default(""),
+  /** Extra admins via env (comma/space). Can also grant admins in the admin panel. */
+  BOT_ADMIN_IDS: z.string().default(""),
+  /** Extra allowlisted users via env (comma/space). Panel grants go to app-meta. */
+  BOT_ALLOWED_IDS: z.string().default(""),
   PAGER_BASE_URL: z.string().url().default("https://api.pager.co.ua"),
   /** Web UI origin for Referer/HTML warm-up (login pages stay on www). */
   PAGER_WEB_URL: z

@@ -426,12 +426,15 @@ import {
 } from "./status-folders.js";
 import type { TemplateRole } from "./config.js";
 import type { TelegramApi } from "./telegram-api.js";
+import type { AppMetaStore } from "./app-meta-store.js";
+import { hasBotAccess } from "./bot-access.js";
 
 type WorkerDeps = {
   env: AppEnv;
   config: BotConfig;
   stateStore: StateStore;
   telegram: TelegramApi;
+  appMetaStore?: AppMetaStore;
 };
 
 const MAX_SEND_FAILURES = 5;
@@ -516,7 +519,25 @@ async function processPagerAccounts(deps: WorkerDeps): Promise<void> {
     return;
   }
 
-  const ordered = [...connected].sort((left, right) => {
+  const allowedConnected: ChatState[] = [];
+  for (const state of connected) {
+    if (!deps.appMetaStore) {
+      allowedConnected.push(state);
+      continue;
+    }
+    if (await hasBotAccess(deps.env, deps.appMetaStore, state.chatId)) {
+      allowedConnected.push(state);
+      continue;
+    }
+    console.log(`Pager worker: skip chat ${state.chatId} — no bot access`);
+  }
+
+  if (!allowedConnected.length) {
+    console.log("Pager worker: connected accounts have no bot access");
+    return;
+  }
+
+  const ordered = [...allowedConnected].sort((left, right) => {
     const leftEgCm = accountHasEgOrCm(left, deps.config);
     const rightEgCm = accountHasEgOrCm(right, deps.config);
     if (leftEgCm !== rightEgCm) {

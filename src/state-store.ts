@@ -9,7 +9,12 @@ import type { StatusFolderState } from "./status-folders.js";
 export type PendingAction =
   | "await_pager_email"
   | "await_pager_password"
-  | "await_pager_cookies";
+  | "await_pager_cookies"
+  | "await_admin_stats_id"
+  | "await_admin_grant_access_id"
+  | "await_admin_revoke_access_id"
+  | "await_admin_grant_admin_id"
+  | "await_admin_revoke_admin_id";
 
 export type PagerAccountState = {
   authMode: "credentials" | "cookies";
