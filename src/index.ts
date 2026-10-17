@@ -2772,11 +2772,11 @@ async function showAdminUserCard(
 function listAdminTargetChannels(state: ChatState): Array<{
   id: string;
   name: string;
-  country: string;
+  country: WorkerCountry;
   enabled: boolean;
 }> {
   const live = state.pagerAccount?.liveChannels ?? [];
-  const byId = new Map<string, { id: string; name: string; country: string }>();
+  const byId = new Map<string, { id: string; name: string; country: WorkerCountry }>();
 
   for (const channel of live) {
     byId.set(channel.id, {
