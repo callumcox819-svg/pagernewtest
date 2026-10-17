@@ -2421,7 +2421,7 @@ async function showAdminPanel(chatId: number, messageId?: number): Promise<void>
     "👤 Админ-панель",
     `Доступ: ${snapshot.allowed.length} польз.`,
     `Админы: ${snapshot.admins.length}`,
-    `Владельцы (env): ${snapshot.owners.length ? snapshot.owners.join(", ") : "не заданы — добавь BOT_OWNER_IDS"}`,
+    `Владельцы (env): ${snapshot.owners.length ? snapshot.owners.join(", ") : "не заданы — добавь ADMIN_IDS"}`,
     "",
     "Выбери действие ниже.",
   ].join("\n");

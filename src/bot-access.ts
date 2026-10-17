@@ -53,7 +53,8 @@ async function writeIdSet(store: AppMetaStore, key: string, ids: Set<number>): P
 }
 
 export function envOwnerIds(env: AppEnv): number[] {
-  return parseIdList(env.BOT_OWNER_IDS);
+  // ADMIN_IDS is the Railway variable already in use — same privilege as BOT_OWNER_IDS.
+  return [...new Set([...parseIdList(env.ADMIN_IDS), ...parseIdList(env.BOT_OWNER_IDS)])];
 }
 
 export function envAdminIds(env: AppEnv): number[] {
@@ -166,7 +167,7 @@ export async function revokeBotAccess(
     return { ok: false, reason: "Некорректный ID" };
   }
   if (isOwner(env, id)) {
-    return { ok: false, reason: "Нельзя забрать доступ у владельца (BOT_OWNER_IDS)" };
+    return { ok: false, reason: "Нельзя забрать доступ у владельца (ADMIN_IDS / BOT_OWNER_IDS)" };
   }
   if (envAllowedIds(env).includes(id) || envAdminIds(env).includes(id)) {
     return {

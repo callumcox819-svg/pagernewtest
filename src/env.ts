@@ -4,6 +4,11 @@ import { z } from "zod";
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_BOT_NAME: z.string().default("Pager Test Bot"),
+  /**
+   * Legacy / primary admin list already used on Railway (comma/space Telegram IDs).
+   * Treated as owners: full admin panel + permanent access.
+   */
+  ADMIN_IDS: z.string().default(""),
   /** Telegram user/chat IDs — owners (comma/space). Always admin + access; cannot revoke via panel. */
   BOT_OWNER_IDS: z.string().default(""),
   /** Extra admins via env (comma/space). Can also grant admins in the admin panel. */
