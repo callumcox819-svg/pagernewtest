@@ -267,12 +267,22 @@ export function parseTelegramUserId(text: string): number | undefined {
   return Math.trunc(id);
 }
 
+function shortChannelName(
+  channelId: string,
+  liveChannels?: Array<{ id: string; name: string }>,
+): string {
+  const live = liveChannels?.find((channel) => channel.id === channelId)?.name?.trim();
+  if (live) {
+    return live.length > 28 ? `${live.slice(0, 27)}…` : live;
+  }
+  return channelId.slice(0, 8);
+}
+
 export function summarizeOperatorForAdmin(state: ChatState | undefined, userId: number): string {
   if (!state) {
     return [
-      `👤 Пользователь ${userId}`,
-      "Состояние в боте: нет (ещё не писал боту или state удалён).",
-      "Доступ можно выдать/забрать отдельно.",
+      `👤 ${userId}`,
+      "State нет — пользователь ещё не заходил или сброшен.",
     ].join("\n");
   }
 
@@ -280,32 +290,56 @@ export function summarizeOperatorForAdmin(state: ChatState | undefined, userId: 
   const enabled = channels.filter(([, row]) => row.enabled);
   const pager = state.pagerAccount;
   const hasPager = Boolean(pager?.cookies?.trim() || (pager?.email && pager?.password));
-  const lines = [
-    `👤 Пользователь ${userId}`,
-    `Pager: ${hasPager ? "✅ подключён" : "❌ нет"}`,
-    hasPager
-      ? `Орг: ${pager?.organizationName || pager?.organizationSlug || "—"}`
-      : undefined,
-    `Каналов включено: ${enabled.length} из ${channels.length || 0}`,
+  return [
+    `👤 ${userId}`,
+    `Pager: ${hasPager ? "✅" : "❌"}${hasPager ? ` · ${pager?.organizationName || pager?.organizationSlug || ""}` : ""}`.trim(),
+    `Каналы вкл: ${enabled.length}`,
     `Пауза: ${state.paused ? "да" : "нет"}`,
-  ].filter(Boolean) as string[];
+    "",
+    "Дальше — кнопки «каналы» / «папки».",
+  ].join("\n");
+}
 
-  if (enabled.length) {
-    lines.push("", "Включённые каналы:");
-    for (const [channelId, row] of enabled.slice(0, 12)) {
-      const folders = row.statusFolders ?? [];
-      const botOn = folders.filter((folder) => folder.enabled).length;
-      const aiOn = folders.filter((folder) => folder.aiEnabled ?? folder.enabled).length;
-      const name =
-        pager?.liveChannels?.find((channel) => channel.id === channelId)?.name ?? channelId.slice(0, 8);
-      lines.push(
-        `• ${name} · ${row.country} · банк ${row.templateBank ?? "—"} · папки ${botOn}/${folders.length} · AI ${aiOn}/${folders.length}`,
-      );
-    }
-    if (enabled.length > 12) {
-      lines.push(`… ещё ${enabled.length - 12}`);
-    }
+export function formatAdminEnabledChannels(state: ChatState): string {
+  const live = state.pagerAccount?.liveChannels ?? [];
+  const enabled = Object.entries(state.channels ?? {}).filter(([, row]) => row.enabled);
+  if (!enabled.length) {
+    return "Включённых каналов нет.";
+  }
+  const lines = [`✅ Включено: ${enabled.length}`, ""];
+  enabled.forEach(([channelId, row], index) => {
+    const name = shortChannelName(channelId, live);
+    lines.push(`${index + 1}. ✅ ${name} · ${row.country}`);
+  });
+  return lines.join("\n");
+}
+
+export function formatAdminEnabledFolders(state: ChatState): string {
+  const live = state.pagerAccount?.liveChannels ?? [];
+  const enabled = Object.entries(state.channels ?? {}).filter(([, row]) => row.enabled);
+  if (!enabled.length) {
+    return "Включённых каналов нет — папки смотреть негде.";
   }
 
-  return lines.join("\n");
+  const lines: string[] = ["Папки только по включённым каналам:", ""];
+  let shown = 0;
+  for (const [channelId, row] of enabled) {
+    const folders = row.statusFolders ?? [];
+    const botOn = folders.filter((folder) => folder.enabled).map((folder) => folder.name);
+    const aiOn = folders
+      .filter((folder) => folder.aiEnabled ?? folder.enabled)
+      .map((folder) => folder.name);
+    if (!botOn.length && !aiOn.length) {
+      continue;
+    }
+    shown += 1;
+    lines.push(`✅ ${shortChannelName(channelId, live)} · ${row.country}`);
+    lines.push(`   бот: ${botOn.join(", ") || "—"}`);
+    lines.push(`   AI: ${aiOn.join(", ") || "—"}`);
+    lines.push("");
+  }
+  if (!shown) {
+    return "У включённых каналов папки не отмечены (бот/AI пусто).";
+  }
+  return lines.join("\n").trim();
 }

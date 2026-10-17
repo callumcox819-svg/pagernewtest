@@ -72,6 +72,8 @@ import {
   parseTelegramUserId,
   revokeAdminRights,
   revokeBotAccess,
+  formatAdminEnabledChannels,
+  formatAdminEnabledFolders,
   summarizeOperatorForAdmin,
 } from "./bot-access.js";
 import {
@@ -2743,33 +2745,13 @@ async function sendAdminUserChannels(chatId: number, targetId: number): Promise<
   if (!targetState) {
     await telegram.sendMessage(
       chatId,
-      `У ${targetId} нет сохранённого state — каналов нет.`,
+      `У ${targetId} нет state — каналов нет.`,
       buildAdminUserCardKeyboard(targetId),
     );
     return;
   }
-
-  const channels = Object.entries(targetState.channels ?? {});
-  const enabled = channels.filter(([, row]) => row.enabled);
-  const live = targetState.pagerAccount?.liveChannels ?? [];
-  const lines = [
-    `📁 Каналы пользователя ${targetId}`,
-    `Включено: ${enabled.length} / всего в state: ${channels.length}`,
-    "",
-  ];
-
-  if (!enabled.length) {
-    lines.push("Нет включённых каналов.");
-  } else {
-    for (const [channelId, row] of enabled) {
-      const name = live.find((channel) => channel.id === channelId)?.name ?? channelId;
-      lines.push(`• ${name}`);
-      lines.push(`  geo=${row.country} · шаблоны=${row.templateBank ?? "—"} · id=${channelId.slice(0, 8)}`);
-      lines.push("");
-    }
-  }
-
-  await telegram.sendMessage(chatId, lines.join("\n").trim(), buildAdminUserCardKeyboard(targetId));
+  const text = [`Каналы ${targetId}`, "", formatAdminEnabledChannels(targetState)].join("\n");
+  await telegram.sendMessage(chatId, text, buildAdminUserCardKeyboard(targetId));
 }
 
 async function sendAdminUserFolders(chatId: number, targetId: number): Promise<void> {
@@ -2782,29 +2764,8 @@ async function sendAdminUserFolders(chatId: number, targetId: number): Promise<v
     );
     return;
   }
-
-  const enabled = Object.entries(targetState.channels ?? {}).filter(([, row]) => row.enabled);
-  const live = targetState.pagerAccount?.liveChannels ?? [];
-  const lines = [`🗂 Папки пользователя ${targetId}`, ""];
-
-  if (!enabled.length) {
-    lines.push("Нет включённых каналов.");
-  } else {
-    for (const [channelId, row] of enabled) {
-      const name = live.find((channel) => channel.id === channelId)?.name ?? channelId.slice(0, 8);
-      const folders = row.statusFolders ?? [];
-      const botFolders = folders.filter((folder) => folder.enabled).map((folder) => folder.name);
-      const aiFolders = folders
-        .filter((folder) => folder.aiEnabled ?? folder.enabled)
-        .map((folder) => folder.name);
-      lines.push(`• ${name} (${row.country})`);
-      lines.push(`  бот (${botFolders.length}): ${botFolders.join(", ") || "—"}`);
-      lines.push(`  AI (${aiFolders.length}): ${aiFolders.join(", ") || "—"}`);
-      lines.push("");
-    }
-  }
-
-  await telegram.sendMessage(chatId, lines.join("\n").trim(), buildAdminUserCardKeyboard(targetId));
+  const text = [`Папки ${targetId}`, "", formatAdminEnabledFolders(targetState)].join("\n");
+  await telegram.sendMessage(chatId, text, buildAdminUserCardKeyboard(targetId));
 }
 
 function buildMainMenuCaption(state: ChatState): string {
