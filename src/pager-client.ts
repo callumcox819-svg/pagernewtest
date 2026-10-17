@@ -629,17 +629,32 @@ export class PagerClient {
     };
 
     for (const channelId of channelIds) {
-      const head = await this.listConversations({ channelId, page: 1, pageSize: 200 });
-      addBatch(head);
-      for (let page = 2; page <= maxPages; page += 1) {
-        const batch = await this.listConversations({ channelId, page, pageSize: 100 });
-        if (!batch.length) {
-          break;
+      try {
+        const head = await this.listConversations({ channelId, page: 1, pageSize: 200 });
+        addBatch(head);
+        for (let page = 2; page <= maxPages; page += 1) {
+          const batch = await this.listConversations({ channelId, page, pageSize: 100 });
+          if (!batch.length) {
+            break;
+          }
+          addBatch(batch);
+          if (batch.length < 100) {
+            break;
+          }
         }
-        addBatch(batch);
-        if (batch.length < 100) {
-          break;
+      } catch (error) {
+        // Lost channel access must not abort polling every other geo.
+        if (
+          error instanceof PagerApiError &&
+          (error.status === 403 || error.status === 404) &&
+          /no access|not found|channel/i.test(error.body)
+        ) {
+          console.warn(
+            `Pager poll skip channel ${channelId.slice(0, 8)}…: ${error.message.slice(0, 120)}`,
+          );
+          continue;
         }
+        throw error;
       }
     }
 

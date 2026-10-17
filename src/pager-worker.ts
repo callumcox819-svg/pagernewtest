@@ -630,7 +630,14 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
     return;
   }
 
-  await retryPendingInProgressMoves(deps, freshState, client, enabledChannels);
+  try {
+    await retryPendingInProgressMoves(deps, freshState, client, enabledChannels);
+  } catch (error) {
+    // Never let status-move retries block inbox polling for all geos.
+    console.warn(
+      `Pager worker: pending in-progress retry aborted (continuing poll): ${formatError(error)}`,
+    );
+  }
   freshState = hydrateOperatorState((await deps.stateStore.get(freshState.chatId)) ?? freshState);
 
   if (enabledEgInState.length && !enabledEgChannels.length) {
@@ -7300,8 +7307,12 @@ async function retryPendingInProgressMoves(
   }
 
   const byChannel = new Map(enabledChannels.map((channel) => [channel.channelId, channel]));
+  const liveChannelIds = new Set(
+    (state.pagerAccount?.liveChannels ?? []).map((channel) => channel.id),
+  );
   let retried = 0;
   let fixed = 0;
+  let dropped = 0;
 
   for (const [convId, convState] of entries) {
     if (!convState.pendingInProgressMoveAt?.trim()) {
@@ -7309,6 +7320,13 @@ async function retryPendingInProgressMoves(
     }
     if (convState.inProgressEnteredAt?.trim()) {
       await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+      continue;
+    }
+
+    // Channel removed from the Pager account — stop retrying forever.
+    if (convState.channelId && liveChannelIds.size && !liveChannelIds.has(convState.channelId)) {
+      await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+      dropped += 1;
       continue;
     }
 
@@ -7322,57 +7340,81 @@ async function retryPendingInProgressMoves(
     }
 
     retried += 1;
-    let conv: PagerConversation | undefined;
     try {
-      conv = await client.openConversation(convId);
-    } catch {
-      continue;
-    }
-    if (!conv) {
-      continue;
-    }
-    if (isInProgressStatusConversation(conv)) {
-      await onMovedToInProgressRegistration(deps, state.chatId, convId, convState.channelId);
-      await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
-      fixed += 1;
-      continue;
-    }
+      let conv: PagerConversation | undefined;
+      try {
+        conv = await client.openConversation(convId);
+      } catch (error) {
+        if (isPagerChannelAccessError(error)) {
+          await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+          dropped += 1;
+          console.warn(
+            `Pager worker: drop pending in-progress ${convId.slice(0, 8)} — no access to channel`,
+          );
+        }
+        continue;
+      }
+      if (!conv) {
+        continue;
+      }
+      if (isInProgressStatusConversation(conv)) {
+        await onMovedToInProgressRegistration(deps, state.chatId, convId, convState.channelId);
+        await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+        fixed += 1;
+        continue;
+      }
 
-    const messages = await client.listMessages(convId, 1, 80);
-    const outgoingTexts =
-      country === "CM"
-        ? collectCmOutgoingTexts(messages)
-        : country === "CL"
-          ? collectClOutgoingTexts(messages)
-          : collectEgOutgoingTexts(messages);
-    const regLinkSent =
-      country === "CM"
-        ? cmRegLinkSentInHistory
-        : country === "CL"
-          ? clRegLinkSentInHistory
-          : egRegLinkSentInHistory;
-    if (!regLinkSent(outgoingTexts)) {
-      await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
-      continue;
-    }
+      const messages = await client.listMessages(convId, 1, 80);
+      const outgoingTexts =
+        country === "CM"
+          ? collectCmOutgoingTexts(messages)
+          : country === "CL"
+            ? collectClOutgoingTexts(messages)
+            : collectEgOutgoingTexts(messages);
+      const regLinkSent =
+        country === "CM"
+          ? cmRegLinkSentInHistory
+          : country === "CL"
+            ? clRegLinkSentInHistory
+            : egRegLinkSentInHistory;
+      if (!regLinkSent(outgoingTexts)) {
+        await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+        continue;
+      }
 
-    const moved = await tryMoveConversationToInProgressRegistration(
-      deps,
-      state,
-      client,
-      conv,
-      convId,
-      convState.channelId,
-      country,
-    );
-    if (moved) {
-      fixed += 1;
-      await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+      const moved = await tryMoveConversationToInProgressRegistration(
+        deps,
+        state,
+        client,
+        conv,
+        convId,
+        convState.channelId,
+        country,
+      );
+      if (moved) {
+        fixed += 1;
+        await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+      }
+    } catch (error) {
+      // One dead/inaccessible chat must never kill the whole operator cycle.
+      if (isPagerChannelAccessError(error)) {
+        await clearPendingInProgressMove(deps, state.chatId, convId, convState.channelId);
+        dropped += 1;
+        console.warn(
+          `Pager worker: drop pending in-progress ${convId.slice(0, 8)} — ${formatError(error)}`,
+        );
+        continue;
+      }
+      console.warn(
+        `Pager worker: pending in-progress retry failed ${convId.slice(0, 8)}: ${formatError(error)}`,
+      );
     }
   }
 
-  if (retried) {
-    console.log(`Pager worker: pending in-progress retry checked=${retried} fixed=${fixed}`);
+  if (retried || dropped) {
+    console.log(
+      `Pager worker: pending in-progress retry checked=${retried} fixed=${fixed} dropped=${dropped}`,
+    );
   }
 }
 
@@ -9089,6 +9131,24 @@ function isRecoverablePagerError(error: unknown): boolean {
     (error instanceof PagerApiError &&
       error.status === 400 &&
       error.body.toLowerCase().includes("organization id"))
+  );
+}
+
+/** Channel removed / operator lost access — skip that chat, do not abort the cycle. */
+function isPagerChannelAccessError(error: unknown): boolean {
+  if (!(error instanceof PagerApiError)) {
+    return false;
+  }
+  if (error.status !== 403 && error.status !== 404) {
+    return false;
+  }
+  const body = error.body.toLowerCase();
+  return (
+    body.includes("no access to this channel") ||
+    body.includes("channel not found") ||
+    body.includes("conversation not found") ||
+    body.includes("not found") ||
+    error.status === 403
   );
 }
 
