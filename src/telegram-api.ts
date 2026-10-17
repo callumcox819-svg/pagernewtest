@@ -906,7 +906,7 @@ export function buildAdminUsersKeyboard(
   const slice = users.slice(start, start + ADMIN_USERS_PAGE_SIZE);
 
   const rows: InlineKeyboardButton[][] = slice.map((user) => [
-    inlineBtn(user.label, `admin:user|${user.id}`, {
+    inlineBtn(user.label, `admin:user:${user.id}`, {
       emojiId: PREMIUM_EMOJI.status,
       style: "primary",
     }),
@@ -916,7 +916,7 @@ export function buildAdminUsersKeyboard(
     const nav: InlineKeyboardButton[] = [];
     if (safePage > 0) {
       nav.push(
-        inlineBtn("◀", `admin:users_page|${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }),
+        inlineBtn("◀", `admin:users_page:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }),
       );
     }
     nav.push(
@@ -926,7 +926,7 @@ export function buildAdminUsersKeyboard(
     );
     if (safePage < totalPages - 1) {
       nav.push(
-        inlineBtn("▶", `admin:users_page|${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }),
+        inlineBtn("▶", `admin:users_page:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }),
       );
     }
     rows.push(nav);
@@ -940,19 +940,19 @@ export function buildAdminUserCardKeyboard(userId: number): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn("Посмотреть каналы", `admin:user_channels|${userId}`, {
+        inlineBtn("Посмотреть каналы", `admin:user_channels:${userId}`, {
           emojiId: PREMIUM_EMOJI.channels,
           style: "primary",
         }),
       ],
       [
-        inlineBtn("Посмотреть папки", `admin:user_folders|${userId}`, {
+        inlineBtn("Посмотреть папки", `admin:user_folders:${userId}`, {
           emojiId: PREMIUM_EMOJI.folder,
           style: "primary",
         }),
       ],
       [
-        inlineBtn("Забрать доступ", `admin:revoke_user|${userId}`, {
+        inlineBtn("Забрать доступ", `admin:revoke_user:${userId}`, {
           emojiId: PREMIUM_EMOJI.cross,
           style: "danger",
         }),

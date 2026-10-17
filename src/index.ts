@@ -2685,11 +2685,11 @@ async function listAdminDirectoryUsers(): Promise<Array<{ id: number; label: str
       const marks = [
         snapshot.owners.includes(id) ? "👑" : snapshot.admins.includes(id) ? "⭐" : "",
         pager ? "📡" : "",
-        enabled ? `${enabled}к` : "0к",
+        `кан:${enabled}`,
       ]
         .filter(Boolean)
         .join(" ");
-      const label = marks ? `${id} · ${marks}` : `${id}`;
+      const label = `${id} · ${marks}`;
       return { id, label: label.slice(0, 56) };
     });
   return rows;
