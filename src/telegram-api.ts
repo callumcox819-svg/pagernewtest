@@ -894,12 +894,60 @@ export function buildAdminRightsKeyboard(): ReplyMarkup {
   };
 }
 
-export function buildAdminUserStatsKeyboard(userId: number): ReplyMarkup {
+export const ADMIN_USERS_PAGE_SIZE = 8;
+
+export function buildAdminUsersKeyboard(
+  users: Array<{ id: number; label: string }>,
+  page = 0,
+): ReplyMarkup {
+  const totalPages = Math.max(1, Math.ceil(users.length / ADMIN_USERS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * ADMIN_USERS_PAGE_SIZE;
+  const slice = users.slice(start, start + ADMIN_USERS_PAGE_SIZE);
+
+  const rows: InlineKeyboardButton[][] = slice.map((user) => [
+    inlineBtn(user.label, `admin:user|${user.id}`, {
+      emojiId: PREMIUM_EMOJI.status,
+      style: "primary",
+    }),
+  ]);
+
+  if (totalPages > 1) {
+    const nav: InlineKeyboardButton[] = [];
+    if (safePage > 0) {
+      nav.push(
+        inlineBtn("◀", `admin:users_page|${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }),
+      );
+    }
+    nav.push(
+      inlineBtn(`${safePage + 1}/${totalPages}`, "admin:users_noop", {
+        emojiId: PREMIUM_EMOJI.chart,
+      }),
+    );
+    if (safePage < totalPages - 1) {
+      nav.push(
+        inlineBtn("▶", `admin:users_page|${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }),
+      );
+    }
+    rows.push(nav);
+  }
+
+  rows.push([inlineBtn("◀️ Админ-панель", "admin:panel", { emojiId: PREMIUM_EMOJI.back })]);
+  return { inline_keyboard: rows };
+}
+
+export function buildAdminUserCardKeyboard(userId: number): ReplyMarkup {
   return {
     inline_keyboard: [
       [
-        inlineBtn("Показать каналы пользователя", `admin:user_channels|${userId}`, {
+        inlineBtn("Посмотреть каналы", `admin:user_channels|${userId}`, {
           emojiId: PREMIUM_EMOJI.channels,
+          style: "primary",
+        }),
+      ],
+      [
+        inlineBtn("Посмотреть папки", `admin:user_folders|${userId}`, {
+          emojiId: PREMIUM_EMOJI.folder,
           style: "primary",
         }),
       ],
@@ -909,9 +957,17 @@ export function buildAdminUserStatsKeyboard(userId: number): ReplyMarkup {
           style: "danger",
         }),
       ],
-      [inlineBtn("◀️ Админ-панель", "admin:panel", { emojiId: PREMIUM_EMOJI.back })],
+      [
+        inlineBtn("◀️ К списку", "admin:stats", { emojiId: PREMIUM_EMOJI.back }),
+        inlineBtn("Админ-панель", "admin:panel", { emojiId: PREMIUM_EMOJI.back }),
+      ],
     ],
   };
+}
+
+/** @deprecated alias — use buildAdminUserCardKeyboard */
+export function buildAdminUserStatsKeyboard(userId: number): ReplyMarkup {
+  return buildAdminUserCardKeyboard(userId);
 }
 
 export function buildStatsCountryKeyboard(): ReplyMarkup {

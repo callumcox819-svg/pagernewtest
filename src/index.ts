@@ -41,7 +41,8 @@ import {
   TelegramApi,
   buildAdminPanelKeyboard,
   buildAdminRightsKeyboard,
-  buildAdminUserStatsKeyboard,
+  buildAdminUserCardKeyboard,
+  buildAdminUsersKeyboard,
   buildChannelKeyboard,
   buildChannelSettingsKeyboard,
   buildCountryKeyboard,
@@ -2462,12 +2463,33 @@ async function handleAdminCallback(
   }
 
   if (value === "stats") {
-    await stateStore.patch(chatId, { pendingAction: "await_admin_stats_id" });
     await telegram.answerCallbackQuery(callbackId);
-    await telegram.sendMessage(
-      chatId,
-      "📊 Статистика пользователей\nОтправь Telegram ID пользователя (число).\nОтмена: /start",
-    );
+    await showAdminUsersMenu(chatId, messageId, 0);
+    return;
+  }
+
+  if (value === "users_noop") {
+    await telegram.answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (value === "users_page") {
+    await telegram.answerCallbackQuery(callbackId);
+    await showAdminUsersMenu(chatId, messageId, Number(extra) || 0);
+    return;
+  }
+
+  if (value === "user" && extra) {
+    const targetId = Number(extra);
+    await telegram.answerCallbackQuery(callbackId);
+    await showAdminUserCard(chatId, targetId, messageId);
+    return;
+  }
+
+  if (value === "user_folders" && extra) {
+    const targetId = Number(extra);
+    await telegram.answerCallbackQuery(callbackId);
+    await sendAdminUserFolders(chatId, targetId);
     return;
   }
 
@@ -2543,12 +2565,14 @@ async function handleAdminCallback(
       callbackId,
       result.ok ? "Доступ забран" : result.reason ?? "Ошибка",
     );
+    if (result.ok) {
+      await showAdminUserCard(chatId, targetId, messageId);
+      return;
+    }
     await telegram.sendMessage(
       chatId,
-      result.ok
-        ? `❌ Доступ у ${targetId} забран. Worker больше не обрабатывает его каналы.`
-        : `Не удалось: ${result.reason}`,
-      buildAdminPanelKeyboard(),
+      `Не удалось: ${result.reason}`,
+      buildAdminUserCardKeyboard(targetId),
     );
     return;
   }
@@ -2592,16 +2616,7 @@ async function handleAdminPendingInput(
   await stateStore.patch(chatId, { pendingAction: undefined });
 
   if (action === "await_admin_stats_id") {
-    const targetState = await stateStore.get(targetId);
-    const hasAccess = await hasBotAccess(env, appMetaStore, targetId);
-    const admin = await isAdmin(env, appMetaStore, targetId);
-    const textOut = [
-      summarizeOperatorForAdmin(targetState, targetId),
-      "",
-      `Доступ к боту: ${hasAccess ? "✅ есть" : "❌ нет"}`,
-      `Админ: ${admin ? "✅ да" : "нет"}`,
-    ].join("\n");
-    await telegram.sendMessage(chatId, textOut, buildAdminUserStatsKeyboard(targetId));
+    await showAdminUserCard(chatId, targetId);
     return true;
   }
 
@@ -2650,13 +2665,86 @@ async function handleAdminPendingInput(
   return false;
 }
 
+async function listAdminDirectoryUsers(): Promise<Array<{ id: number; label: string }>> {
+  const snapshot = await getAccessSnapshot(env, appMetaStore);
+  const states = await stateStore.listAll();
+  const byId = new Map<number, ChatState>();
+  for (const state of states) {
+    byId.set(state.chatId, state);
+  }
+  const ids = new Set<number>([...snapshot.allowed, ...byId.keys()]);
+  const rows = [...ids]
+    .sort((a, b) => a - b)
+    .map((id) => {
+      const state = byId.get(id);
+      const enabled = Object.values(state?.channels ?? {}).filter((row) => row.enabled).length;
+      const pager = Boolean(
+        state?.pagerAccount?.cookies?.trim() ||
+          (state?.pagerAccount?.email && state?.pagerAccount?.password),
+      );
+      const marks = [
+        snapshot.owners.includes(id) ? "👑" : snapshot.admins.includes(id) ? "⭐" : "",
+        pager ? "📡" : "",
+        enabled ? `${enabled}к` : "0к",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const label = marks ? `${id} · ${marks}` : `${id}`;
+      return { id, label: label.slice(0, 56) };
+    });
+  return rows;
+}
+
+async function showAdminUsersMenu(
+  chatId: number,
+  messageId?: number,
+  page = 0,
+): Promise<void> {
+  const users = await listAdminDirectoryUsers();
+  const text = [
+    "📊 Статистика пользователей",
+    `Всего: ${users.length}`,
+    "Нажми ID — откроется карточка (каналы, папки, доступ).",
+  ].join("\n");
+  const keyboard = buildAdminUsersKeyboard(users, page);
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function showAdminUserCard(
+  chatId: number,
+  targetId: number,
+  messageId?: number,
+): Promise<void> {
+  const targetState = await stateStore.get(targetId);
+  const hasAccess = await hasBotAccess(env, appMetaStore, targetId);
+  const admin = await isAdmin(env, appMetaStore, targetId);
+  const text = [
+    summarizeOperatorForAdmin(targetState, targetId),
+    "",
+    `Доступ к боту: ${hasAccess ? "✅ есть" : "❌ нет"}`,
+    `Админ: ${admin ? "✅ да" : "нет"}`,
+    "",
+    "Выбери действие ниже.",
+  ].join("\n");
+  const keyboard = buildAdminUserCardKeyboard(targetId);
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
 async function sendAdminUserChannels(chatId: number, targetId: number): Promise<void> {
   const targetState = await stateStore.get(targetId);
   if (!targetState) {
     await telegram.sendMessage(
       chatId,
       `У ${targetId} нет сохранённого state — каналов нет.`,
-      buildAdminUserStatsKeyboard(targetId),
+      buildAdminUserCardKeyboard(targetId),
     );
     return;
   }
@@ -2675,22 +2763,48 @@ async function sendAdminUserChannels(chatId: number, targetId: number): Promise<
   } else {
     for (const [channelId, row] of enabled) {
       const name = live.find((channel) => channel.id === channelId)?.name ?? channelId;
+      lines.push(`• ${name}`);
+      lines.push(`  geo=${row.country} · шаблоны=${row.templateBank ?? "—"} · id=${channelId.slice(0, 8)}`);
+      lines.push("");
+    }
+  }
+
+  await telegram.sendMessage(chatId, lines.join("\n").trim(), buildAdminUserCardKeyboard(targetId));
+}
+
+async function sendAdminUserFolders(chatId: number, targetId: number): Promise<void> {
+  const targetState = await stateStore.get(targetId);
+  if (!targetState) {
+    await telegram.sendMessage(
+      chatId,
+      `У ${targetId} нет state — папок нет.`,
+      buildAdminUserCardKeyboard(targetId),
+    );
+    return;
+  }
+
+  const enabled = Object.entries(targetState.channels ?? {}).filter(([, row]) => row.enabled);
+  const live = targetState.pagerAccount?.liveChannels ?? [];
+  const lines = [`🗂 Папки пользователя ${targetId}`, ""];
+
+  if (!enabled.length) {
+    lines.push("Нет включённых каналов.");
+  } else {
+    for (const [channelId, row] of enabled) {
+      const name = live.find((channel) => channel.id === channelId)?.name ?? channelId.slice(0, 8);
       const folders = row.statusFolders ?? [];
       const botFolders = folders.filter((folder) => folder.enabled).map((folder) => folder.name);
       const aiFolders = folders
         .filter((folder) => folder.aiEnabled ?? folder.enabled)
         .map((folder) => folder.name);
-      lines.push(`• ${name}`);
-      lines.push(`  geo=${row.country} · шаблоны=${row.templateBank ?? "—"}`);
-      lines.push(
-        `  папки бота (${botFolders.length}): ${botFolders.slice(0, 8).join(", ") || "—"}`,
-      );
-      lines.push(`  папки AI (${aiFolders.length}): ${aiFolders.slice(0, 8).join(", ") || "—"}`);
+      lines.push(`• ${name} (${row.country})`);
+      lines.push(`  бот (${botFolders.length}): ${botFolders.join(", ") || "—"}`);
+      lines.push(`  AI (${aiFolders.length}): ${aiFolders.join(", ") || "—"}`);
       lines.push("");
     }
   }
 
-  await telegram.sendMessage(chatId, lines.join("\n").trim(), buildAdminUserStatsKeyboard(targetId));
+  await telegram.sendMessage(chatId, lines.join("\n").trim(), buildAdminUserCardKeyboard(targetId));
 }
 
 function buildMainMenuCaption(state: ChatState): string {
