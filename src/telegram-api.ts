@@ -965,8 +965,9 @@ export function buildAdminUserCardKeyboard(userId: number): ReplyMarkup {
   };
 }
 
-export const ADMIN_CHANNELS_PAGE_SIZE = 8;
+export const ADMIN_CHANNELS_PAGE_SIZE = 10;
 
+/** Same layout as user channels: [name] [toggle]. */
 export function buildAdminUserChannelsKeyboard(
   userId: number,
   channels: Array<{ name: string; country: string; enabled: boolean }>,
@@ -977,24 +978,29 @@ export function buildAdminUserChannelsKeyboard(
   const start = safePage * ADMIN_CHANNELS_PAGE_SIZE;
   const slice = channels.slice(start, start + ADMIN_CHANNELS_PAGE_SIZE);
 
-  const rows: InlineKeyboardButton[][] = slice.map((channel, offset) => {
+  const rows: InlineKeyboardButton[][] = [];
+  for (const [offset, channel] of slice.entries()) {
     const index = start + offset;
-    const mark = channel.enabled ? "✅ ВКЛ" : "⬜ ВЫКЛ";
-    const name =
-      channel.name.length > 22 ? `${channel.name.slice(0, 21)}…` : channel.name;
-    return [
-      inlineBtn(`${mark} · ${name} · ${channel.country}`, `admin:cht:${userId}:${index}`, {
+    rows.push([
+      inlineBtn(
+        truncateLabel(`${index + 1}. ${channel.name}`, 28),
+        "admin:uch_noop",
+        { emojiId: PREMIUM_EMOJI.openFolder },
+      ),
+      inlineBtn(channel.enabled ? "✅" : "❌❌", `admin:cht:${userId}:${index}`, {
         emojiId: channel.enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
-        style: channel.enabled ? "success" : undefined,
+        style: channel.enabled ? "success" : "danger",
       }),
-    ];
-  });
+    ]);
+  }
 
   if (totalPages > 1) {
     const nav: InlineKeyboardButton[] = [];
     if (safePage > 0) {
       nav.push(
-        inlineBtn("◀", `admin:uch:${userId}:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }),
+        inlineBtn("◀ Назад", `admin:uch:${userId}:${safePage - 1}`, {
+          emojiId: PREMIUM_EMOJI.left,
+        }),
       );
     }
     nav.push(
@@ -1004,7 +1010,9 @@ export function buildAdminUserChannelsKeyboard(
     );
     if (safePage < totalPages - 1) {
       nav.push(
-        inlineBtn("▶", `admin:uch:${userId}:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }),
+        inlineBtn("Далее ▶", `admin:uch:${userId}:${safePage + 1}`, {
+          emojiId: PREMIUM_EMOJI.right,
+        }),
       );
     }
     rows.push(nav);

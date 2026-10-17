@@ -2775,36 +2775,14 @@ function listAdminTargetChannels(state: ChatState): Array<{
   country: WorkerCountry;
   enabled: boolean;
 }> {
-  const live = state.pagerAccount?.liveChannels ?? [];
-  const byId = new Map<string, { id: string; name: string; country: WorkerCountry }>();
-
-  for (const channel of live) {
-    byId.set(channel.id, {
+  // Same source as the user's own «Каналы» screen — live names only, no raw IDs.
+  return getSelectableChannels(state)
+    .map((channel) => ({
       id: channel.id,
       name: channel.name,
-      country: inferCountryFromName(channel.name),
-    });
-  }
-  for (const [channelId, row] of Object.entries(state.channels ?? {})) {
-    if (!byId.has(channelId)) {
-      byId.set(channelId, {
-        id: channelId,
-        name: channelId.slice(0, 8),
-        country: row.country,
-      });
-    }
-  }
-
-  return [...byId.values()]
-    .map((channel) => {
-      const runtime = getChannelRuntime(state, channel.id, channel.country);
-      return {
-        id: channel.id,
-        name: channel.name,
-        country: runtime.country || channel.country,
-        enabled: isChannelEnabled(state, channel.id, runtime.enabled),
-      };
-    })
+      country: channel.country,
+      enabled: channel.enabled,
+    }))
     .sort((left, right) => {
       if (left.enabled !== right.enabled) {
         return left.enabled ? -1 : 1;
@@ -2830,12 +2808,14 @@ async function showAdminUserChannelsMenu(
   }
   const channels = listAdminTargetChannels(targetState);
   const on = channels.filter((channel) => channel.enabled).length;
+  const totalPages = Math.max(1, Math.ceil(channels.length / ADMIN_CHANNELS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const pageLabel = totalPages > 1 ? ` · стр. ${safePage + 1}/${totalPages}` : "";
   const text = [
-    `Каналы пользователя ${targetId}`,
-    `Включено: ${on} из ${channels.length}`,
-    "Нажми канал — вкл/выкл у этого пользователя.",
+    `Каналы ${targetId}: ${on}/${channels.length}${pageLabel}`,
+    "Слева — имя, справа — вкл/выкл у этого пользователя.",
   ].join("\n");
-  const keyboard = buildAdminUserChannelsKeyboard(targetId, channels, page);
+  const keyboard = buildAdminUserChannelsKeyboard(targetId, channels, safePage);
   if (!messageId) {
     await telegram.sendMessage(chatId, text, keyboard);
     return;
