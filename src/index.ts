@@ -304,7 +304,7 @@ async function handleCallback(
   const { kind, value, extra, tail } = parseCallbackData(data);
 
   if (kind === "admin") {
-    await handleAdminCallback(chatId, callbackId, value, extra, messageId, tail);
+    await handleAdminCallback(chatId, callbackId, value, extra, messageId, tail ?? []);
     return;
   }
 
@@ -2461,8 +2461,9 @@ async function handleAdminCallback(
   value: string,
   extra: string | undefined,
   messageId?: number,
-  tail: string[] = [],
+  tail?: string[],
 ): Promise<void> {
+  const parts = tail ?? [];
   if (!(await requireAdmin(chatId, callbackId))) {
     return;
   }
@@ -2500,16 +2501,16 @@ async function handleAdminCallback(
   // admin:uch:userId:page — list all channels as toggle buttons
   if (value === "uch" && extra) {
     const targetId = Number(extra);
-    const page = Number(tail[0] ?? 0) || 0;
+    const page = Number(parts[0] ?? 0) || 0;
     await telegram.answerCallbackQuery(callbackId);
     await showAdminUserChannelsMenu(chatId, targetId, messageId, page);
     return;
   }
 
   // admin:cht:userId:index — toggle channel enabled for that user
-  if (value === "cht" && extra && tail[0] !== undefined) {
+  if (value === "cht" && extra && parts[0] !== undefined) {
     const targetId = Number(extra);
-    const index = Number(tail[0]);
+    const index = Number(parts[0]);
     await toggleAdminTargetChannel(chatId, callbackId, targetId, index, messageId);
     return;
   }
@@ -2517,7 +2518,7 @@ async function handleAdminCallback(
   // legacy alias from older button
   if (value === "user_channels" && extra) {
     const targetId = Number(extra);
-    const page = Number(tail[0] ?? 0) || 0;
+    const page = Number(parts[0] ?? 0) || 0;
     await telegram.answerCallbackQuery(callbackId);
     await showAdminUserChannelsMenu(chatId, targetId, messageId, page);
     return;
