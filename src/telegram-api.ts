@@ -946,8 +946,12 @@ export function buildAdminUserCardKeyboard(userId: number): ReplyMarkup {
         }),
       ],
       [
-        inlineBtn("Папки пользователя", `admin:user_folders:${userId}`, {
+        inlineBtn("Папки бота", `admin:uf:${userId}:0`, {
           emojiId: PREMIUM_EMOJI.folder,
+          style: "primary",
+        }),
+        inlineBtn("Папки AI", `admin:uaf:${userId}:0`, {
+          emojiId: PREMIUM_EMOJI.robot,
           style: "primary",
         }),
       ],
@@ -963,6 +967,155 @@ export function buildAdminUserCardKeyboard(userId: number): ReplyMarkup {
       ],
     ],
   };
+}
+
+export const ADMIN_FOLDERS_PAGE_SIZE = 10;
+
+/** Enabled channels with folder counts — pick a channel to edit folders. */
+export function buildAdminUserFoldersChannelsKeyboard(
+  userId: number,
+  mode: "bot" | "ai",
+  channels: Array<{ name: string; on: number; total: number }>,
+  page = 0,
+): ReplyMarkup {
+  const prefix = mode === "ai" ? "uaf" : "uf";
+  const openPrefix = mode === "ai" ? "uafc" : "ufc";
+  const totalPages = Math.max(1, Math.ceil(channels.length / ADMIN_FOLDERS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * ADMIN_FOLDERS_PAGE_SIZE;
+  const slice = channels.slice(start, start + ADMIN_FOLDERS_PAGE_SIZE);
+
+  const rows: InlineKeyboardButton[][] = slice.map((channel, offset) => {
+    const index = start + offset;
+    const count =
+      mode === "ai"
+        ? `AI ${channel.on}/${channel.total}`
+        : `${channel.on}/${channel.total}`;
+    return [
+      inlineBtn(
+        truncateLabel(`${index + 1}. ${channel.name} · ${count}`, 32),
+        `admin:${openPrefix}:${userId}:${index}:0`,
+        {
+          emojiId: mode === "ai" ? PREMIUM_EMOJI.robot : PREMIUM_EMOJI.folder,
+          style: channel.on > 0 ? (mode === "ai" ? "primary" : "success") : undefined,
+        },
+      ),
+    ];
+  });
+
+  if (totalPages > 1) {
+    const nav: InlineKeyboardButton[] = [];
+    if (safePage > 0) {
+      nav.push(
+        inlineBtn("◀", `admin:${prefix}:${userId}:${safePage - 1}`, {
+          emojiId: PREMIUM_EMOJI.left,
+        }),
+      );
+    }
+    nav.push(
+      inlineBtn(`${safePage + 1}/${totalPages}`, "admin:uf_noop", {
+        emojiId: PREMIUM_EMOJI.chart,
+      }),
+    );
+    if (safePage < totalPages - 1) {
+      nav.push(
+        inlineBtn("▶", `admin:${prefix}:${userId}:${safePage + 1}`, {
+          emojiId: PREMIUM_EMOJI.right,
+        }),
+      );
+    }
+    rows.push(nav);
+  }
+
+  const otherMode = mode === "ai" ? "uf" : "uaf";
+  const otherLabel = mode === "ai" ? "Папки бота" : "Папки AI";
+  rows.push([
+    inlineBtn(otherLabel, `admin:${otherMode}:${userId}:0`, {
+      emojiId: mode === "ai" ? PREMIUM_EMOJI.folder : PREMIUM_EMOJI.robot,
+    }),
+  ]);
+  rows.push([
+    inlineBtn("◀️ Карточка", `admin:user:${userId}`, { emojiId: PREMIUM_EMOJI.back }),
+  ]);
+  return { inline_keyboard: rows };
+}
+
+/** Per-channel folder toggles for admin (bot or AI). */
+export function buildAdminUserChannelFoldersKeyboard(
+  userId: number,
+  channelIndex: number,
+  mode: "bot" | "ai",
+  folders: Array<{ name: string; on: boolean }>,
+  page = 0,
+): ReplyMarkup {
+  const listPrefix = mode === "ai" ? "uaf" : "uf";
+  const openPrefix = mode === "ai" ? "uafc" : "ufc";
+  const togglePrefix = mode === "ai" ? "uaft" : "uft";
+  const allPrefix = mode === "ai" ? "uafa" : "ufa";
+  const totalPages = Math.max(1, Math.ceil(folders.length / FOLDERS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * FOLDERS_PAGE_SIZE;
+  const slice = folders.slice(start, start + FOLDERS_PAGE_SIZE);
+
+  const rows: InlineKeyboardButton[][] = slice.map((folder, offset) => {
+    const index = start + offset;
+    return [
+      inlineBtn(truncateLabel(folder.name, 28), `admin:${togglePrefix}:${userId}:${channelIndex}:${index}`, {
+        emojiId: folder.on
+          ? mode === "ai"
+            ? PREMIUM_EMOJI.robot
+            : PREMIUM_EMOJI.check
+          : PREMIUM_EMOJI.cross,
+        style: folder.on ? (mode === "ai" ? "primary" : "success") : undefined,
+      }),
+    ];
+  });
+
+  if (totalPages > 1) {
+    const nav: InlineKeyboardButton[] = [];
+    if (safePage > 0) {
+      nav.push(
+        inlineBtn("◀", `admin:${openPrefix}:${userId}:${channelIndex}:${safePage - 1}`, {
+          emojiId: PREMIUM_EMOJI.left,
+        }),
+      );
+    }
+    nav.push(
+      inlineBtn(`${safePage + 1}/${totalPages}`, "admin:uf_noop", {
+        emojiId: PREMIUM_EMOJI.chart,
+      }),
+    );
+    if (safePage < totalPages - 1) {
+      nav.push(
+        inlineBtn("▶", `admin:${openPrefix}:${userId}:${channelIndex}:${safePage + 1}`, {
+          emojiId: PREMIUM_EMOJI.right,
+        }),
+      );
+    }
+    rows.push(nav);
+  }
+
+  const allOn = folders.length > 0 && folders.every((folder) => folder.on);
+  rows.push([
+    inlineBtn(
+      allOn ? (mode === "ai" ? "AI везде" : "Все вкл.") : mode === "ai" ? "AI во все" : "Включить все",
+      `admin:${allPrefix}:${userId}:${channelIndex}:on`,
+      {
+        emojiId: mode === "ai" ? PREMIUM_EMOJI.robot : PREMIUM_EMOJI.check,
+        style: mode === "ai" ? "primary" : "success",
+      },
+    ),
+    inlineBtn(mode === "ai" ? "AI выкл." : "Снять все", `admin:${allPrefix}:${userId}:${channelIndex}:off`, {
+      emojiId: PREMIUM_EMOJI.cross,
+      style: "danger",
+    }),
+  ]);
+  rows.push([
+    inlineBtn("◀️ К каналам", `admin:${listPrefix}:${userId}:0`, {
+      emojiId: PREMIUM_EMOJI.back,
+    }),
+  ]);
+  return { inline_keyboard: rows };
 }
 
 export const ADMIN_CHANNELS_PAGE_SIZE = 10;

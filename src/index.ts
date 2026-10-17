@@ -43,6 +43,8 @@ import {
   buildAdminRightsKeyboard,
   buildAdminUserCardKeyboard,
   buildAdminUserChannelsKeyboard,
+  buildAdminUserFoldersChannelsKeyboard,
+  buildAdminUserChannelFoldersKeyboard,
   buildAdminUsersKeyboard,
   ADMIN_CHANNELS_PAGE_SIZE,
   buildChannelKeyboard,
@@ -74,7 +76,6 @@ import {
   parseTelegramUserId,
   revokeAdminRights,
   revokeBotAccess,
-  formatAdminEnabledFolders,
   summarizeOperatorForAdmin,
 } from "./bot-access.js";
 import {
@@ -2480,7 +2481,7 @@ async function handleAdminCallback(
     return;
   }
 
-  if (value === "users_noop" || value === "uch_noop") {
+  if (value === "users_noop" || value === "uch_noop" || value === "uf_noop") {
     await telegram.answerCallbackQuery(callbackId);
     return;
   }
@@ -2524,10 +2525,77 @@ async function handleAdminCallback(
     return;
   }
 
+  // legacy → bot folders
   if (value === "user_folders" && extra) {
     const targetId = Number(extra);
     await telegram.answerCallbackQuery(callbackId);
-    await sendAdminUserFolders(chatId, targetId);
+    await showAdminUserFoldersChannelsMenu(chatId, targetId, "bot", messageId, 0);
+    return;
+  }
+
+  // admin:uf / uaf — enabled channels with folder counts
+  if ((value === "uf" || value === "uaf") && extra) {
+    const targetId = Number(extra);
+    const page = Number(parts[0] ?? 0) || 0;
+    await telegram.answerCallbackQuery(callbackId);
+    await showAdminUserFoldersChannelsMenu(
+      chatId,
+      targetId,
+      value === "uaf" ? "ai" : "bot",
+      messageId,
+      page,
+    );
+    return;
+  }
+
+  // admin:ufc / uafc — open channel folders
+  if ((value === "ufc" || value === "uafc") && extra && parts[0] !== undefined) {
+    const targetId = Number(extra);
+    const channelIndex = Number(parts[0]);
+    const page = Number(parts[1] ?? 0) || 0;
+    await telegram.answerCallbackQuery(callbackId);
+    await showAdminUserChannelFoldersMenu(
+      chatId,
+      targetId,
+      channelIndex,
+      value === "uafc" ? "ai" : "bot",
+      messageId,
+      page,
+    );
+    return;
+  }
+
+  // admin:uft / uaft — toggle one folder
+  if ((value === "uft" || value === "uaft") && extra && parts[0] !== undefined && parts[1] !== undefined) {
+    const targetId = Number(extra);
+    const channelIndex = Number(parts[0]);
+    const folderIndex = Number(parts[1]);
+    await toggleAdminTargetFolder(
+      chatId,
+      callbackId,
+      targetId,
+      channelIndex,
+      folderIndex,
+      value === "uaft" ? "ai" : "bot",
+      messageId,
+    );
+    return;
+  }
+
+  // admin:ufa / uafa — all on/off for channel folders
+  if ((value === "ufa" || value === "uafa") && extra && parts[0] !== undefined && parts[1]) {
+    const targetId = Number(extra);
+    const channelIndex = Number(parts[0]);
+    const turnOn = parts[1] === "on";
+    await setAllAdminTargetFolders(
+      chatId,
+      callbackId,
+      targetId,
+      channelIndex,
+      value === "uafa" ? "ai" : "bot",
+      turnOn,
+      messageId,
+    );
     return;
   }
 
@@ -2851,7 +2919,39 @@ async function toggleAdminTargetChannel(
   await showAdminUserChannelsMenu(adminChatId, targetId, messageId, page);
 }
 
-async function sendAdminUserFolders(chatId: number, targetId: number): Promise<void> {
+type AdminFolderMode = "bot" | "ai";
+
+function listAdminEnabledChannelsWithFolders(state: ChatState): Array<{
+  id: string;
+  name: string;
+  country: WorkerCountry;
+  botOn: number;
+  aiOn: number;
+  total: number;
+}> {
+  return getSelectableChannels(state)
+    .filter((channel) => channel.enabled)
+    .map((channel) => {
+      const folders = resolveChannelStatusFolders(state, channel.id);
+      return {
+        id: channel.id,
+        name: channel.name,
+        country: channel.country,
+        botOn: folders.filter((folder) => folder.enabled).length,
+        aiOn: folders.filter((folder) => isAiFolderEnabled(folder)).length,
+        total: folders.length,
+      };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name, "ru"));
+}
+
+async function showAdminUserFoldersChannelsMenu(
+  chatId: number,
+  targetId: number,
+  mode: AdminFolderMode,
+  messageId?: number,
+  page = 0,
+): Promise<void> {
   const targetState = await stateStore.get(targetId);
   if (!targetState) {
     await telegram.sendMessage(
@@ -2861,8 +2961,206 @@ async function sendAdminUserFolders(chatId: number, targetId: number): Promise<v
     );
     return;
   }
-  const text = [`Папки ${targetId}`, "", formatAdminEnabledFolders(targetState)].join("\n");
-  await telegram.sendMessage(chatId, text, buildAdminUserCardKeyboard(targetId));
+  const channels = listAdminEnabledChannelsWithFolders(targetState);
+  if (!channels.length) {
+    const text = `У ${targetId} нет включённых каналов — папки смотреть негде.`;
+    const keyboard = buildAdminUserCardKeyboard(targetId);
+    if (!messageId) {
+      await telegram.sendMessage(chatId, text, keyboard);
+      return;
+    }
+    await safeEditMenu(chatId, messageId, text, keyboard);
+    return;
+  }
+  const rows = channels.map((channel) => ({
+    name: channel.name,
+    on: mode === "ai" ? channel.aiOn : channel.botOn,
+    total: channel.total,
+  }));
+  const withAny = rows.filter((row) => row.on > 0).length;
+  const title = mode === "ai" ? "Папки AI" : "Папки бота";
+  const text = [
+    `${title} · ${targetId}`,
+    `Включённых каналов: ${channels.length}`,
+    `С папками: ${withAny}`,
+    "Нажми канал — папки вкл/выкл.",
+  ].join("\n");
+  const keyboard = buildAdminUserFoldersChannelsKeyboard(targetId, mode, rows, page);
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function showAdminUserChannelFoldersMenu(
+  chatId: number,
+  targetId: number,
+  channelIndex: number,
+  mode: AdminFolderMode,
+  messageId?: number,
+  page = 0,
+): Promise<void> {
+  const targetState = await stateStore.get(targetId);
+  if (!targetState) {
+    const text = `У ${targetId} нет state — папок нет.`;
+    const keyboard = buildAdminUserCardKeyboard(targetId);
+    if (!messageId) {
+      await telegram.sendMessage(chatId, text, keyboard);
+      return;
+    }
+    await safeEditMenu(chatId, messageId, text, keyboard);
+    return;
+  }
+  const channels = listAdminEnabledChannelsWithFolders(targetState);
+  const channel = channels[channelIndex];
+  if (!channel) {
+    await showAdminUserFoldersChannelsMenu(chatId, targetId, mode, messageId, 0);
+    return;
+  }
+  const folders = resolveChannelStatusFolders(targetState, channel.id);
+  const folderRows = folders.map((folder) => ({
+    name: folder.name,
+    on: mode === "ai" ? isAiFolderEnabled(folder) : folder.enabled,
+  }));
+  const on = folderRows.filter((folder) => folder.on).length;
+  const title = mode === "ai" ? "Папки AI" : "Папки бота";
+  const text = [
+    `${title} · ${channel.name}`,
+    `Пользователь ${targetId}`,
+    `Вкл: ${on}/${folderRows.length}`,
+    "Нажми папку — переключить.",
+  ].join("\n");
+  const keyboard = buildAdminUserChannelFoldersKeyboard(
+    targetId,
+    channelIndex,
+    mode,
+    folderRows,
+    page,
+  );
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function patchTargetChannelFolders(
+  targetId: number,
+  targetState: ChatState,
+  channelId: string,
+  channelName: string,
+  folders: ReturnType<typeof resolveChannelStatusFolders>,
+): Promise<ChatState> {
+  const runtime = getChannelRuntime(
+    targetState,
+    channelId,
+    inferCountryFromName(channelName),
+  );
+  return (
+    (await stateStore.patch(targetId, {
+      channels: {
+        ...(targetState.channels ?? {}),
+        [channelId]: {
+          ...runtime,
+          statusFolders: folders,
+        },
+      },
+    })) ?? targetState
+  );
+}
+
+async function toggleAdminTargetFolder(
+  adminChatId: number,
+  callbackId: string,
+  targetId: number,
+  channelIndex: number,
+  folderIndex: number,
+  mode: AdminFolderMode,
+  messageId?: number,
+): Promise<void> {
+  const targetState = await stateStore.get(targetId);
+  if (!targetState) {
+    await telegram.answerCallbackQuery(callbackId, "Нет state");
+    return;
+  }
+  const channels = listAdminEnabledChannelsWithFolders(targetState);
+  const channel = channels[channelIndex];
+  if (!channel) {
+    await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+    return;
+  }
+  const current = resolveChannelStatusFolders(targetState, channel.id);
+  const folders =
+    mode === "ai"
+      ? toggleAiStatusFolder(current, folderIndex)
+      : toggleStatusFolder(current, folderIndex);
+  await patchTargetChannelFolders(targetId, targetState, channel.id, channel.name, folders);
+  const folder = folders[folderIndex];
+  const on = folder
+    ? mode === "ai"
+      ? isAiFolderEnabled(folder)
+      : folder.enabled
+    : false;
+  await telegram.answerCallbackQuery(
+    callbackId,
+    on ? `✅ ${folder?.name ?? "папка"}` : `⬜ ${folder?.name ?? "папка"}`,
+  );
+  const page = Math.floor(folderIndex / FOLDERS_PAGE_SIZE);
+  await showAdminUserChannelFoldersMenu(
+    adminChatId,
+    targetId,
+    channelIndex,
+    mode,
+    messageId,
+    page,
+  );
+}
+
+async function setAllAdminTargetFolders(
+  adminChatId: number,
+  callbackId: string,
+  targetId: number,
+  channelIndex: number,
+  mode: AdminFolderMode,
+  turnOn: boolean,
+  messageId?: number,
+): Promise<void> {
+  const targetState = await stateStore.get(targetId);
+  if (!targetState) {
+    await telegram.answerCallbackQuery(callbackId, "Нет state");
+    return;
+  }
+  const channels = listAdminEnabledChannelsWithFolders(targetState);
+  const channel = channels[channelIndex];
+  if (!channel) {
+    await telegram.answerCallbackQuery(callbackId, "Канал не найден");
+    return;
+  }
+  const current = resolveChannelStatusFolders(targetState, channel.id);
+  const folders =
+    mode === "ai"
+      ? setAllAiStatusFolders(current, turnOn)
+      : setAllStatusFolders(current, turnOn);
+  await patchTargetChannelFolders(targetId, targetState, channel.id, channel.name, folders);
+  await telegram.answerCallbackQuery(
+    callbackId,
+    turnOn
+      ? mode === "ai"
+        ? "AI во все папки"
+        : "Все папки включены"
+      : mode === "ai"
+        ? "AI выключен"
+        : "Папки сняты",
+  );
+  await showAdminUserChannelFoldersMenu(
+    adminChatId,
+    targetId,
+    channelIndex,
+    mode,
+    messageId,
+    0,
+  );
 }
 
 function buildMainMenuCaption(state: ChatState): string {
