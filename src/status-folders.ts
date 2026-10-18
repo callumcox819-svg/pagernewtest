@@ -713,6 +713,17 @@ export function setAllStatusFoldersExceptCompleted(
   }));
 }
 
+/** True when every non-Completed folder is already enabled. */
+export function areAllFoldersEnabledExceptCompleted(
+  folders: StatusFolderState[],
+): boolean {
+  const actionable = folders.filter((folder) => !isCompletedStatusName(folder.name));
+  if (!actionable.length) {
+    return false;
+  }
+  return actionable.every((folder) => folder.enabled);
+}
+
 export function toggleStatusFolder(
   folders: StatusFolderState[],
   index: number,

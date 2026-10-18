@@ -25,6 +25,7 @@ import {
   isAiFolderEnabled,
   setAllStatusFolders,
   setAllStatusFoldersExceptCompleted,
+  areAllFoldersEnabledExceptCompleted,
   setAllAiStatusFolders,
   stripChannelNamesFromFolders,
   toggleStatusFolder,
@@ -2701,21 +2702,42 @@ async function sendMainMenu(chatId: number, state: ChatState, messageId?: number
   await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
+async function adminFoldersCurrentlyOn(): Promise<boolean> {
+  const states = await stateStore.listAll();
+  for (const state of states) {
+    const catalog = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+    if (catalog.length && areAllFoldersEnabledExceptCompleted(catalog)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function adminPanelKeyboard(): Promise<ReturnType<typeof buildAdminPanelKeyboard>> {
+  return buildAdminPanelKeyboard({
+    foldersCurrentlyOn: await adminFoldersCurrentlyOn(),
+  });
+}
+
 async function showAdminPanel(chatId: number, messageId?: number): Promise<void> {
   if (!(await isAdmin(env, appMetaStore, chatId))) {
     await telegram.sendMessage(chatId, "⛔ Админ-панель только для админов.");
     return;
   }
   const snapshot = await getAccessSnapshot(env, appMetaStore);
+  const foldersOn = await adminFoldersCurrentlyOn();
   const text = [
     "👤 Админ-панель",
     `Доступ: ${snapshot.allowed.length} польз.`,
     `Админы: ${snapshot.admins.length}`,
     `Владельцы (env): ${snapshot.owners.length ? snapshot.owners.join(", ") : "не заданы — добавь ADMIN_IDS"}`,
     "",
+    foldersOn
+      ? "Папки: включены у пользователей (кроме «Завершено»)."
+      : "Папки: не все включены — можно включить разом.",
     "Выбери действие ниже.",
   ].join("\n");
-  const keyboard = buildAdminPanelKeyboard();
+  const keyboard = await adminPanelKeyboard();
   if (!messageId) {
     await telegram.sendMessage(chatId, text, keyboard);
     return;
@@ -2759,12 +2781,18 @@ async function handleAdminCallback(
     return;
   }
 
-  if (value === "enable_all_folders") {
-    await telegram.answerCallbackQuery(callbackId, "Включаю папки…");
-    const result = await enableAllFoldersForAllUsersExceptCompleted();
+  if (value === "enable_all_folders" || value === "toggle_all_folders") {
+    const turnOn = !(await adminFoldersCurrentlyOn());
+    await telegram.answerCallbackQuery(
+      callbackId,
+      turnOn ? "Включаю папки…" : "Выключаю папки…",
+    );
+    const result = await setAllFoldersForAllUsers(turnOn);
     const text = [
-      "✅ Все папки включены для всех пользователей",
-      `(кроме «Завершено»)`,
+      turnOn
+        ? "✅ Все папки включены для всех пользователей"
+        : "⬜ Все папки выключены для всех пользователей",
+      turnOn ? `(кроме «Завершено» — она остаётся выкл.)` : "",
       "",
       `Обновлено: ${result.updatedUsers} польз.`,
       result.skippedUsers ? `Без папок (пропущено): ${result.skippedUsers}` : "",
@@ -2772,10 +2800,11 @@ async function handleAdminCallback(
     ]
       .filter(Boolean)
       .join("\n");
+    const keyboard = await adminPanelKeyboard();
     if (messageId) {
-      await safeEditMenu(chatId, messageId, text, buildAdminPanelKeyboard());
+      await safeEditMenu(chatId, messageId, text, keyboard);
     } else {
-      await telegram.sendMessage(chatId, text, buildAdminPanelKeyboard());
+      await telegram.sendMessage(chatId, text, keyboard);
     }
     return;
   }
@@ -3023,7 +3052,7 @@ async function handleAdminPendingInput(
     await telegram.sendMessage(
       chatId,
       `✅ Доступ выдан пользователю ${targetId}.\nПусть напишет /start.`,
-      buildAdminPanelKeyboard(),
+      await adminPanelKeyboard(),
     );
     return true;
   }
@@ -3033,7 +3062,7 @@ async function handleAdminPendingInput(
     await telegram.sendMessage(
       chatId,
       result.ok ? `❌ Доступ у ${targetId} забран.` : `Не удалось: ${result.reason}`,
-      buildAdminPanelKeyboard(),
+      await adminPanelKeyboard(),
     );
     return true;
   }
@@ -3483,7 +3512,8 @@ async function toggleAdminTargetFolder(
   );
 }
 
-async function enableAllFoldersForAllUsersExceptCompleted(): Promise<{
+/** Toggle bot status folders for every user. On = all except Completed; Off = all off. */
+async function setAllFoldersForAllUsers(turnOn: boolean): Promise<{
   updatedUsers: number;
   skippedUsers: number;
   updatedChannels: number;
@@ -3500,7 +3530,9 @@ async function enableAllFoldersForAllUsersExceptCompleted(): Promise<{
       continue;
     }
 
-    const nextCatalog = setAllStatusFoldersExceptCompleted(catalog);
+    const nextCatalog = turnOn
+      ? setAllStatusFoldersExceptCompleted(catalog)
+      : setAllStatusFolders(catalog, false);
     const nextChannels: Record<string, ChannelRuntimeState> = {
       ...(state.channels ?? {}),
     };
@@ -3511,7 +3543,9 @@ async function enableAllFoldersForAllUsersExceptCompleted(): Promise<{
       }
       nextChannels[channelId] = {
         ...runtime,
-        statusFolders: setAllStatusFoldersExceptCompleted(runtime.statusFolders),
+        statusFolders: turnOn
+          ? setAllStatusFoldersExceptCompleted(runtime.statusFolders)
+          : setAllStatusFolders(runtime.statusFolders, false),
       };
       updatedChannels += 1;
     }

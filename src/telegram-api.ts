@@ -988,7 +988,11 @@ export function buildMainMenuKeyboard(options?: { isAdmin?: boolean }): ReplyMar
   return { inline_keyboard: rows };
 }
 
-export function buildAdminPanelKeyboard(): ReplyMarkup {
+export function buildAdminPanelKeyboard(options?: {
+  /** When true, next press turns folders off (label «Выключить…»). */
+  foldersCurrentlyOn?: boolean;
+}): ReplyMarkup {
+  const foldersOn = Boolean(options?.foldersCurrentlyOn);
   return {
     inline_keyboard: [
       [
@@ -998,10 +1002,15 @@ export function buildAdminPanelKeyboard(): ReplyMarkup {
         }),
       ],
       [
-        inlineBtn("Включить все папки", "admin:enable_all_folders", {
-          emojiId: PREMIUM_EMOJI.folder,
-          style: "success",
-        }),
+        foldersOn
+          ? inlineBtn("Выключить все папки", "admin:toggle_all_folders", {
+              emojiId: PREMIUM_EMOJI.cross,
+              style: "danger",
+            })
+          : inlineBtn("Включить все папки", "admin:toggle_all_folders", {
+              emojiId: PREMIUM_EMOJI.folder,
+              style: "success",
+            }),
       ],
       [
         inlineBtn("Доступ к боту", "admin:grant_access", {
