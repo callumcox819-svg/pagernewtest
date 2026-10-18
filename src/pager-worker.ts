@@ -42,6 +42,7 @@ import {
   planFolderPresetAdvance,
   planForcedNextFolderPreset,
   planFolderPresetForKinds,
+  type FolderOnlyCountry,
   type PresetPlan,
 } from "./folder-presets.js";
 import { aiLooksLikeFunnelAdvance } from "./funnel-ai-advance.js";
@@ -802,7 +803,9 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       item.runtime.country === "KE" ||
       item.runtime.country === "GT" ||
       item.runtime.country === "EC" ||
-      isFolderOnlyCountry(item.runtime.country),
+      isFolderOnlyCountry(item.runtime.country) ||
+      isMaChannelName(item.channelName) ||
+      isPkChannelName(item.channelName),
   )
     ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_UNREAD + INBOX_TOP_CM_FOLLOWUP)
     : 150;
@@ -1125,7 +1128,9 @@ async function buildWorkQueue(
           runtime.runtime.country !== "KE" &&
           runtime.runtime.country !== "GT" &&
           runtime.runtime.country !== "EC" &&
-          !isFolderOnlyCountry(runtime.runtime.country))
+          !isFolderOnlyCountry(runtime.runtime.country) &&
+          !isMaChannelName(runtime.channelName) &&
+          !isPkChannelName(runtime.channelName))
       ) {
         continue;
       }
@@ -1167,7 +1172,9 @@ async function buildWorkQueue(
       channel.runtime.country !== "KE" &&
       channel.runtime.country !== "GT" &&
       channel.runtime.country !== "EC" &&
-      !isFolderOnlyCountry(channel.runtime.country)
+      !isFolderOnlyCountry(channel.runtime.country) &&
+      !isMaChannelName(channel.channelName) &&
+      !isPkChannelName(channel.channelName)
     ) {
       continue;
     }
@@ -1181,7 +1188,9 @@ async function buildWorkQueue(
       channel.runtime.country === "DJ" ||
       channel.runtime.country === "GT" ||
       channel.runtime.country === "EC" ||
-      isFolderOnlyCountry(channel.runtime.country);
+      isFolderOnlyCountry(channel.runtime.country) ||
+      isMaChannelName(channel.channelName) ||
+      isPkChannelName(channel.channelName);
     const isJo = channel.runtime.country === "JO";
     const isRw = channel.runtime.country === "RW";
     const channelFolderIds =
@@ -7138,6 +7147,20 @@ async function processEgConversation(
   return true;
 }
 
+/** MA/PK channel name wins when operator country was mis-set (else presets silently no-op). */
+function resolveFolderPresetCountry(runtime: EnabledChannel): FolderOnlyCountry | undefined {
+  if (isFolderOnlyCountry(runtime.runtime.country)) {
+    return runtime.runtime.country;
+  }
+  if (isMaChannelName(runtime.channelName)) {
+    return "MA";
+  }
+  if (isPkChannelName(runtime.channelName)) {
+    return "PK";
+  }
+  return undefined;
+}
+
 async function trySendFolderPreset(
   deps: WorkerDeps,
   state: ChatState,
@@ -7153,18 +7176,19 @@ async function trySendFolderPreset(
 ): Promise<boolean> {
   // 1xBET: CM/DJ have full script engines. Melbet-style folder presets must NOT
   // intercept them — age answers like "20" were treated as table picks → hold → silence.
-  if (!isFolderOnlyCountry(runtime.runtime.country)) {
+  const folderCountry = resolveFolderPresetCountry(runtime);
+  if (!folderCountry) {
     return false;
   }
-  const language = folderMarketLanguage(runtime.runtime.country);
+  const language = folderMarketLanguage(folderCountry);
   if (!language) {
     return false;
   }
   const folderId =
-    runtime.runtime.templateBankId || pickLiveTemplateBank(state, runtime.runtime.country)?.id;
+    runtime.runtime.templateBankId || pickLiveTemplateBank(state, folderCountry)?.id;
   if (!folderId) {
     console.warn(
-      `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} — saved-reply folder is not linked`,
+      `Pager worker: ${folderCountry} ${convId.slice(0, 8)} — saved-reply folder is not linked`,
     );
     return false;
   }
@@ -7180,21 +7204,21 @@ async function trySendFolderPreset(
     options?.forcedPlan ?? planFolderPresetAdvance(replies, outgoingTexts, customerText, language);
   if (!plan) {
     console.log(
-      `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} preset skip — need agreement or decline (lastPreset=${lastSentPresetIndex(replies, outgoingTexts)}, text=${truncate(customerText)})`,
+      `Pager worker: ${folderCountry} ${convId.slice(0, 8)} preset skip — need agreement or decline (lastPreset=${lastSentPresetIndex(replies, outgoingTexts)}, text=${truncate(customerText)})`,
     );
     return false;
   }
   if (plan.action === "hold") {
     // Do not swallow the turn — fall through so scripts/AI can still reply.
     console.log(
-      `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} preset hold (${plan.reason}), fall through`,
+      `Pager worker: ${folderCountry} ${convId.slice(0, 8)} preset hold (${plan.reason}), fall through`,
     );
     return false;
   }
 
   const texts = plan.texts.map((text) => text.trim()).filter(Boolean);
   console.log(
-    `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} ${plan.role}${plan.table ? " table" : ""} parts=${texts.length}${plan.moveToInProgress ? " →in_progress" : ""} from saved replies, no AI`,
+    `Pager worker: ${folderCountry} ${convId.slice(0, 8)} ${plan.role}${plan.table ? " table" : ""} parts=${texts.length}${plan.moveToInProgress ? " →in_progress" : ""} from saved replies, no AI`,
   );
 
   let sentAny = false;
@@ -7258,7 +7282,7 @@ async function trySendFolderPreset(
       try {
         await client.patchConversationStatus(convId, statusId, operatorId);
         console.log(
-          `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} status -> in progress`,
+          `Pager worker: ${folderCountry} ${convId.slice(0, 8)} status -> in progress`,
         );
         if (currentStatusId !== statusId) {
           await onMovedToInProgressRegistration(
@@ -7270,7 +7294,7 @@ async function trySendFolderPreset(
         }
       } catch (error) {
         console.warn(
-          `Pager worker: ${runtime.runtime.country} status patch failed ${convId.slice(0, 8)}:`,
+          `Pager worker: ${folderCountry} status patch failed ${convId.slice(0, 8)}:`,
           formatError(error),
         );
         await schedulePendingInProgressMove(
@@ -7282,11 +7306,11 @@ async function trySendFolderPreset(
       }
     } else if (!statusId) {
       console.warn(
-        `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} — no «в процессе» folder found`,
+        `Pager worker: ${folderCountry} ${convId.slice(0, 8)} — no «в процессе» folder found`,
       );
     } else if (!inProgressFolderEnabled) {
       console.warn(
-        `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} — skip status move, «в процессе» not enabled for channel`,
+        `Pager worker: ${folderCountry} ${convId.slice(0, 8)} — skip status move, «в процессе» not enabled for channel`,
       );
     }
   }
@@ -7321,7 +7345,12 @@ async function processFolderMarketConversation(
   const sorted = [...messages].sort(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
-  const folderLang = folderMarketLanguage(runtime.runtime.country);
+  const folderCountry =
+    resolveFolderPresetCountry(runtime) ??
+    (isFolderOnlyCountry(runtime.runtime.country) ? runtime.runtime.country : undefined);
+  const folderLang =
+    (folderCountry ? folderMarketLanguage(folderCountry) : undefined) ??
+    folderMarketLanguage(runtime.runtime.country);
   const threadCountry: CountryCode =
     folderLang === "es" || folderLang === "en" ? "ZM" : folderLang === "ur" ? "EG" : "CM";
   const lastIncoming = findLatestIncomingFromThread(sorted, conv, threadCountry);
@@ -7347,10 +7376,16 @@ async function processFolderMarketConversation(
     .map((message) => (message.text || "").trim());
   const latestCustomerText = (lastIncoming.text || "").trim();
   // Same backlog unlock as MG/DJ — stale «Без статусу» leads must not die behind the 30m gate.
+  // Also continue after intro was already sent (outgoingTexts > 0) — that was MA silence after «أنا مستعد».
   const folderNewLeadBypass =
     isNoStatusConversation(conv) &&
     outgoingTexts.length === 0 &&
     Boolean(latestCustomerText);
+  const folderContinuationBypass =
+    isNoStatusConversation(conv) &&
+    outgoingTexts.length > 0 &&
+    Boolean(latestCustomerText) &&
+    (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection));
   const folderInProgressBypass =
     isInProgressStatusConversation(conv) &&
     Boolean(latestCustomerText) &&
@@ -7366,9 +7401,9 @@ async function processFolderMarketConversation(
       lastIncoming,
       sorted,
       {
-        bypass: folderNewLeadBypass || folderInProgressBypass,
+        bypass: folderNewLeadBypass || folderContinuationBypass || folderInProgressBypass,
         operatorUserId,
-        countryLabel: runtime.runtime.country,
+        countryLabel: folderCountry ?? runtime.runtime.country,
         country: threadCountry === "ZM" ? "ZM" : threadCountry === "EG" ? "EG" : "DJ",
         catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
       },

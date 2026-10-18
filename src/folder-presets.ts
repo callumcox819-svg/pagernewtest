@@ -96,6 +96,35 @@ export function findTablePresetIndex(replies: PagerSavedReply[]): number {
   return replies.findIndex((reply) => isTablePresetText(reply.text));
 }
 
+function isHowItWorksOverview(raw: string, folded: string): boolean {
+  if (
+    /[eé]tape par [eé]tape|how it works|comment cela|voici ce que|d[eé]p[oô]t minimum|groupe priv/i.test(
+      folded,
+    )
+  ) {
+    return true;
+  }
+  // MA Arabic «كيفية العمل» / numbered overview — must NOT become registration/deposit
+  // just because steps mention تسجيل / إيداع / 10 درهم.
+  if (
+    /كيفية العمل|كيف (?:يعمل|تشتغل|نشتغل)|طريقة العمل|الخطوات|خطوة بخطوة|إليك كيف|اليك كيف|إليك ما|اليك ما/i.test(
+      raw,
+    )
+  ) {
+    return true;
+  }
+  const numbered =
+    /(?:^|\n)\s*1[\).:\-\s]/m.test(raw) && /(?:^|\n)\s*2[\).:\-\s]/m.test(raw);
+  if (
+    numbered &&
+    raw.length > 100 &&
+    /(?:d[eé]p[oô]t|إيداع|ايداع|inscri|تسجيل|compte|حساب|promo|درهم|mad\b)/i.test(folded)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function classifyPresetKind(text: string): PresetKind {
   const raw = (text || "").trim();
   const t = foldPresetText(raw);
@@ -107,6 +136,10 @@ export function classifyPresetKind(text: string): PresetKind {
   }
   if (isTablePresetText(raw)) {
     return "table";
+  }
+  // Overview / how-it-works BEFORE deposit+registration needles (MA Arabic scripts).
+  if (isHowItWorksOverview(raw, t)) {
+    return "details";
   }
   if (
     /^https?:\/\/\S+$/i.test(raw) ||
@@ -137,15 +170,12 @@ export function classifyPresetKind(text: string): PresetKind {
   ) {
     return "registration";
   }
-  if (/pr[eê]t|ready to|d[eé]marrer avec|es-tu pr|هل أنت مستعد/i.test(t)) {
-    return "ready";
-  }
   if (
-    /[eé]tape par [eé]tape|how it works|comment cela|voici ce que|d[eé]p[oô]t minimum|groupe priv/i.test(
+    /pr[eê]t|ready to|d[eé]marrer avec|es-tu pr|هل أنت مستعد|هل انت مستعد|واش نتي واجد|واش نتا واجد/i.test(
       t,
     )
   ) {
-    return "details";
+    return "ready";
   }
   if (/bonjour|salam|gagner|casino|مرحبا|أهلا|je suis ici/i.test(t)) {
     return "intro";
@@ -245,6 +275,16 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
   ) {
     return true;
   }
+  // MA Arabic / Darija ready — «أنا مستعد» must advance past intro (was silent for hours).
+  if (
+    /^(أنا|انا)?\s*(مستعد|جاهز|واجدة?|واجي)([\s,!.❤🤞💪👍]+.*)?$/i.test(raw) ||
+    /^(نعم|اييه|أوكي|اوكي|يلا|هيا|زائد|معاك|معااك)([\s,!.❤🤞💪👍]+.*)?$/i.test(raw) ||
+    /^(i'?m\s+ready|i am ready|ready|i want( money)?( sir)?|lets? go)([\s,!.❤🤞💪👍]+.*)?$/i.test(
+      folded,
+    )
+  ) {
+    return true;
+  }
   if (language === "ur") {
     return /^(جی|ہاں|हां|haan|han|ji|ok|okay|yes|theek|thik|bilkul|zaroor|چلیں|چلو)([\s,!.❤🤞💪👍]+.*)?$/i.test(
       folded,
@@ -255,7 +295,7 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
       ? /^(si|ok|okay|okey|dale|va|vale|listo|de acuerdo|claro|bueno|quiero|me interesa|vamos|perfecto|sale|simon|yes|ya)([\s,!.]+.*)?$/
       : language === "en"
         ? /^(yes|yep|yeah|ok|okay|okey|sure|alright|ready|go|continue|interested|i want|show me|tell me|next|fine|good|perfect|lets go|let's go|i'm in|im in)([\s,!.]+.*)?$/
-        : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|parfait|vas-y|vas y|go|ca marche|je suis pret|pret|interesse|je veux|montre|montrez|explique|continue|suivant|allons-y|d'acc|wakha|wa5a|safi|hania)([\s,!.]+.*)?$/;
+        : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|parfait|vas-y|vas y|go|ca marche|je suis pret|je suis prete|pret|prete|interesse|je veux|montre|montrez|explique|continue|suivant|allons-y|d'acc|wakha|wa5a|safi|hania)([\s,!.]+.*)?$/;
   return pattern.test(folded);
 }
 
