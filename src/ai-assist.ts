@@ -185,7 +185,10 @@ function buildSystemPrompt(country: CountryCode, ctx?: AiAssistContext): string 
     supportBlock,
     `Active market code: ${market}. Follow that market's currency and promo only.`,
     resolveAiMarketRules(country, ctx),
-    supportMode ? "" : "Max 5 short sentences. No markdown. No JSON. No URLs.",
+    "CRITICAL: Never invent or paste any URL, tinyurl, bit.ly, t.me, or mirror link. Only refer to the registration/Telegram link already sent in this chat from saved replies (say «le lien que je t'ai envoyé» / «the link I sent»).",
+    "If the site does not load: tell them to refresh, use Chrome, reopen THE SAME link already in the chat. Never provide a different link.",
+    "Push toward registration → ID screenshot → deposit → balance screenshot. Do not skip ahead to Telegram handoff without deposit proof.",
+    supportMode ? "Max 5 short sentences. No markdown. No JSON. No URLs." : "Max 5 short sentences. No markdown. No JSON. No URLs.",
   ]
     .filter(Boolean)
     .join(" ");
@@ -294,12 +297,16 @@ function buildVisionSystemPrompt(country: CountryCode, support?: SupportSnapshot
     ? "SUPPORT AGENT: praise registration proof, guide deposit + screenshot; thank for balance shot; ask for clearer image if needed."
     : "Describe briefly what you see if relevant, then reply to the customer.";
   return [
-    "You see a customer screenshot (registration / app / deposit proof).",
+    "You see a customer screenshot (registration / app / deposit proof / loading error / mobile-money SMS).",
     "If the image shows a Telegram/chat thread: ignore operator/bot bubbles (our scripts) — only react to the customer's new app screenshot or their caption.",
     "Do not reply to or repeat text visible from our own automated messages in the screenshot.",
+    "If registration button is loading / page stuck: help refresh + Chrome + same link already in chat + remind promo from our script. No new URLs.",
+    "If mobile-money SMS only: ask for 1xBET balance screenshot — SMS is not enough.",
+    "If account ID / DÉPÔT screen with ID: acknowledge and push deposit (scripts may send deposit text).",
+    "If 1xBET balance visible: congratulate — deposit proof OK.",
     buildSystemPrompt(country, support ? ({ country, support } as AiAssistContext) : undefined),
     supportHint,
-    "Plain text reply only. No URLs.",
+    "Plain text reply only. No URLs. Never invent links.",
   ].join(" ");
 }
 
@@ -374,8 +381,8 @@ function sanitizeAiReply(
   if (!reply?.trim()) {
     return undefined;
   }
-  if (/https?:\/\/\S+/i.test(reply)) {
-    console.warn("AI assist rejected reply containing URL");
+  if (/https?:\/\/\S+|www\.\S+|tinyurl\.com|bit\.ly|t\.me\/|cutt\.ly/i.test(reply)) {
+    console.warn("AI assist rejected reply containing URL/link");
     return undefined;
   }
   const trimmed = reply.trim();

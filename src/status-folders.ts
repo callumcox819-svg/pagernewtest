@@ -264,6 +264,33 @@ export function isInProgressStatusConversation(conv: PagerConversation): boolean
   return isFunnelFollowUpFolderName(name);
 }
 
+/**
+ * «Завершено» / Completed — bot AND AI must never process these chats.
+ * Keep the matcher tight (not «в процесі», not SPAM).
+ */
+export function isCompletedStatusName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (/в\s*процес|у\s*процес|in\s*progress|en\s*cours|не\s*заверш/i.test(normalized)) {
+    return false;
+  }
+  return (
+    /^заверш/i.test(normalized) ||
+    /\bзавершено\b/i.test(normalized) ||
+    /^completed?$/i.test(normalized) ||
+    /\bcompleted?\b/i.test(normalized) ||
+    /^finished$/i.test(normalized) ||
+    /^done$/i.test(normalized)
+  );
+}
+
+export function isCompletedStatusConversation(conv: PagerConversation): boolean {
+  const name = (conv.status?.name || "").trim();
+  return name.length > 0 && isCompletedStatusName(name);
+}
+
 /** Status folders the bot moves chats into mid-funnel — must still receive follow-up replies. */
 export function isClosedRegistrationStatusConversation(conv: PagerConversation): boolean {
   const name = (conv.status?.name || "").trim().toLowerCase();
@@ -273,9 +300,10 @@ export function isClosedRegistrationStatusConversation(conv: PagerConversation):
   if (isIgnoreStatusName(name)) {
     return true;
   }
-  return /скасован|cancel|cancelled|canceled|заверш|complete|completed|registered|^win$|deposit|выигр/i.test(
-    name,
-  );
+  if (isCompletedStatusName(name)) {
+    return true;
+  }
+  return /скасован|cancel|cancelled|canceled|registered|^win$|выигр/i.test(name);
 }
 
 /** Follow-up only when operator explicitly enabled the «в процессе» status folder (not via «Всі»). */
@@ -365,15 +393,13 @@ export function isConversationInOperatorEnabledFolders(
   return false;
 }
 
-/** «Завершено» / completed — эталонные чаты с депозитом для RW-обучения. */
+/** @deprecated use isCompletedStatusName — kept for RW harvest helpers. */
 export function isRwCompletedStatusName(name: string): boolean {
-  const normalized = name.trim().toLowerCase();
-  return /заверш|complete|completed|finished|done|deposit.*ok|усп/i.test(normalized);
+  return isCompletedStatusName(name);
 }
 
 export function isRwCompletedConversation(conv: PagerConversation): boolean {
-  const name = (conv.status?.name || "").trim();
-  return name.length > 0 && isRwCompletedStatusName(name);
+  return isCompletedStatusConversation(conv);
 }
 
 export function isSpamStatusName(name: string): boolean {

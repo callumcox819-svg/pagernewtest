@@ -40,7 +40,12 @@ import {
   isFolderOnlyCountry,
   lastSentPresetIndex,
   planFolderPresetAdvance,
+  planForcedNextFolderPreset,
+  planFolderPresetForKinds,
+  type PresetPlan,
 } from "./folder-presets.js";
+import { aiLooksLikeFunnelAdvance } from "./funnel-ai-advance.js";
+import { readFunnelScreenshot } from "./funnel-screenshot.js";
 import {
   defaultCountryForChannelName,
   isClChannelName,
@@ -418,6 +423,7 @@ import {
   buildStatusFoldersFromPager,
   countApiStatusFolders,
   isClosedRegistrationStatusConversation,
+  isCompletedStatusConversation,
   isFunnelFollowUpFolderName,
   isInProgressFollowUpFolderEnabled,
   ALL_INBOX_FOLDER_ID,
@@ -1091,6 +1097,9 @@ async function buildWorkQueue(
       if (catchUpAdded >= CATCH_UP_INBOX_CAP) {
         break;
       }
+      if (isCompletedStatusConversation(conv)) {
+        continue;
+      }
       const channelId = conv.channelId || conv.channel?.id || "";
       if (!channelIds.includes(channelId)) {
         continue;
@@ -1203,6 +1212,9 @@ async function buildWorkQueue(
 
       for (const conv of ordered) {
         if (!inboxConversationEligible(conv, channelFolderIds)) {
+          continue;
+        }
+        if (isCompletedStatusConversation(conv)) {
           continue;
         }
 
@@ -1945,6 +1957,14 @@ async function processConversation(
   if (isIgnoreStatusConversation(workingConv)) {
     console.log(
       `Pager worker: skip ${conv.id.slice(0, 8)} — ignore folder (status=${workingConv.status?.name || "none"})`,
+    );
+    return false;
+  }
+
+  // «Завершено» — never bot, never AI (even if the folder toggle is on).
+  if (isCompletedStatusConversation(workingConv)) {
+    console.log(
+      `Pager worker: skip ${conv.id.slice(0, 8)} — completed folder (status=${workingConv.status?.name || "none"})`,
     );
     return false;
   }
@@ -5171,6 +5191,33 @@ async function processMgConversation(
     scriptKeys = ["04_registration", "05_link"];
   }
 
+  // AI catches Darija / soft positives the regex intent missed — push next funnel scripts.
+  if (!scriptKeys.length && latestCustomerText) {
+    const aiGo = await aiLooksLikeFunnelAdvance(deps.env, latestCustomerText, {
+      recentCustomerTexts,
+      lastBotText: outgoingTexts[0] || "",
+      languageHint: "fr",
+    });
+    if (aiGo) {
+      if (!mgScriptSentInHistory(outgoingTexts, "01_intro")) {
+        scriptKeys = ["01_intro"];
+      } else if (!mgExplainScriptsSentInHistory(outgoingTexts)) {
+        scriptKeys = ["02_how_it_works", "03_mga_table"];
+      } else if (!mgRegLinkSentInHistory(outgoingTexts)) {
+        scriptKeys = ["04_registration", "05_link"];
+      } else if (!mgDepositSentInHistory(outgoingTexts)) {
+        scriptKeys = ["06_deposit"];
+      } else if (!mgScriptSentInHistory(outgoingTexts, "07_game_id")) {
+        scriptKeys = ["07_game_id"];
+      }
+      if (scriptKeys.length) {
+        console.log(
+          `Pager worker: MG ${convId.slice(0, 8)} AI advance → scripts=[${scriptKeys.join(",")}]`,
+        );
+      }
+    }
+  }
+
   if (scriptKeys.length) {
   scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "MG", scriptKeys);
   if (!scriptKeys.length) {
@@ -5668,6 +5715,28 @@ async function processDjConversation(
       intent === "ready")
   ) {
     scriptKeys = ["05_registration", "06_link", "07_promo"];
+  }
+
+  if (!scriptKeys.length && latestCustomerText) {
+    const aiGo = await aiLooksLikeFunnelAdvance(deps.env, latestCustomerText, {
+      recentCustomerTexts,
+      lastBotText: outgoingTexts[0] || "",
+      languageHint: "fr",
+    });
+    if (aiGo) {
+      if (!djScriptSentInHistory(outgoingTexts, "01_intro")) {
+        scriptKeys = ["01_intro"];
+      } else if (!djOfferScriptsSentInHistory(outgoingTexts)) {
+        scriptKeys = ["02_how_it_works", "03_djf_table", "04_ready_ask"];
+      } else if (!djRegLinkSentInHistory(outgoingTexts)) {
+        scriptKeys = ["05_registration", "06_link", "07_promo"];
+      }
+      if (scriptKeys.length) {
+        console.log(
+          `Pager worker: DJ ${convId.slice(0, 8)} AI advance → scripts=[${scriptKeys.join(",")}]`,
+        );
+      }
+    }
   }
 
   if (scriptKeys.length) {
@@ -7053,6 +7122,7 @@ async function trySendFolderPreset(
   lastIncoming: PagerMessage,
   outgoingTexts: string[],
   customerText: string,
+  options?: { forcedPlan?: PresetPlan },
 ): Promise<boolean> {
   // 1xBET: CM/DJ have full script engines. Melbet-style folder presets must NOT
   // intercept them — age answers like "20" were treated as table picks → hold → silence.
@@ -7079,7 +7149,8 @@ async function trySendFolderPreset(
     console.warn(`Pager worker: saved replies failed ${convId.slice(0, 8)}:`, formatError(error));
     return false;
   }
-  const plan = planFolderPresetAdvance(replies, outgoingTexts, customerText, language);
+  const plan =
+    options?.forcedPlan ?? planFolderPresetAdvance(replies, outgoingTexts, customerText, language);
   if (!plan) {
     console.log(
       `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} preset skip — need agreement or decline (lastPreset=${lastSentPresetIndex(replies, outgoingTexts)}, text=${truncate(customerText)})`,
@@ -7294,18 +7365,173 @@ async function processFolderMarketConversation(
     return true;
   }
 
-  return trySendFolderPreset(
-    deps,
-    state,
-    client,
+  const imageUrl = extractProofImageUrl(lastIncoming);
+  const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
+  const aiCountry: CountryCode = englishLike ? "ZM" : "CM";
+  const playbook = getPlaybook(deps.config, aiCountry);
+  const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
-    runtime,
-    convId,
-    convState,
-    lastIncoming,
-    outgoingTexts,
-    latestCustomerText,
+    currentState,
+    runtime.channelId,
   );
+
+  // Vision / OCR — drive next saved-reply step from screenshots.
+  let forcedPlan: PresetPlan | undefined;
+  let screenshotHelpIntent: string | undefined;
+  if (imageUrl) {
+    try {
+      const image = await client.downloadAttachment(imageUrl);
+      const classification = await classifyProofFromImage(playbook, image, {
+        caption: latestCustomerText,
+        ocrEnabled: deps.env.OCR_ENABLED,
+        ocrLang: ocrLangForCountry(aiCountry),
+        country: aiCountry,
+      });
+      const scene = readFunnelScreenshot(classification.combinedText);
+      console.log(
+        `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} screenshot scene=${scene.scene} proof=${classification.proofKind} (${scene.reason})`,
+      );
+      const folderId =
+        runtime.runtime.templateBankId || pickLiveTemplateBank(currentState, runtime.runtime.country)?.id;
+      const replies = folderId ? await client.getSavedReplies(folderId).catch(() => []) : [];
+      if (scene.scene === "account_id_ready" || classification.proofKind === "id_screenshot") {
+        forcedPlan =
+          planFolderPresetForKinds(replies, outgoingTexts, ["deposit", "ask_id"]) ??
+          planForcedNextFolderPreset(replies, outgoingTexts) ??
+          undefined;
+      } else if (
+        scene.scene === "platform_balance" ||
+        classification.proofKind === "deposit_balance_screenshot"
+      ) {
+        forcedPlan =
+          planFolderPresetForKinds(replies, outgoingTexts, ["telegram", "deposit"]) ??
+          planForcedNextFolderPreset(replies, outgoingTexts) ??
+          undefined;
+      } else if (
+        scene.scene === "site_loading_stuck" ||
+        scene.scene === "registration_form" ||
+        scene.scene === "mobile_money_sms"
+      ) {
+        screenshotHelpIntent =
+          scene.scene === "mobile_money_sms"
+            ? "need_balance_screenshot"
+            : "site_loading_help";
+      }
+    } catch (error) {
+      console.warn(
+        `Pager worker: ${runtime.runtime.country} OCR/vision failed ${convId.slice(0, 8)}:`,
+        formatError(error),
+      );
+    }
+  }
+
+  if (
+    forcedPlan &&
+    forcedPlan.action === "send" &&
+    (await trySendFolderPreset(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      outgoingTexts,
+      latestCustomerText,
+      { forcedPlan },
+    ))
+  ) {
+    return true;
+  }
+
+  if (
+    await trySendFolderPreset(
+      deps,
+      state,
+      client,
+      conv,
+      runtime,
+      convId,
+      convState,
+      lastIncoming,
+      outgoingTexts,
+      latestCustomerText,
+    )
+  ) {
+    return true;
+  }
+
+  // Regex gates missed a positive — ask AI, then force next saved reply.
+  const lastBot = outgoingTexts[0] || outgoingTexts[outgoingTexts.length - 1] || "";
+  const aiAdvance =
+    !screenshotHelpIntent &&
+    Boolean(latestCustomerText) &&
+    (await aiLooksLikeFunnelAdvance(deps.env, latestCustomerText, {
+      recentCustomerTexts,
+      lastBotText: lastBot,
+      languageHint: folderLang,
+    }));
+  if (aiAdvance) {
+    const folderId =
+      runtime.runtime.templateBankId || pickLiveTemplateBank(currentState, runtime.runtime.country)?.id;
+    const replies = folderId ? await client.getSavedReplies(folderId).catch(() => []) : [];
+    const nextPlan = planForcedNextFolderPreset(replies, outgoingTexts);
+    if (
+      nextPlan &&
+      nextPlan.action === "send" &&
+      (await trySendFolderPreset(
+        deps,
+        state,
+        client,
+        conv,
+        runtime,
+        convId,
+        convState,
+        lastIncoming,
+        outgoingTexts,
+        latestCustomerText,
+        { forcedPlan: nextPlan },
+      ))
+    ) {
+      console.log(
+        `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} AI advance → next saved reply`,
+      );
+      return true;
+    }
+  }
+
+  // Coach: stuck site / SMS / questions — AI text only, never invent links.
+  if (
+    folderEnabled &&
+    aiFolderEnabled &&
+    (screenshotHelpIntent ||
+      isCustomerClarificationMessage(latestCustomerText) ||
+      isLinkAccessProblemMessage(latestCustomerText) ||
+      Boolean(imageUrl))
+  ) {
+    const intent =
+      screenshotHelpIntent ||
+      (isLinkAccessProblemMessage(latestCustomerText) ? "link_access" : "clarification");
+    if (
+      await tryRunAiAgentTurn(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
+        country: aiCountry,
+        customerText: latestCustomerText || `(screenshot:${intent})`,
+        recentCustomerTexts,
+        outgoingTexts,
+        funnelStep: convState.funnelStep ?? Math.max(1, outgoingTexts.length),
+        intent,
+        scriptKeys: [],
+        forceSupportAgent: true,
+        folderEnabled,
+        aiFolderEnabled,
+      })
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function processGenericConversation(

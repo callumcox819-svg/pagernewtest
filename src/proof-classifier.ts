@@ -7,6 +7,12 @@ import {
   resolveCmProofScriptAction,
   type CmProofScriptAction,
 } from "./cm-proof.js";
+import {
+  looksLikeMobileMoneySms,
+  looksLikePlatformBalance,
+  looksLikeSiteLoadingStuck,
+  readFunnelScreenshot,
+} from "./funnel-screenshot.js";
 
 const { recognize } = tesseract;
 
@@ -73,12 +79,44 @@ export function classifyProofFromText(
       ? Boolean(login17)
       : /\b((?:15|16|17|18|19)\d{7,10})\b/.test(inputText);
 
+  const scene = readFunnelScreenshot(inputText);
+  if (scene.scene === "mobile_money_sms" || looksLikeMobileMoneySms(inputText)) {
+    return {
+      proofKind: "unclear_screenshot",
+      combinedText: inputText,
+      reason: "Mobile-money SMS receipt — need 1xBET balance screenshot",
+    };
+  }
+  if (scene.scene === "site_loading_stuck" || looksLikeSiteLoadingStuck(inputText)) {
+    return {
+      proofKind: "unclear_screenshot",
+      combinedText: inputText,
+      reason: "Site/registration UI stuck loading — help reopen same link",
+    };
+  }
+
   // Still filling the INSCRIPTION form — not proof of a finished account.
-  if (isRegistrationFormInProgress(inputText)) {
+  if (isRegistrationFormInProgress(inputText) || scene.scene === "registration_form") {
     return {
       proofKind: "unclear_screenshot",
       combinedText: inputText,
       reason: "Registration form in progress (INSCRIPTION), not completed account",
+    };
+  }
+
+  if (scene.scene === "platform_balance" || looksLikePlatformBalance(inputText)) {
+    return {
+      proofKind: "deposit_balance_screenshot",
+      combinedText: inputText,
+      reason: scene.reason || "1xBET balance visible",
+    };
+  }
+
+  if (scene.scene === "account_id_ready" && scene.accountId) {
+    return {
+      proofKind: "id_screenshot",
+      combinedText: inputText,
+      reason: scene.reason,
     };
   }
 

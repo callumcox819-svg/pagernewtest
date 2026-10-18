@@ -470,3 +470,77 @@ export function planFolderPresetAdvance(
     moveToInProgress,
   };
 }
+
+/**
+ * Force the next unsent preset bundle (AI/vision confirmed positive / proof).
+ * Skips agreement gates — caller must have classified the turn.
+ */
+export function planForcedNextFolderPreset(
+  replies: PagerSavedReply[],
+  outgoingTexts: string[],
+): PresetPlan | null {
+  if (!replies.length) {
+    return null;
+  }
+  const last = lastSentPresetIndex(replies, outgoingTexts);
+  const next = last + 1;
+  if (next >= replies.length) {
+    return { action: "hold", reason: "forced-after-last-preset" };
+  }
+  const bundle = buildSendBundle(replies, next);
+  if (!bundle.texts.length) {
+    return { action: "hold", reason: "empty-next-preset" };
+  }
+  const moveToInProgress = bundle.kinds.some(
+    (kind) => kind === "registration" || kind === "link" || kind === "promo",
+  );
+  return {
+    action: "send",
+    texts: bundle.texts,
+    index: bundle.endIndex,
+    role: `preset:${bundle.endIndex + 1}`,
+    table: bundle.table,
+    moveToInProgress,
+  };
+}
+
+/** Jump to the first unsent preset matching preferred kinds (e.g. deposit after ID proof). */
+export function planFolderPresetForKinds(
+  replies: PagerSavedReply[],
+  outgoingTexts: string[],
+  kinds: PresetKind[],
+): PresetPlan | null {
+  if (!replies.length || !kinds.length) {
+    return null;
+  }
+  const want = new Set(kinds);
+  for (let index = 0; index < replies.length; index += 1) {
+    const text = (replies[index]?.text || "").trim();
+    if (!text) {
+      continue;
+    }
+    const kind = classifyPresetKind(text);
+    if (!want.has(kind)) {
+      continue;
+    }
+    if (replyWasSent(text, outgoingTexts)) {
+      continue;
+    }
+    const bundle = buildSendBundle(replies, index);
+    if (!bundle.texts.length) {
+      continue;
+    }
+    const moveToInProgress = bundle.kinds.some(
+      (item) => item === "registration" || item === "link" || item === "promo",
+    );
+    return {
+      action: "send",
+      texts: bundle.texts,
+      index: bundle.endIndex,
+      role: `preset:${bundle.endIndex + 1}`,
+      table: bundle.table,
+      moveToInProgress,
+    };
+  }
+  return null;
+}
