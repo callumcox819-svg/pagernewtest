@@ -543,8 +543,8 @@ async function handleCallback(
   if (kind === "channels" && value === "all_on") {
     const latestState = (await stateStore.get(chatId)) ?? state;
     let nextState = (await setAllChannelsEnabled(chatId, latestState, true)) ?? latestState;
-    // Same as admin toggle: bot + AI folders on, except «Завершено».
-    nextState = (await applyUserFoldersBotAndAi(chatId, nextState, true)) ?? nextState;
+    // After all channels are on — folders bot+AI except Completed (enabled channels only).
+    nextState = (await applyUserFoldersBotAndAi(chatId, nextState, true)).state;
     await telegram.answerCallbackQuery(
       callbackId,
       "Все каналы + папки бота/AI (кроме Завершено)",
@@ -957,8 +957,8 @@ async function handleCallback(
     }
 
     if (value === "all_on" || value === "all_off") {
-      const nextState =
-        (await applyUserFoldersBotAndAi(chatId, state, value === "all_on")) ?? state;
+      const nextState = (await applyUserFoldersBotAndAi(chatId, state, value === "all_on"))
+        .state;
       await showFoldersMenu(chatId, nextState, messageId);
       return;
     }
@@ -2799,13 +2799,13 @@ async function handleAdminCallback(
     const result = await setAllFoldersForAllUsers(turnOn);
     const text = [
       turnOn
-        ? "✅ Папки бота + AI включены для всех пользователей"
-        : "⬜ Папки бота + AI выключены для всех пользователей",
-      turnOn ? `(кроме «Завершено» — она остаётся выкл.)` : "",
+        ? "✅ Папки бота + AI включены только на активных каналах"
+        : "⬜ Папки бота + AI выключены на активных каналах",
+      turnOn ? `(кроме «Завершено»; выключенные каналы не трогаем / папки сброшены)` : "",
       "",
-      `Обновлено: ${result.updatedUsers} польз.`,
-      result.skippedUsers ? `Без папок (пропущено): ${result.skippedUsers}` : "",
-      `Каналов с оверрайдом: ${result.updatedChannels}`,
+      `Польз.: ${result.updatedUsers}`,
+      result.skippedUsers ? `Пропущено: ${result.skippedUsers}` : "",
+      `Каналов: ${result.updatedChannels}`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -3521,55 +3521,65 @@ async function toggleAdminTargetFolder(
   );
 }
 
-/** Bot + AI folders for one user. On = all except Completed; Off = all off. */
+/**
+ * Bot + AI folders for one user.
+ * Only touches **actively enabled** channels — never turns folders on for offline channels.
+ * Global catalog is left unchanged so disabled channels don't inherit «all on».
+ */
 async function applyUserFoldersBotAndAi(
   chatId: number,
   state: ChatState,
   turnOn: boolean,
-): Promise<ChatState | undefined> {
+): Promise<{ state: ChatState; updatedChannels: number }> {
   const catalog = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
   if (!catalog.length) {
-    return state;
+    return { state, updatedChannels: 0 };
   }
 
-  const mapFolders = (folders: typeof catalog) =>
-    turnOn ? setAllStatusFoldersExceptCompleted(folders) : setAllStatusFoldersOff(folders);
-
-  const nextCatalog = mapFolders(catalog);
+  const mapOn = (folders: typeof catalog) => setAllStatusFoldersExceptCompleted(folders);
+  const mapOff = (folders: typeof catalog) => setAllStatusFoldersOff(folders);
   const nextChannels: Record<string, ChannelRuntimeState> = {
     ...(state.channels ?? {}),
   };
+  let updatedChannels = 0;
 
   for (const channel of getSelectableChannels(state)) {
     const runtime = getChannelRuntime(state, channel.id, channel.country);
+    const enabled = isChannelEnabled(state, channel.id, runtime.enabled);
     const existing = runtime.statusFolders?.length
       ? runtime.statusFolders
       : resolveChannelStatusFolders(state, channel.id);
-    const base = existing.length ? existing : nextCatalog;
-    nextChannels[channel.id] = {
-      ...runtime,
-      statusFolders: mapFolders(base),
-    };
-  }
+    const base = existing.length ? existing : catalog;
 
-  for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
-    if (nextChannels[channelId] || !runtime.statusFolders?.length) {
+    if (enabled) {
+      nextChannels[channel.id] = {
+        ...runtime,
+        statusFolders: turnOn ? mapOn(base) : mapOff(base),
+      };
+      updatedChannels += 1;
       continue;
     }
-    nextChannels[channelId] = {
-      ...runtime,
-      statusFolders: mapFolders(runtime.statusFolders),
-    };
+
+    // Disabled channel: if it already has overrides / would show «all on», pin folders off
+    // so the UI doesn't look like the bot is working there.
+    if (turnOn && (runtime.statusFolders?.length || areAllFoldersEnabledExceptCompleted(base))) {
+      nextChannels[channel.id] = {
+        ...runtime,
+        statusFolders: mapOff(base),
+      };
+      updatedChannels += 1;
+    }
   }
 
-  return stateStore.patch(chatId, {
-    statusFolders: nextCatalog,
-    operatorSettings: buildOperatorSettings(state, { statusFolders: nextCatalog }),
-    channels: nextChannels,
-  });
+  const patched =
+    (await stateStore.patch(chatId, {
+      channels: nextChannels,
+    })) ?? state;
+
+  return { state: patched, updatedChannels };
 }
 
-/** Toggle bot+AI status folders for every user. */
+/** Toggle bot+AI folders for every user — enabled channels only. */
 async function setAllFoldersForAllUsers(turnOn: boolean): Promise<{
   updatedUsers: number;
   skippedUsers: number;
@@ -3586,14 +3596,13 @@ async function setAllFoldersForAllUsers(turnOn: boolean): Promise<{
       skippedUsers += 1;
       continue;
     }
-    const beforeChannels = Object.values(state.channels ?? {}).filter((c) => c.statusFolders?.length)
-      .length;
-    await applyUserFoldersBotAndAi(state.chatId, state, turnOn);
-    updatedUsers += 1;
-    updatedChannels += Math.max(
-      beforeChannels,
-      getSelectableChannels(state).length,
-    );
+    const result = await applyUserFoldersBotAndAi(state.chatId, state, turnOn);
+    if (result.updatedChannels > 0) {
+      updatedUsers += 1;
+      updatedChannels += result.updatedChannels;
+    } else {
+      skippedUsers += 1;
+    }
   }
 
   return { updatedUsers, skippedUsers, updatedChannels };
