@@ -81,6 +81,14 @@ type TelegramResponse<T> = {
   description?: string;
 };
 
+export type TelegramUser = {
+  id: number;
+  is_bot?: boolean;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+};
+
 export type TelegramUpdate = {
   update_id: number;
   message?: TelegramMessage;
@@ -90,6 +98,7 @@ export type TelegramUpdate = {
 export type TelegramCallbackQuery = {
   id: string;
   data?: string;
+  from?: TelegramUser;
   message?: TelegramMessage;
 };
 
@@ -97,7 +106,12 @@ export type TelegramMessage = {
   message_id: number;
   chat: {
     id: number;
+    username?: string;
+    first_name?: string;
+    last_name?: string;
+    title?: string;
   };
+  from?: TelegramUser;
   text?: string;
   caption?: string;
   photo?: Array<{
@@ -132,6 +146,20 @@ export class TelegramApi {
 
   async deleteWebhook(): Promise<void> {
     await this.request("deleteWebhook", { drop_pending_updates: false });
+  }
+
+  async getChat(chatId: number): Promise<{
+    id: number;
+    username?: string;
+    first_name?: string;
+    last_name?: string;
+    title?: string;
+  } | null> {
+    try {
+      return await this.request("getChat", { chat_id: chatId });
+    } catch {
+      return null;
+    }
   }
 
   async sendMessage(

@@ -1,6 +1,6 @@
 import type { AppEnv } from "./env.js";
 import type { AppMetaStore } from "./app-meta-store.js";
-import type { ChatState, StateStore } from "./state-store.js";
+import type { ChatState, StateStore, TelegramProfile } from "./state-store.js";
 
 const ACCESS_META_KEY = "bot_access_users";
 const ADMIN_META_KEY = "bot_admin_users";
@@ -278,12 +278,33 @@ function shortChannelName(
   return channelId.slice(0, 8);
 }
 
+export function formatTelegramDisplayName(
+  profile: TelegramProfile | undefined,
+  userId: number,
+): string {
+  const username = profile?.username?.trim().replace(/^@/, "");
+  if (username) {
+    return `@${username}`;
+  }
+  const first = profile?.firstName?.trim() ?? "";
+  const last = profile?.lastName?.trim() ?? "";
+  const full = `${first} ${last}`.trim();
+  if (full) {
+    return full.length > 28 ? `${full.slice(0, 27)}…` : full;
+  }
+  return String(userId);
+}
+
 export function summarizeOperatorForAdmin(state: ChatState | undefined, userId: number): string {
+  const display = formatTelegramDisplayName(state?.telegramProfile, userId);
   if (!state) {
     return [
-      `👤 ${userId}`,
+      `👤 ${display}`,
+      display !== String(userId) ? `ID: ${userId}` : undefined,
       "State нет — пользователь ещё не заходил или сброшен.",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   const channels = Object.entries(state.channels ?? {});
@@ -291,13 +312,16 @@ export function summarizeOperatorForAdmin(state: ChatState | undefined, userId: 
   const pager = state.pagerAccount;
   const hasPager = Boolean(pager?.cookies?.trim() || (pager?.email && pager?.password));
   return [
-    `👤 ${userId}`,
+    `👤 ${display}`,
+    display !== String(userId) ? `ID: ${userId}` : undefined,
     `Pager: ${hasPager ? "✅" : "❌"}${hasPager ? ` · ${pager?.organizationName || pager?.organizationSlug || ""}` : ""}`.trim(),
     `Каналы вкл: ${enabled.length}`,
     `Пауза: ${state.paused ? "да" : "нет"}`,
     "",
     "Дальше — кнопки «каналы» / «папки».",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function formatAdminEnabledChannels(state: ChatState): string {

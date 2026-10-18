@@ -81,6 +81,13 @@ export type ConversationRuntimeState = {
   folderIdleSignalLastKind?: "in_progress" | "waiting_id" | "generic" | "skip";
 };
 
+export type TelegramProfile = {
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  updatedAt?: string;
+};
+
 export type ChatState = {
   chatId: number;
   channelId: string;
@@ -88,6 +95,8 @@ export type ChatState = {
   templateBankOverride?: string;
   pendingAction?: PendingAction;
   draftPagerEmail?: string;
+  /** Cached Telegram @username / name for admin directory. */
+  telegramProfile?: TelegramProfile;
   pagerAccount?: PagerAccountState;
   /** Source of truth for which Pager channels the worker polls. */
   enabledChannelIds?: string[];

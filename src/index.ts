@@ -78,6 +78,7 @@ import {
   parseTelegramUserId,
   revokeAdminRights,
   revokeBotAccess,
+  formatTelegramDisplayName,
   summarizeOperatorForAdmin,
 } from "./bot-access.js";
 import {
@@ -266,11 +267,19 @@ async function handleUpdate(update: TelegramUpdate) {
     if (update.callback_query?.message?.chat.id) {
       const chatId = update.callback_query.message.chat.id;
       const messageId = update.callback_query.message.message_id;
+      await rememberTelegramProfileFromUpdate(chatId, {
+        from: update.callback_query.from,
+        chat: update.callback_query.message.chat,
+      });
       await handleCallback(chatId, update.callback_query.id, update.callback_query.data, messageId);
       return;
     }
 
     if (update.message) {
+      await rememberTelegramProfileFromUpdate(update.message.chat.id, {
+        from: update.message.from,
+        chat: update.message.chat,
+      });
       await handleMessage(update.message);
     }
   } catch (error) {
@@ -3018,6 +3027,61 @@ async function handleAdminPendingInput(
   return false;
 }
 
+async function rememberTelegramProfileFromUpdate(
+  chatId: number,
+  source: {
+    from?: { username?: string; first_name?: string; last_name?: string };
+    chat?: { username?: string; first_name?: string; last_name?: string };
+  },
+): Promise<void> {
+  const username = source.from?.username?.trim() || source.chat?.username?.trim();
+  const firstName = source.from?.first_name?.trim() || source.chat?.first_name?.trim();
+  const lastName = source.from?.last_name?.trim() || source.chat?.last_name?.trim();
+  if (!username && !firstName && !lastName) {
+    return;
+  }
+  const current = await stateStore.get(chatId);
+  const prev = current?.telegramProfile;
+  if (
+    prev?.username === username &&
+    prev?.firstName === firstName &&
+    prev?.lastName === lastName
+  ) {
+    return;
+  }
+  await stateStore.patch(chatId, {
+    telegramProfile: {
+      username: username || undefined,
+      firstName: firstName || undefined,
+      lastName: lastName || undefined,
+      updatedAt: new Date().toISOString(),
+    },
+  });
+}
+
+async function ensureTelegramProfileCached(userId: number, state?: ChatState): Promise<ChatState | undefined> {
+  if (state?.telegramProfile?.username || state?.telegramProfile?.firstName) {
+    return state;
+  }
+  const chat = await telegram.getChat(userId);
+  if (!chat) {
+    return state;
+  }
+  const telegramProfile = {
+    username: chat.username?.trim() || undefined,
+    firstName: chat.first_name?.trim() || undefined,
+    lastName: chat.last_name?.trim() || undefined,
+    updatedAt: new Date().toISOString(),
+  };
+  if (!telegramProfile.username && !telegramProfile.firstName && !telegramProfile.lastName) {
+    return state;
+  }
+  return (
+    (await stateStore.patch(userId, { telegramProfile })) ??
+    (state ? { ...state, telegramProfile } : undefined)
+  );
+}
+
 async function listAdminDirectoryUsers(): Promise<Array<{ id: number; label: string }>> {
   const snapshot = await getAccessSnapshot(env, appMetaStore);
   const states = await stateStore.listAll();
@@ -3025,27 +3089,38 @@ async function listAdminDirectoryUsers(): Promise<Array<{ id: number; label: str
   for (const state of states) {
     byId.set(state.chatId, state);
   }
-  const ids = new Set<number>([...snapshot.allowed, ...byId.keys()]);
-  const rows = [...ids]
-    .sort((a, b) => a - b)
-    .map((id) => {
-      const state = byId.get(id);
-      const enabled = Object.values(state?.channels ?? {}).filter((row) => row.enabled).length;
-      const pager = Boolean(
-        state?.pagerAccount?.cookies?.trim() ||
-          (state?.pagerAccount?.email && state?.pagerAccount?.password),
-      );
-      const marks = [
-        snapshot.owners.includes(id) ? "👑" : snapshot.admins.includes(id) ? "⭐" : "",
-        pager ? "📡" : "",
-        `кан:${enabled}`,
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const label = `${id} · ${marks}`;
-      return { id, label: label.slice(0, 56) };
-    });
-  return rows;
+  const ids = [...new Set<number>([...snapshot.allowed, ...byId.keys()])].sort((a, b) => a - b);
+
+  // Refresh missing names via getChat (best-effort, capped).
+  const missing = ids.filter((id) => {
+    const profile = byId.get(id)?.telegramProfile;
+    return !profile?.username && !profile?.firstName;
+  });
+  for (const id of missing.slice(0, 12)) {
+    const refreshed = await ensureTelegramProfileCached(id, byId.get(id));
+    if (refreshed) {
+      byId.set(id, refreshed);
+    }
+  }
+
+  return ids.map((id) => {
+    const state = byId.get(id);
+    const enabled = Object.values(state?.channels ?? {}).filter((row) => row.enabled).length;
+    const pager = Boolean(
+      state?.pagerAccount?.cookies?.trim() ||
+        (state?.pagerAccount?.email && state?.pagerAccount?.password),
+    );
+    const marks = [
+      snapshot.owners.includes(id) ? "👑" : snapshot.admins.includes(id) ? "⭐" : "",
+      pager ? "📡" : "",
+      `кан:${enabled}`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const name = formatTelegramDisplayName(state?.telegramProfile, id);
+    const label = `${name} · ${marks}`;
+    return { id, label: label.slice(0, 56) };
+  });
 }
 
 async function showAdminUsersMenu(
@@ -3057,7 +3132,7 @@ async function showAdminUsersMenu(
   const text = [
     "📊 Статистика пользователей",
     `Всего: ${users.length}`,
-    "Нажми ID — откроется карточка (каналы, папки, доступ).",
+    "Нажми пользователя — карточка (каналы, папки, доступ).",
   ].join("\n");
   const keyboard = buildAdminUsersKeyboard(users, page);
   if (!messageId) {
@@ -3072,7 +3147,8 @@ async function showAdminUserCard(
   targetId: number,
   messageId?: number,
 ): Promise<void> {
-  const targetState = await stateStore.get(targetId);
+  const rawState = await stateStore.get(targetId);
+  const targetState = (await ensureTelegramProfileCached(targetId, rawState)) ?? rawState;
   const hasAccess = await hasBotAccess(env, appMetaStore, targetId);
   const admin = await isAdmin(env, appMetaStore, targetId);
   const text = [
