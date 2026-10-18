@@ -33,6 +33,7 @@ import {
   toggleAiStatusFolder,
   hasEnabledStatusFolders,
   resolveChannelStatusFolders,
+  isCompletedStatusName,
 } from "./status-folders.js";
 import {
   buildPagerAccountPatch,
@@ -541,13 +542,18 @@ async function handleCallback(
 
   if (kind === "channels" && value === "all_on") {
     const latestState = (await stateStore.get(chatId)) ?? state;
-    const nextState = await setAllChannelsEnabled(chatId, latestState, true);
-    await telegram.answerCallbackQuery(callbackId, "Все каналы включены");
+    let nextState = (await setAllChannelsEnabled(chatId, latestState, true)) ?? latestState;
+    // Same as admin toggle: bot + AI folders on, except «Завершено».
+    nextState = (await applyUserFoldersBotAndAi(chatId, nextState, true)) ?? nextState;
+    await telegram.answerCallbackQuery(
+      callbackId,
+      "Все каналы + папки бота/AI (кроме Завершено)",
+    );
     if (messageId) {
       await telegram.editMessageReplyMarkup(
         chatId,
         messageId,
-        buildChannelKeyboard(getSelectableChannels(nextState ?? latestState)),
+        buildChannelKeyboard(getSelectableChannels(nextState)),
       );
     }
     return;
@@ -683,10 +689,11 @@ async function handleCallback(
       return;
     }
     const latestState = (await stateStore.get(chatId)) ?? state;
-    const folders = setAllStatusFolders(
-      resolveChannelStatusFolders(latestState, channel.id),
-      extra === "on",
-    );
+    const base = resolveChannelStatusFolders(latestState, channel.id);
+    const folders =
+      extra === "on"
+        ? setAllStatusFoldersExceptCompleted(base)
+        : setAllStatusFoldersOff(base);
     const runtime = getChannelRuntime(
       latestState,
       channel.id,
@@ -704,7 +711,9 @@ async function handleCallback(
       })) ?? latestState;
     await telegram.answerCallbackQuery(
       callbackId,
-      extra === "on" ? "Все папки канала включены" : "Папки канала сняты",
+      extra === "on"
+        ? "Папки бота+AI вкл. (кроме Завершено)"
+        : "Папки бота+AI сняты",
     );
     await showChannelFoldersMenu(chatId, nextState, channel.id, channel.name, messageId, 0);
     return;
@@ -804,10 +813,14 @@ async function handleCallback(
       return;
     }
     const latestState = (await stateStore.get(chatId)) ?? state;
-    const folders = setAllAiStatusFolders(
-      resolveChannelStatusFolders(latestState, channel.id),
-      extra === "on",
-    );
+    const base = resolveChannelStatusFolders(latestState, channel.id);
+    const folders =
+      extra === "on"
+        ? base.map((folder) => ({
+            ...folder,
+            aiEnabled: !isCompletedStatusName(folder.name),
+          }))
+        : setAllAiStatusFolders(base, false);
     const runtime = getChannelRuntime(
       latestState,
       channel.id,
@@ -825,7 +838,7 @@ async function handleCallback(
       })) ?? latestState;
     await telegram.answerCallbackQuery(
       callbackId,
-      extra === "on" ? "AI во все папки канала" : "AI выкл. для папок канала",
+      extra === "on" ? "AI во все папки (кроме Завершено)" : "AI выкл. для папок канала",
     );
     await showChannelAiFoldersMenu(chatId, nextState, channel.id, channel.name, messageId, 0);
     return;
@@ -944,13 +957,8 @@ async function handleCallback(
     }
 
     if (value === "all_on" || value === "all_off") {
-      const baseFolders = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
-      const folders = setAllStatusFolders(baseFolders, value === "all_on");
-      let nextState =
-        (await stateStore.patch(chatId, {
-          statusFolders: folders,
-          operatorSettings: buildOperatorSettings(state, { statusFolders: folders }),
-        })) ?? state;
+      const nextState =
+        (await applyUserFoldersBotAndAi(chatId, state, value === "all_on")) ?? state;
       await showFoldersMenu(chatId, nextState, messageId);
       return;
     }
@@ -3513,7 +3521,55 @@ async function toggleAdminTargetFolder(
   );
 }
 
-/** Toggle bot status folders for every user. On = all except Completed; Off = all off. */
+/** Bot + AI folders for one user. On = all except Completed; Off = all off. */
+async function applyUserFoldersBotAndAi(
+  chatId: number,
+  state: ChatState,
+  turnOn: boolean,
+): Promise<ChatState | undefined> {
+  const catalog = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+  if (!catalog.length) {
+    return state;
+  }
+
+  const mapFolders = (folders: typeof catalog) =>
+    turnOn ? setAllStatusFoldersExceptCompleted(folders) : setAllStatusFoldersOff(folders);
+
+  const nextCatalog = mapFolders(catalog);
+  const nextChannels: Record<string, ChannelRuntimeState> = {
+    ...(state.channels ?? {}),
+  };
+
+  for (const channel of getSelectableChannels(state)) {
+    const runtime = getChannelRuntime(state, channel.id, channel.country);
+    const existing = runtime.statusFolders?.length
+      ? runtime.statusFolders
+      : resolveChannelStatusFolders(state, channel.id);
+    const base = existing.length ? existing : nextCatalog;
+    nextChannels[channel.id] = {
+      ...runtime,
+      statusFolders: mapFolders(base),
+    };
+  }
+
+  for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
+    if (nextChannels[channelId] || !runtime.statusFolders?.length) {
+      continue;
+    }
+    nextChannels[channelId] = {
+      ...runtime,
+      statusFolders: mapFolders(runtime.statusFolders),
+    };
+  }
+
+  return stateStore.patch(chatId, {
+    statusFolders: nextCatalog,
+    operatorSettings: buildOperatorSettings(state, { statusFolders: nextCatalog }),
+    channels: nextChannels,
+  });
+}
+
+/** Toggle bot+AI status folders for every user. */
 async function setAllFoldersForAllUsers(turnOn: boolean): Promise<{
   updatedUsers: number;
   skippedUsers: number;
@@ -3530,33 +3586,14 @@ async function setAllFoldersForAllUsers(turnOn: boolean): Promise<{
       skippedUsers += 1;
       continue;
     }
-
-    const nextCatalog = turnOn
-      ? setAllStatusFoldersExceptCompleted(catalog)
-      : setAllStatusFoldersOff(catalog);
-    const nextChannels: Record<string, ChannelRuntimeState> = {
-      ...(state.channels ?? {}),
-    };
-
-    for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
-      if (!runtime.statusFolders?.length) {
-        continue;
-      }
-      nextChannels[channelId] = {
-        ...runtime,
-        statusFolders: turnOn
-          ? setAllStatusFoldersExceptCompleted(runtime.statusFolders)
-          : setAllStatusFoldersOff(runtime.statusFolders),
-      };
-      updatedChannels += 1;
-    }
-
-    await stateStore.patch(state.chatId, {
-      statusFolders: nextCatalog,
-      operatorSettings: buildOperatorSettings(state, { statusFolders: nextCatalog }),
-      channels: nextChannels,
-    });
+    const beforeChannels = Object.values(state.channels ?? {}).filter((c) => c.statusFolders?.length)
+      .length;
+    await applyUserFoldersBotAndAi(state.chatId, state, turnOn);
     updatedUsers += 1;
+    updatedChannels += Math.max(
+      beforeChannels,
+      getSelectableChannels(state).length,
+    );
   }
 
   return { updatedUsers, skippedUsers, updatedChannels };
