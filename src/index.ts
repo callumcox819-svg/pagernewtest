@@ -143,6 +143,7 @@ const COUNTRY_FOLDER_HINTS: Record<string, string[]> = {
   KE: ["кени", "kenya", "kenia", "nairobi"],
   GT: ["гватемал", "guatemala", "guate"],
   EC: ["эквадор", "еквадор", "ecuador", "quito"],
+  MA: ["марокк", "мароко", "morocco", "maroc"],
 };
 
 const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>([
@@ -157,6 +158,7 @@ const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>([
   "KE",
   "GT",
   "EC",
+  "MA",
 ]);
 
 const CHANNEL_COUNTRY_DISPLAY: Record<string, string> = {
@@ -171,6 +173,7 @@ const CHANNEL_COUNTRY_DISPLAY: Record<string, string> = {
   KE: "Кения",
   GT: "Гватемала",
   EC: "Эквадор",
+  MA: "Марокко",
 };
 
 function formatChannelIdSuffix(id: string): string {
@@ -615,7 +618,7 @@ async function handleCallback(
               ? "Джибути · сохранённые ответы"
               : country === "JO"
                 ? "Йордания · AR · JOR778"
-                : country === "KE" || country === "GT" || country === "EC"
+                : country === "KE" || country === "GT" || country === "EC" || country === "MA"
                   ? `${CHANNEL_COUNTRY_DISPLAY[country]} · сохранённые ответы Pager`
                   : CHANNEL_COUNTRY_DISPLAY[country]
                     ? `${CHANNEL_COUNTRY_DISPLAY[country]} · сохранённые ответы`

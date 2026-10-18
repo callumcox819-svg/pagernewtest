@@ -8387,6 +8387,7 @@ function pickLiveTemplateBank(
     KE: ["кени", "kenya", "kenia", "nairobi"],
     GT: ["гватемал", "guatemala", "guate"],
     EC: ["эквадор", "еквадор", "ecuador", "quito"],
+    MA: ["марокк", "мароко", "morocco", "maroc"],
     MR: ["мавритан", "mauritan"],
     BF: ["буркина", "burkina"],
     BJ: ["бенін", "бенин", "benin", "bénin"],

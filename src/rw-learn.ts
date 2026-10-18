@@ -32,6 +32,7 @@ export type WorkerCountry =
   | "KE"
   | "GT"
   | "EC"
+  | "MA"
   | "MR"
   | "BF"
   | "BJ"

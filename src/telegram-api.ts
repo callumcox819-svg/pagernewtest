@@ -403,6 +403,7 @@ const COUNTRY_LABELS: Record<string, string> = {
   KE: "KE",
   GT: "GT",
   EC: "EC",
+  MA: "MA",
   MR: "MR",
   BF: "BF",
   BJ: "BJ",
@@ -701,6 +702,10 @@ export function buildCountryKeyboard(channelId: string): ReplyMarkup {
       ],
       [
         inlineBtn("Эквадор", `country_pick|${channelId}|EC`, {
+          emojiId: PREMIUM_EMOJI.globe,
+          style: "primary",
+        }),
+        inlineBtn("Марокко", `country_pick|${channelId}|MA`, {
           emojiId: PREMIUM_EMOJI.globe,
           style: "primary",
         }),

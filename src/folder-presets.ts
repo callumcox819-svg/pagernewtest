@@ -1,7 +1,7 @@
 import type { PagerSavedReply } from "./pager-client.js";
 
 /** Melbet-style folder markets only — NOT used for 1xBET KE/GT/EC engines. */
-export type FolderMarketCode = "MR" | "DJ" | "BF" | "CM" | "BJ" | "CR" | "SN";
+export type FolderMarketCode = "MA" | "MR" | "DJ" | "BF" | "CM" | "BJ" | "CR" | "SN";
 
 export type PresetLanguage = "fr" | "es" | "en";
 
@@ -12,6 +12,11 @@ export type FolderMarket = {
 };
 
 export const FOLDER_MARKETS: Record<FolderMarketCode, FolderMarket> = {
+  MA: {
+    language: "fr",
+    hints: ["марокк", "мароко", "morocco", "maroc"],
+    label: "Марокко",
+  },
   MR: { language: "fr", hints: ["мавритан", "mauritan"], label: "Мавритания" },
   DJ: { language: "fr", hints: ["джибут", "djibouti", "djib"], label: "Джибути" },
   BF: { language: "fr", hints: ["буркина", "burkina"], label: "Буркина-Фасо" },
@@ -22,7 +27,7 @@ export const FOLDER_MARKETS: Record<FolderMarketCode, FolderMarket> = {
 };
 
 /** Melbet folder-order markets — 1xBET KE/GT/EC use dedicated Pager script engines. */
-export const FOLDER_ONLY_COUNTRIES = ["MR", "BF", "BJ", "CR", "SN"] as const;
+export const FOLDER_ONLY_COUNTRIES = ["MA", "MR", "BF", "BJ", "CR", "SN"] as const;
 
 export type FolderOnlyCountry = (typeof FOLDER_ONLY_COUNTRIES)[number];
 

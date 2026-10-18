@@ -142,6 +142,7 @@ export function resolvePlaybookCountry(country: string | undefined): CountryCode
     code === "DJ" ||
     code === "GT" ||
     code === "EC" ||
+    code === "MA" ||
     code === "MR" ||
     code === "BF" ||
     code === "BJ" ||
@@ -199,6 +200,7 @@ export function resolveYamlTemplateBankName(
     | "KE"
     | "GT"
     | "EC"
+    | "MA"
     | "MR"
     | "BF"
     | "BJ"
@@ -261,6 +263,7 @@ export function resolveYamlTemplateBankName(
     return "ec-default";
   }
   if (
+    country === "MA" ||
     country === "MR" ||
     country === "BF" ||
     country === "BJ" ||
@@ -298,6 +301,7 @@ export function statusMapForCountry(
     | "KE"
     | "GT"
     | "EC"
+    | "MA"
     | "MR"
     | "BF"
     | "BJ"
@@ -311,6 +315,7 @@ export function statusMapForCountry(
     country === "DJ" ||
     country === "GT" ||
     country === "EC" ||
+    country === "MA" ||
     country === "MR" ||
     country === "BF" ||
     country === "BJ" ||

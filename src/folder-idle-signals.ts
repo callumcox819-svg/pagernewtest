@@ -115,7 +115,16 @@ export function idleSignalLangForCountry(country: WorkerCountry): IdleSignalLang
   if (country === "EG" || country === "JO") {
     return "ar";
   }
-  if (country === "CM" || country === "MG" || country === "DJ") {
+  if (
+    country === "CM" ||
+    country === "MG" ||
+    country === "DJ" ||
+    country === "MA" ||
+    country === "MR" ||
+    country === "BF" ||
+    country === "BJ" ||
+    country === "SN"
+  ) {
     return "fr";
   }
   if (country === "CL" || country === "GT" || country === "EC") {
