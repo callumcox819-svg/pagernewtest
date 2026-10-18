@@ -500,28 +500,55 @@ export function isNotReadyStatusConversation(conv: PagerConversation): boolean {
   return isNotReadyStatusName(conv.status?.name || "");
 }
 
+function scoreParkingFolderName(
+  name: string,
+  kind: "no_money" | "not_ready",
+): number {
+  const normalized = name.trim().toLowerCase().replace(/\s+/g, " ");
+  if (kind === "no_money") {
+    if (normalized === "нету денег" || normalized === "нет денег") {
+      return 100;
+    }
+    return isNoMoneyStatusName(name) ? 50 : 0;
+  }
+  if (normalized === "не готов" || normalized === "неготов") {
+    return 100;
+  }
+  return isNotReadyStatusName(name) ? 50 : 0;
+}
+
 export function findNoMoneyStatusId(folders: StatusFolderState[] | undefined): string | undefined {
+  let best: { id: string; score: number } | undefined;
   for (const folder of folders ?? []) {
     if (!folder.id || folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
       continue;
     }
-    if (isNoMoneyStatusName(folder.name)) {
-      return folder.id;
+    const score = scoreParkingFolderName(folder.name, "no_money");
+    if (score <= 0) {
+      continue;
+    }
+    if (!best || score > best.score) {
+      best = { id: folder.id, score };
     }
   }
-  return undefined;
+  return best?.id;
 }
 
 export function findNotReadyStatusId(folders: StatusFolderState[] | undefined): string | undefined {
+  let best: { id: string; score: number } | undefined;
   for (const folder of folders ?? []) {
     if (!folder.id || folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
       continue;
     }
-    if (isNotReadyStatusName(folder.name)) {
-      return folder.id;
+    const score = scoreParkingFolderName(folder.name, "not_ready");
+    if (score <= 0) {
+      continue;
+    }
+    if (!best || score > best.score) {
+      best = { id: folder.id, score };
     }
   }
-  return undefined;
+  return best?.id;
 }
 
 /** RW: всегда смотрим «Завершено» + папки, включённые оператором в боте. */
