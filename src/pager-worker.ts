@@ -56,6 +56,7 @@ import {
   isKeChannelName,
   isMaChannelName,
   isMgChannelName,
+  isPeChannelName,
   isPkChannelName,
   resolveWorkerCountryForChannel,
   type WorkerCountry,
@@ -805,7 +806,8 @@ async function processOperatorAccount(deps: WorkerDeps, state: ChatState): Promi
       item.runtime.country === "EC" ||
       isFolderOnlyCountry(item.runtime.country) ||
       isMaChannelName(item.channelName) ||
-      isPkChannelName(item.channelName),
+      isPkChannelName(item.channelName) ||
+      isPeChannelName(item.channelName),
   )
     ? Math.max(MAX_CONVERSATIONS_PER_ACCOUNT, INBOX_TOP_UNREAD + INBOX_TOP_CM_FOLLOWUP)
     : 150;
@@ -1130,7 +1132,8 @@ async function buildWorkQueue(
           runtime.runtime.country !== "EC" &&
           !isFolderOnlyCountry(runtime.runtime.country) &&
           !isMaChannelName(runtime.channelName) &&
-          !isPkChannelName(runtime.channelName))
+          !isPkChannelName(runtime.channelName) &&
+          !isPeChannelName(runtime.channelName))
       ) {
         continue;
       }
@@ -1174,7 +1177,8 @@ async function buildWorkQueue(
       channel.runtime.country !== "EC" &&
       !isFolderOnlyCountry(channel.runtime.country) &&
       !isMaChannelName(channel.channelName) &&
-      !isPkChannelName(channel.channelName)
+      !isPkChannelName(channel.channelName) &&
+      !isPeChannelName(channel.channelName)
     ) {
       continue;
     }
@@ -1190,7 +1194,8 @@ async function buildWorkQueue(
       channel.runtime.country === "EC" ||
       isFolderOnlyCountry(channel.runtime.country) ||
       isMaChannelName(channel.channelName) ||
-      isPkChannelName(channel.channelName);
+      isPkChannelName(channel.channelName) ||
+      isPeChannelName(channel.channelName);
     const isJo = channel.runtime.country === "JO";
     const isRw = channel.runtime.country === "RW";
     const channelFolderIds =
@@ -2106,7 +2111,8 @@ async function processConversation(
   if (
     isFolderOnlyCountry(workerCountry) ||
     isMaChannelName(runtime.channelName) ||
-    isPkChannelName(runtime.channelName)
+    isPkChannelName(runtime.channelName) ||
+    isPeChannelName(runtime.channelName)
   ) {
     if (!isFolderOnlyCountry(workerCountry) && isMaChannelName(runtime.channelName)) {
       console.warn(
@@ -2116,6 +2122,11 @@ async function processConversation(
     if (!isFolderOnlyCountry(workerCountry) && isPkChannelName(runtime.channelName)) {
       console.warn(
         `Pager worker: ${runtime.channelName} is a Pakistan channel but country=${workerCountry} — routing PK folder presets`,
+      );
+    }
+    if (!isFolderOnlyCountry(workerCountry) && isPeChannelName(runtime.channelName)) {
+      console.warn(
+        `Pager worker: ${runtime.channelName} is a Peru channel but country=${workerCountry} — routing PE folder presets`,
       );
     }
     return processFolderMarketConversation(deps, state, client, workingConv, runtime, channel);
@@ -7158,6 +7169,9 @@ function resolveFolderPresetCountry(runtime: EnabledChannel): FolderOnlyCountry 
   if (isPkChannelName(runtime.channelName)) {
     return "PK";
   }
+  if (isPeChannelName(runtime.channelName)) {
+    return "PE";
+  }
   return undefined;
 }
 
@@ -9022,6 +9036,7 @@ function pickLiveTemplateBank(
     CR: ["коста", "costa"],
     SN: ["сенегал", "senegal", "sénégal"],
     PK: ["урду", "urdu", "пакистан", "pakistan", "pakistani", "pkr"],
+    PE: ["перу", "peru", "perú", "lima"],
   };
   const countryHints = hints[country] ?? [];
   const matched = banks.find((bank) => {
@@ -9303,14 +9318,22 @@ async function tryParkConversationNoMoneyOrNotReady(
       parking === "no_money"
         ? localeCountry === "EG" || localeCountry === "JO" || localeCountry === "PK"
           ? "کوئی بات نہیں۔ جب پیسے ہوں تو مجھے لکھیں، آگے بڑھیں گے۔"
-          : localeCountry === "CL" || localeCountry === "GT" || localeCountry === "EC" || localeCountry === "CR"
+          : localeCountry === "CL" ||
+              localeCountry === "GT" ||
+              localeCountry === "EC" ||
+              localeCountry === "CR" ||
+              localeCountry === "PE"
             ? "Sin problema. Cuando tengas dinero escríbeme y seguimos."
             : localeCountry === "ZM" || localeCountry === "KE" || localeCountry === "RW"
               ? "No problem. Message me when you have money and we'll continue."
               : "Pas de souci. Écris-moi quand tu auras de l'argent et on continue."
         : localeCountry === "EG" || localeCountry === "JO" || localeCountry === "PK"
           ? "کوئی بات نہیں۔ جب آپ تیار ہوں تو مجھے لکھیں، آگے بڑھیں گے۔"
-          : localeCountry === "CL" || localeCountry === "GT" || localeCountry === "EC" || localeCountry === "CR"
+          : localeCountry === "CL" ||
+              localeCountry === "GT" ||
+              localeCountry === "EC" ||
+              localeCountry === "CR" ||
+              localeCountry === "PE"
             ? "Sin problema. Cuando estés listo escríbeme y seguimos."
             : localeCountry === "ZM" || localeCountry === "KE" || localeCountry === "RW"
               ? "No problem. Message me when you're ready and we'll continue."

@@ -38,7 +38,8 @@ export type WorkerCountry =
   | "BJ"
   | "CR"
   | "SN"
-  | "PK";
+  | "PK"
+  | "PE";
 
 export type RwLearningEventKind =
   | "no_status_lead"
@@ -201,6 +202,16 @@ export function isPkChannelName(name: string): boolean {
   return PK_CHANNEL_HINTS.some((hint) => normalized.includes(hint.toLowerCase()));
 }
 
+const PE_CHANNEL_HINTS = ["перу", "peru", "perú", "lima"];
+
+export function isPeChannelName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  if (/\bperu\b|\bperú\b|\blima\b/.test(normalized) || /перу/.test(normalized)) {
+    return true;
+  }
+  return PE_CHANNEL_HINTS.some((hint) => normalized.includes(hint.toLowerCase()));
+}
+
 export function resolveWorkerCountryForChannel(
   channelName: string,
   savedCountry?: WorkerCountry,
@@ -216,6 +227,9 @@ export function resolveWorkerCountryForChannel(
   }
   if (isPkChannelName(channelName)) {
     return "PK";
+  }
+  if (isPeChannelName(channelName)) {
+    return "PE";
   }
   if (isClChannelName(channelName)) {
     return "CL";
@@ -250,6 +264,9 @@ export function defaultCountryForChannelName(name: string): WorkerCountry {
   }
   if (isPkChannelName(name)) {
     return "PK";
+  }
+  if (isPeChannelName(name)) {
+    return "PE";
   }
   if (isClChannelName(name)) {
     return "CL";

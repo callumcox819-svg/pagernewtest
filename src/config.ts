@@ -147,7 +147,8 @@ export function resolvePlaybookCountry(country: string | undefined): CountryCode
     code === "BF" ||
     code === "BJ" ||
     code === "CR" ||
-    code === "SN"
+    code === "SN" ||
+    code === "PE"
   ) {
     return "CM";
   }
@@ -210,7 +211,8 @@ export function resolveYamlTemplateBankName(
     | "BJ"
     | "CR"
     | "SN"
-    | "PK",
+    | "PK"
+    | "PE",
   channelId?: string,
 ): string {
   if (country === "RW") {
@@ -274,7 +276,8 @@ export function resolveYamlTemplateBankName(
     country === "BJ" ||
     country === "CR" ||
     country === "SN" ||
-    country === "PK"
+    country === "PK" ||
+    country === "PE"
   ) {
     return `${country.toLowerCase()}-folder`;
   }
@@ -313,7 +316,8 @@ export function statusMapForCountry(
     | "BJ"
     | "CR"
     | "SN"
-    | "PK",
+    | "PK"
+    | "PE",
 ): ChannelConfig["statusMap"] {
   if (
     country === "RW" ||
@@ -327,7 +331,8 @@ export function statusMapForCountry(
     country === "BF" ||
     country === "BJ" ||
     country === "CR" ||
-    country === "SN"
+    country === "SN" ||
+    country === "PE"
   ) {
     return statusMapForCountry(config, "CM");
   }

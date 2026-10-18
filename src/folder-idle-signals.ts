@@ -127,7 +127,7 @@ export function idleSignalLangForCountry(country: WorkerCountry): IdleSignalLang
   ) {
     return "fr";
   }
-  if (country === "CL" || country === "GT" || country === "EC") {
+  if (country === "CL" || country === "GT" || country === "EC" || country === "CR" || country === "PE") {
     return "es";
   }
   return "en";
