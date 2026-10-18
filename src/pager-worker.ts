@@ -426,6 +426,7 @@ import {
   isCompletedStatusConversation,
   isFunnelFollowUpFolderName,
   isInProgressFollowUpFolderEnabled,
+  findCompletedStatusId,
   ALL_INBOX_FOLDER_ID,
   NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
@@ -7378,6 +7379,7 @@ async function processFolderMarketConversation(
   // Vision / OCR — drive next saved-reply step from screenshots.
   let forcedPlan: PresetPlan | undefined;
   let screenshotHelpIntent: string | undefined;
+  let depositProofConfirmed = false;
   if (imageUrl) {
     try {
       const image = await client.downloadAttachment(imageUrl);
@@ -7403,10 +7405,10 @@ async function processFolderMarketConversation(
         scene.scene === "platform_balance" ||
         classification.proofKind === "deposit_balance_screenshot"
       ) {
+        depositProofConfirmed = true;
+        // Prefer Telegram handoff after deposit proof; then move to «Завершено».
         forcedPlan =
-          planFolderPresetForKinds(replies, outgoingTexts, ["telegram", "deposit"]) ??
-          planForcedNextFolderPreset(replies, outgoingTexts) ??
-          undefined;
+          planFolderPresetForKinds(replies, outgoingTexts, ["telegram"]) ?? undefined;
       } else if (
         scene.scene === "site_loading_stuck" ||
         scene.scene === "registration_form" ||
@@ -7442,6 +7444,35 @@ async function processFolderMarketConversation(
       { forcedPlan },
     ))
   ) {
+    if (depositProofConfirmed) {
+      await tryMoveConversationToCompleted(
+        deps,
+        currentState,
+        client,
+        conv,
+        convId,
+        runtime.channelId,
+        runtime.runtime.country,
+      );
+    }
+    return true;
+  }
+
+  if (depositProofConfirmed) {
+    await tryMoveConversationToCompleted(
+      deps,
+      currentState,
+      client,
+      conv,
+      convId,
+      runtime.channelId,
+      runtime.runtime.country,
+    );
+    try {
+      await client.acknowledgeConversation(convId);
+    } catch {
+      // non-fatal
+    }
     return true;
   }
 
@@ -8158,6 +8189,77 @@ async function tryMoveConversationToInProgressRegistration(
       if (attempt >= 3) {
         console.warn(
           `Pager worker: status patch failed ${convId.slice(0, 8)} after ${attempt} attempts:`,
+          formatError(error),
+        );
+        return false;
+      }
+      await sleep(500 * attempt);
+    }
+  }
+  return false;
+}
+
+/**
+ * After deposit proof (1xBET balance screenshot) — move to «Завершено».
+ * Bot/AI will not process that folder further (hard skip).
+ */
+async function tryMoveConversationToCompleted(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  convId: string,
+  channelId: string,
+  countryLabel: string,
+): Promise<boolean> {
+  if (isCompletedStatusConversation(conv)) {
+    return true;
+  }
+
+  let workingState = state;
+  let statusId = findCompletedStatusId(listStatusFolders(workingState));
+  if (!statusId) {
+    workingState = (await ensureStatusFolders(deps, workingState, client)) ?? workingState;
+    statusId = findCompletedStatusId(listStatusFolders(workingState));
+  }
+
+  const operatorId = await client.probeOperatorUserId();
+  const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+  if (!statusId) {
+    console.warn(
+      `Pager worker: ${countryLabel} ${convId.slice(0, 8)} completed move skipped — «Завершено» folder not found`,
+    );
+    return false;
+  }
+  if (!operatorId) {
+    console.warn(
+      `Pager worker: ${countryLabel} ${convId.slice(0, 8)} completed move skipped — no operator user id`,
+    );
+    return false;
+  }
+  if (currentStatusId === statusId) {
+    return true;
+  }
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await tryTakeConversationForProcessing(client, convId, countryLabel);
+      await client.patchConversationStatus(convId, statusId, operatorId);
+      console.log(
+        `Pager worker: ${countryLabel} ${convId.slice(0, 8)} status -> Завершено (deposit proof)`,
+      );
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId,
+        currentStage: "completed",
+        inProgressFollowUpDueAt: undefined,
+        inProgressMutedAt: new Date().toISOString(),
+      });
+      return true;
+    } catch (error) {
+      if (attempt >= 3) {
+        console.warn(
+          `Pager worker: completed status patch failed ${convId.slice(0, 8)}:`,
           formatError(error),
         );
         return false;
@@ -9475,9 +9577,23 @@ async function tryHandleCustomerImage(
       proofKind as import("./config.js").ProofKind,
     );
     if (sent) {
+      await tryMoveConversationToCompleted(
+        deps,
+        ctx.state,
+        ctx.client,
+        ctx.conv,
+        ctx.convId,
+        ctx.runtime.channelId,
+        ctx.channel.country,
+      );
       return true;
     }
   }
+
+  // Any geo: confirmed 1xBET balance screenshot → «Завершено» (after optional AI/TG reply below).
+  const depositBalanceProof =
+    proofKind === "deposit_balance_screenshot" ||
+    readFunnelScreenshot(ocrCombinedText).scene === "platform_balance";
 
   const funnelStep = ctx.funnelStep ?? ctx.convState.funnelStep ?? 0;
   const support = buildSupportSnapshot(
@@ -9582,10 +9698,39 @@ async function tryHandleCustomerImage(
           lastReplyRole: "ai_agent_vision",
           sendFailures: 0,
         });
+        if (depositBalanceProof) {
+          await tryMoveConversationToCompleted(
+            deps,
+            ctx.state,
+            ctx.client,
+            ctx.conv,
+            ctx.convId,
+            ctx.runtime.channelId,
+            ctx.channel.country,
+          );
+        }
         return true;
       }
     }
     }
+  }
+
+  if (depositBalanceProof) {
+    await tryMoveConversationToCompleted(
+      deps,
+      ctx.state,
+      ctx.client,
+      ctx.conv,
+      ctx.convId,
+      ctx.runtime.channelId,
+      ctx.channel.country,
+    );
+    try {
+      await ctx.client.acknowledgeConversation(ctx.convId);
+    } catch {
+      // non-fatal
+    }
+    return true;
   }
 
   if (ctx.channel.country === "CM" && extractCmClientLoginId17(ocrCombinedText)) {

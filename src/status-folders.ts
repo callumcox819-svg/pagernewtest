@@ -452,9 +452,15 @@ export function findCompletedFolderIds(folders: StatusFolderState[]): string[] {
         folder.id &&
         folder.id !== NO_STATUS_FOLDER_ID &&
         folder.id !== ALL_INBOX_FOLDER_ID &&
-        isRwCompletedStatusName(folder.name),
+        isCompletedStatusName(folder.name),
     )
     .map((folder) => folder.id);
+}
+
+/** Best «Завершено» / Completed status id for moving a chat after deposit proof. */
+export function findCompletedStatusId(folders: StatusFolderState[] | undefined): string | undefined {
+  const ids = findCompletedFolderIds(folders ?? []);
+  return ids[0];
 }
 
 /** RW: всегда смотрим «Завершено» + папки, включённые оператором в боте. */
