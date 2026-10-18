@@ -303,6 +303,9 @@ export function isClosedRegistrationStatusConversation(conv: PagerConversation):
   if (isCompletedStatusName(name)) {
     return true;
   }
+  if (isNoMoneyStatusName(name) || isNotReadyStatusName(name)) {
+    return true;
+  }
   return /скасован|cancel|cancelled|canceled|registered|^win$|выигр/i.test(name);
 }
 
@@ -461,6 +464,64 @@ export function findCompletedFolderIds(folders: StatusFolderState[]): string[] {
 export function findCompletedStatusId(folders: StatusFolderState[] | undefined): string | undefined {
   const ids = findCompletedFolderIds(folders ?? []);
   return ids[0];
+}
+
+export function isNoMoneyStatusName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /нет\s*денег|нету\s*денег|нет\s*бабок|no\s*money|pas\s*d['']?argent|sans\s*argent|без\s*денег/i.test(
+      normalized,
+    ) || /^no\s*money$/i.test(normalized)
+  );
+}
+
+export function isNotReadyStatusName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (isNoMoneyStatusName(normalized)) {
+    return false;
+  }
+  return (
+    /не\s*готов|неготов|not\s*ready|pas\s*pr[eê]t|не\s*сейчас|позже|later/i.test(normalized) ||
+    /^not\s*ready$/i.test(normalized)
+  );
+}
+
+export function isNoMoneyStatusConversation(conv: PagerConversation): boolean {
+  return isNoMoneyStatusName(conv.status?.name || "");
+}
+
+export function isNotReadyStatusConversation(conv: PagerConversation): boolean {
+  return isNotReadyStatusName(conv.status?.name || "");
+}
+
+export function findNoMoneyStatusId(folders: StatusFolderState[] | undefined): string | undefined {
+  for (const folder of folders ?? []) {
+    if (!folder.id || folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
+      continue;
+    }
+    if (isNoMoneyStatusName(folder.name)) {
+      return folder.id;
+    }
+  }
+  return undefined;
+}
+
+export function findNotReadyStatusId(folders: StatusFolderState[] | undefined): string | undefined {
+  for (const folder of folders ?? []) {
+    if (!folder.id || folder.id === NO_STATUS_FOLDER_ID || folder.id === ALL_INBOX_FOLDER_ID) {
+      continue;
+    }
+    if (isNotReadyStatusName(folder.name)) {
+      return folder.id;
+    }
+  }
+  return undefined;
 }
 
 /** RW: всегда смотрим «Завершено» + папки, включённые оператором в боте. */

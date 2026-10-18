@@ -46,6 +46,7 @@ import {
 } from "./folder-presets.js";
 import { aiLooksLikeFunnelAdvance } from "./funnel-ai-advance.js";
 import { readFunnelScreenshot } from "./funnel-screenshot.js";
+import { resolveFunnelParkingIntent, type FunnelParkingIntent } from "./funnel-parking.js";
 import {
   defaultCountryForChannelName,
   isClChannelName,
@@ -427,6 +428,10 @@ import {
   isFunnelFollowUpFolderName,
   isInProgressFollowUpFolderEnabled,
   findCompletedStatusId,
+  findNoMoneyStatusId,
+  findNotReadyStatusId,
+  isNoMoneyStatusConversation,
+  isNotReadyStatusConversation,
   ALL_INBOX_FOLDER_ID,
   NO_STATUS_FOLDER_ID,
   conversationAllowedInFolders,
@@ -1968,6 +1973,17 @@ async function processConversation(
       `Pager worker: skip ${conv.id.slice(0, 8)} — completed folder (status=${workingConv.status?.name || "none"})`,
     );
     return false;
+  }
+  // Parked: «нет денег» / «не готов» — no auto follow-up (customer can write again later).
+  if (isNoMoneyStatusConversation(workingConv) || isNotReadyStatusConversation(workingConv)) {
+    const waiting =
+      hasUnreadMarkers(workingConv) || isIncomingDirection(workingConv.lastMessageDirection);
+    if (!waiting) {
+      console.log(
+        `Pager worker: skip ${conv.id.slice(0, 8)} — parked folder (status=${workingConv.status?.name || "none"})`,
+      );
+      return false;
+    }
   }
 
   const convStateEarly = getConversationState(state, workingConv.id, runtime.channelId);
@@ -7370,6 +7386,25 @@ async function processFolderMarketConversation(
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
   const aiCountry: CountryCode = englishLike ? "ZM" : "CM";
   const playbook = getPlaybook(deps.config, aiCountry);
+  const folderChannel = buildRuntimeChannelConfig(deps.config, currentState, runtime);
+
+  if (
+    await trySendSpecialCustomerResponse(deps, {
+      state: currentState,
+      client,
+      conv,
+      runtime,
+      channel: folderChannel,
+      convState,
+      convId,
+      lastIncoming,
+      text: latestCustomerText,
+      playbook,
+      outgoingTexts,
+    })
+  ) {
+    return true;
+  }
   const { botFolderEnabled: folderEnabled, aiFolderEnabled } = resolveConversationFolderGates(
     conv,
     currentState,
@@ -9094,16 +9129,32 @@ async function trySendSpecialCustomerResponse(
   if (isLikelyGameId(ctx.text)) {
     return false;
   }
+
+  // First SMS in a thread: ALWAYS run country scripts (01_intro).
+  if (!specialFunnelAlreadyStarted(ctx)) {
+    const earlySpecial = classifySpecialCustomerIntent(ctx.playbook, ctx.text);
+    if (earlySpecial !== "none") {
+      console.log(
+        `Pager worker: defer special=${earlySpecial} ${ctx.channel.country} ${ctx.convId.slice(0, 8)} — first touch, script 1 first (text=${truncate(ctx.text)})`,
+      );
+    }
+    return false;
+  }
+
+  // Strict parking: clear phrase OR AI — never random words → «нет денег» / «не готов».
+  const parking = await resolveFunnelParkingIntent(deps.env, ctx.text);
+  if (parking !== "none") {
+    return tryParkConversationNoMoneyOrNotReady(deps, ctx, parking);
+  }
+
   const special = classifySpecialCustomerIntent(ctx.playbook, ctx.text);
   if (special === "none") {
     return false;
   }
-
-  // First SMS in a thread: ALWAYS run country scripts (01_intro). Never money-refusal /
-  // phone / no_money templates before the funnel has started.
-  if (!specialFunnelAlreadyStarted(ctx)) {
+  // Legacy no_money/deferral heuristics without AI/clear phrase — do NOT move folders.
+  if (special === "no_money" || special === "deferral") {
     console.log(
-      `Pager worker: defer special=${special} ${ctx.channel.country} ${ctx.convId.slice(0, 8)} — first touch, script 1 first (text=${truncate(ctx.text)})`,
+      `Pager worker: ${ctx.channel.country} ${ctx.convId.slice(0, 8)} soft special=${special} ignored for folder move (need clear phrase or AI)`,
     );
     return false;
   }
@@ -9133,17 +9184,7 @@ async function trySendSpecialCustomerResponse(
     replyText = phoneChatOnlyText(localeCountry);
     nextStage = "engaged";
   } else {
-    templateRole = specialIntentTemplateRole(special);
-    if (!templateRole) {
-      return false;
-    }
-    replyText = await resolveTemplateText(deps.config, ctx.client, {
-      folderId: ctx.runtime.runtime.templateBankId,
-      yamlBankName: ctx.channel.templateBank,
-      role: templateRole,
-      country: ctx.channel.country,
-    });
-    nextStage = special === "deferral" ? "not_ready" : "no_money";
+    return false;
   }
 
   if (!replyText?.trim()) {
@@ -9173,6 +9214,153 @@ async function trySendSpecialCustomerResponse(
     sendFailures: 0,
   });
   return true;
+}
+
+async function tryParkConversationNoMoneyOrNotReady(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext,
+  parking: Exclude<FunnelParkingIntent, "none">,
+): Promise<boolean> {
+  const localeCountry = ctx.runtime.runtime.country || ctx.channel.country;
+  const templateRole = specialIntentTemplateRole(
+    parking === "not_ready" ? "deferral" : "no_money",
+  );
+  let replyText =
+    (templateRole
+      ? await resolveTemplateText(deps.config, ctx.client, {
+          folderId: ctx.runtime.runtime.templateBankId,
+          yamlBankName: ctx.channel.templateBank,
+          role: templateRole,
+          country: ctx.channel.country,
+        })
+      : undefined) || undefined;
+
+  if (!replyText?.trim()) {
+    replyText =
+      parking === "no_money"
+        ? localeCountry === "EG" || localeCountry === "JO"
+          ? "تمام، مفيش مشكلة. لما يكون معاك فلوس ابعتلي وهنكمل."
+          : localeCountry === "CL" || localeCountry === "GT" || localeCountry === "EC" || localeCountry === "CR"
+            ? "Sin problema. Cuando tengas dinero escríbeme y seguimos."
+            : localeCountry === "ZM" || localeCountry === "KE" || localeCountry === "RW"
+              ? "No problem. Message me when you have money and we'll continue."
+              : "Pas de souci. Écris-moi quand tu auras de l'argent et on continue."
+        : localeCountry === "EG" || localeCountry === "JO"
+          ? "تمام. لما تكون جاهز ابعتلي وهنكمل."
+          : localeCountry === "CL" || localeCountry === "GT" || localeCountry === "EC" || localeCountry === "CR"
+            ? "Sin problema. Cuando estés listo escríbeme y seguimos."
+            : localeCountry === "ZM" || localeCountry === "KE" || localeCountry === "RW"
+              ? "No problem. Message me when you're ready and we'll continue."
+              : "Pas de souci. Écris-moi quand tu seras prêt et on continue.";
+  }
+
+  console.log(
+    `Pager worker: ${localeCountry} ${ctx.convId.slice(0, 8)} park=${parking} → folder (text=${truncate(ctx.text)})`,
+  );
+
+  const sent = await ctx.client.sendMessageReliable(ctx.convId, replyText.trim(), {
+    channelId: ctx.runtime.channelId,
+    conv: ctx.conv,
+  });
+  if (!sent) {
+    return false;
+  }
+
+  await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+    conversationId: ctx.convId,
+    channelId: ctx.runtime.channelId,
+    currentStage: parking === "not_ready" ? "not_ready" : "no_money",
+    lastCustomerMessageId: ctx.lastIncoming.id,
+    lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: parking,
+    sendFailures: 0,
+    inProgressFollowUpDueAt: undefined,
+    inProgressMutedAt: new Date().toISOString(),
+  });
+
+  await tryMoveConversationToParkingFolder(
+    deps,
+    ctx.state,
+    ctx.client,
+    ctx.conv,
+    ctx.convId,
+    ctx.runtime.channelId,
+    localeCountry,
+    parking,
+  );
+
+  try {
+    await ctx.client.acknowledgeConversation(ctx.convId);
+  } catch {
+    // non-fatal
+  }
+  return true;
+}
+
+async function tryMoveConversationToParkingFolder(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  convId: string,
+  channelId: string,
+  countryLabel: string,
+  parking: Exclude<FunnelParkingIntent, "none">,
+): Promise<boolean> {
+  if (parking === "no_money" && isNoMoneyStatusConversation(conv)) {
+    return true;
+  }
+  if (parking === "not_ready" && isNotReadyStatusConversation(conv)) {
+    return true;
+  }
+
+  let workingState = state;
+  let statusId =
+    parking === "no_money"
+      ? findNoMoneyStatusId(listStatusFolders(workingState))
+      : findNotReadyStatusId(listStatusFolders(workingState));
+  if (!statusId) {
+    workingState = (await ensureStatusFolders(deps, workingState, client)) ?? workingState;
+    statusId =
+      parking === "no_money"
+        ? findNoMoneyStatusId(listStatusFolders(workingState))
+        : findNotReadyStatusId(listStatusFolders(workingState));
+  }
+
+  const operatorId = await client.probeOperatorUserId();
+  const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+  const folderLabel = parking === "no_money" ? "нет денег" : "не готов";
+  if (!statusId) {
+    console.warn(
+      `Pager worker: ${countryLabel} ${convId.slice(0, 8)} park skipped — «${folderLabel}» folder not found`,
+    );
+    return false;
+  }
+  if (!operatorId) {
+    console.warn(
+      `Pager worker: ${countryLabel} ${convId.slice(0, 8)} park skipped — no operator user id`,
+    );
+    return false;
+  }
+  if (currentStatusId === statusId) {
+    return true;
+  }
+
+  try {
+    await tryTakeConversationForProcessing(client, convId, countryLabel);
+    await client.patchConversationStatus(convId, statusId, operatorId);
+    console.log(
+      `Pager worker: ${countryLabel} ${convId.slice(0, 8)} status -> ${folderLabel}`,
+    );
+    return true;
+  } catch (error) {
+    console.warn(
+      `Pager worker: park status patch failed ${convId.slice(0, 8)}:`,
+      formatError(error),
+    );
+    return false;
+  }
 }
 
 /** Client stuck on INSCRIPTION form — coach finish + promo, never ask player ID. */
