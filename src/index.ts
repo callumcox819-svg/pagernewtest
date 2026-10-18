@@ -25,6 +25,7 @@ import {
   isAiFolderEnabled,
   setAllStatusFolders,
   setAllStatusFoldersExceptCompleted,
+  setAllStatusFoldersOff,
   areAllFoldersEnabledExceptCompleted,
   setAllAiStatusFolders,
   stripChannelNamesFromFolders,
@@ -2790,8 +2791,8 @@ async function handleAdminCallback(
     const result = await setAllFoldersForAllUsers(turnOn);
     const text = [
       turnOn
-        ? "✅ Все папки включены для всех пользователей"
-        : "⬜ Все папки выключены для всех пользователей",
+        ? "✅ Папки бота + AI включены для всех пользователей"
+        : "⬜ Папки бота + AI выключены для всех пользователей",
       turnOn ? `(кроме «Завершено» — она остаётся выкл.)` : "",
       "",
       `Обновлено: ${result.updatedUsers} польз.`,
@@ -3532,7 +3533,7 @@ async function setAllFoldersForAllUsers(turnOn: boolean): Promise<{
 
     const nextCatalog = turnOn
       ? setAllStatusFoldersExceptCompleted(catalog)
-      : setAllStatusFolders(catalog, false);
+      : setAllStatusFoldersOff(catalog);
     const nextChannels: Record<string, ChannelRuntimeState> = {
       ...(state.channels ?? {}),
     };
@@ -3545,7 +3546,7 @@ async function setAllFoldersForAllUsers(turnOn: boolean): Promise<{
         ...runtime,
         statusFolders: turnOn
           ? setAllStatusFoldersExceptCompleted(runtime.statusFolders)
-          : setAllStatusFolders(runtime.statusFolders, false),
+          : setAllStatusFoldersOff(runtime.statusFolders),
       };
       updatedChannels += 1;
     }

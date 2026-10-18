@@ -703,17 +703,30 @@ export function setAllStatusFolders(
   return folders.map((folder) => ({ ...folder, enabled }));
 }
 
-/** Enable every folder except «Завершено» / Completed (those stay off). */
+/** Enable every folder except «Завершено» / Completed (those stay off) — bot + AI. */
 export function setAllStatusFoldersExceptCompleted(
   folders: StatusFolderState[],
 ): StatusFolderState[] {
+  return folders.map((folder) => {
+    const on = !isCompletedStatusName(folder.name);
+    return {
+      ...folder,
+      enabled: on,
+      aiEnabled: on,
+    };
+  });
+}
+
+/** Disable bot + AI on every folder. */
+export function setAllStatusFoldersOff(folders: StatusFolderState[]): StatusFolderState[] {
   return folders.map((folder) => ({
     ...folder,
-    enabled: !isCompletedStatusName(folder.name),
+    enabled: false,
+    aiEnabled: false,
   }));
 }
 
-/** True when every non-Completed folder is already enabled. */
+/** True when every non-Completed folder is on for both bot and AI. */
 export function areAllFoldersEnabledExceptCompleted(
   folders: StatusFolderState[],
 ): boolean {
@@ -721,7 +734,7 @@ export function areAllFoldersEnabledExceptCompleted(
   if (!actionable.length) {
     return false;
   }
-  return actionable.every((folder) => folder.enabled);
+  return actionable.every((folder) => folder.enabled && isAiFolderEnabled(folder));
 }
 
 export function toggleStatusFolder(
