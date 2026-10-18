@@ -177,10 +177,8 @@ export function planFolderPresetAdvance(
   const tableIndex = findTablePresetIndex(replies);
 
   if (last < 0) {
-    const alreadySpoke = outgoingTexts.some((text) => text.trim().length > 0);
-    if (alreadySpoke) {
-      return null;
-    }
+    // Start folder funnel even if the thread has old non-preset outbound
+    // (operator notes / catch-up). Only skip when presets already match.
     const first = replies[0];
     if (!first?.text.trim()) {
       return null;

@@ -38,6 +38,7 @@ import {
   folderMarketLanguage,
   isFolderMarket,
   isFolderOnlyCountry,
+  lastSentPresetIndex,
   planFolderPresetAdvance,
 } from "./folder-presets.js";
 import {
@@ -7022,6 +7023,9 @@ async function trySendFolderPreset(
   }
   const plan = planFolderPresetAdvance(replies, outgoingTexts, customerText, language);
   if (!plan) {
+    console.log(
+      `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} preset skip — need agreement or decline (lastPreset=${lastSentPresetIndex(replies, outgoingTexts)}, text=${truncate(customerText)})`,
+    );
     return false;
   }
   if (plan.action === "hold") {
