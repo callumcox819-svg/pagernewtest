@@ -131,13 +131,45 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
   ) {
     return false;
   }
+  // Cross-language thanks / short acks (MA customers often mix FR + EN + AR).
+  if (
+    /^(thank you|thanks|thx|merci|gracias|شكرا|شكراً|تمام|ماشي|ok|okay|okey|oui|ouais|yes|yep|yeah|si|sí|dale)([\s,!.]+.*)?$/i.test(
+      folded,
+    )
+  ) {
+    return true;
+  }
   const pattern =
     language === "es"
       ? /^(si|ok|okay|okey|dale|va|vale|listo|de acuerdo|claro|bueno|quiero|me interesa|vamos|perfecto|sale|simon|yes|ya)([\s,!.]+.*)?$/
       : language === "en"
-        ? /^(yes|yep|yeah|ok|okay|okey|sure|alright|ready|go|continue|interested|i want|show me|tell me|next|fine|good|perfect|lets go|let's go|i'm in|im in)([\s,!.]+.*)?$/
-        : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|bien|super|parfait|vas-y|vas y|go|ca marche|je suis pret|pret|interesse|je veux|montre|montrez|explique|continue|suivant|merci|allons-y|d'acc)([\s,!.]+.*)?$/;
+        ? /^(yes|yep|yeah|ok|okay|okey|sure|alright|ready|go|continue|interested|i want|show me|tell me|next|fine|good|perfect|lets go|let's go|i'm in|im in|thank you|thanks|thx)([\s,!.]+.*)?$/
+        : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|bien|super|parfait|vas-y|vas y|go|ca marche|je suis pret|pret|interesse|je veux|montre|montrez|explique|continue|suivant|merci|allons-y|d'acc|thank you|thanks)([\s,!.]+.*)?$/;
   return pattern.test(folded);
+}
+
+/** Soft continue before deposit table: short non-decline replies (names, "ww", emoji…). */
+function isSoftAdvanceReply(language: PresetLanguage, text: string): boolean {
+  const raw = text.trim();
+  if (!raw || raw.includes("?") || raw.length > 40) {
+    return false;
+  }
+  if (isDecline(language, raw) || isBareAgreement(language, raw)) {
+    return isBareAgreement(language, raw);
+  }
+  const folded = foldPresetText(raw);
+  if (!folded) {
+    return false;
+  }
+  if (
+    /\b(comment|pourquoi|combien|quel|quelle|cuando|como|por que|why|how|what|quel prix)\b/.test(
+      folded,
+    )
+  ) {
+    return false;
+  }
+  // Very short chatter / name / slang — treat as "keep going" before the table.
+  return folded.length <= 24;
 }
 
 function isTableAmountChoice(text: string): boolean {
@@ -192,7 +224,12 @@ export function planFolderPresetAdvance(
     };
   }
 
-  const agreed = isBareAgreement(language, customerText) || (last === tableIndex && isTableAmountChoice(customerText));
+  const atOrPastTable = tableIndex >= 0 && last >= tableIndex;
+  const agreed =
+    isBareAgreement(language, customerText) ||
+    (last === tableIndex && isTableAmountChoice(customerText)) ||
+    // Before the amount table, soft-advance on short replies (Thank you / Ww / names).
+    (!atOrPastTable && isSoftAdvanceReply(language, customerText));
   if (!agreed) {
     return null;
   }
