@@ -2711,12 +2711,19 @@ async function sendMainMenu(chatId: number, state: ChatState, messageId?: number
   await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
+/** True when any actively enabled channel already has bot+AI folders all on (except Completed). */
 async function adminFoldersCurrentlyOn(): Promise<boolean> {
   const states = await stateStore.listAll();
   for (const state of states) {
-    const catalog = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
-    if (catalog.length && areAllFoldersEnabledExceptCompleted(catalog)) {
-      return true;
+    for (const channel of getSelectableChannels(state)) {
+      const runtime = getChannelRuntime(state, channel.id, channel.country);
+      if (!isChannelEnabled(state, channel.id, runtime.enabled)) {
+        continue;
+      }
+      const folders = resolveChannelStatusFolders(state, channel.id);
+      if (folders.length && areAllFoldersEnabledExceptCompleted(folders)) {
+        return true;
+      }
     }
   }
   return false;
