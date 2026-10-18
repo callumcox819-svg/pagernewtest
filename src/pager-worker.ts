@@ -47,6 +47,7 @@ import {
   isDjChannelName,
   isJoChannelName,
   isKeChannelName,
+  isMaChannelName,
   isMgChannelName,
   resolveWorkerCountryForChannel,
   type WorkerCountry,
@@ -2055,7 +2056,12 @@ async function processConversation(
   if (workerCountry === "EC") {
     return processEcConversation(deps, state, client, workingConv, runtime, channel);
   }
-  if (isFolderOnlyCountry(workerCountry)) {
+  if (isFolderOnlyCountry(workerCountry) || isMaChannelName(runtime.channelName)) {
+    if (!isFolderOnlyCountry(workerCountry) && isMaChannelName(runtime.channelName)) {
+      console.warn(
+        `Pager worker: ${runtime.channelName} is a Morocco channel but country=${workerCountry} — routing MA folder presets`,
+      );
+    }
     return processFolderMarketConversation(deps, state, client, workingConv, runtime, channel);
   }
   if (isJoChannelName(runtime.channelName)) {
@@ -7140,7 +7146,17 @@ async function trySendFolderPreset(
     const statusId = findFunnelFollowUpStatusId(state);
     const operatorId = await client.probeOperatorUserId();
     const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
-    if (statusId && operatorId) {
+    const channelFolders = resolveChannelStatusFolders(state, runtime.channelId);
+    const inProgressFolderEnabled = Boolean(
+      statusId &&
+        channelFolders.some(
+          (folder) =>
+            folder.enabled &&
+            (folder.id === statusId || isFunnelFollowUpFolderName(folder.name)),
+        ),
+    );
+    // Never exile MA/MR chats into «в процессе» if that folder is off — they vanish from the queue.
+    if (statusId && operatorId && inProgressFolderEnabled) {
       try {
         await client.patchConversationStatus(convId, statusId, operatorId);
         console.log(
@@ -7169,6 +7185,10 @@ async function trySendFolderPreset(
     } else if (!statusId) {
       console.warn(
         `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} — no «в процессе» folder found`,
+      );
+    } else if (!inProgressFolderEnabled) {
+      console.warn(
+        `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} — skip status move, «в процессе» not enabled for channel`,
       );
     }
   }
@@ -7227,6 +7247,15 @@ async function processFolderMarketConversation(
     })
     .map((message) => (message.text || "").trim());
   const latestCustomerText = (lastIncoming.text || "").trim();
+  // Same backlog unlock as MG/DJ — stale «Без статусу» leads must not die behind the 30m gate.
+  const folderNewLeadBypass =
+    isNoStatusConversation(conv) &&
+    outgoingTexts.length === 0 &&
+    Boolean(latestCustomerText);
+  const folderInProgressBypass =
+    isInProgressStatusConversation(conv) &&
+    Boolean(latestCustomerText) &&
+    (hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection));
   if (
     !(await ensureCustomerMessageEligible(
       deps,
@@ -7238,6 +7267,7 @@ async function processFolderMarketConversation(
       lastIncoming,
       sorted,
       {
+        bypass: folderNewLeadBypass || folderInProgressBypass,
         operatorUserId,
         countryLabel: runtime.runtime.country,
         country: englishLike ? "ZM" : "DJ",
@@ -8560,7 +8590,7 @@ function pickLiveTemplateBank(
     KE: ["кени", "kenya", "kenia", "nairobi"],
     GT: ["гватемал", "guatemala", "guate"],
     EC: ["эквадор", "еквадор", "ecuador", "quito"],
-    MA: ["марокк", "мароко", "morocco", "maroc"],
+    MA: ["марокк", "мароко", "марок", "morocco", "maroc", "المغرب"],
     MR: ["мавритан", "mauritan"],
     BF: ["буркина", "burkina"],
     BJ: ["бенін", "бенин", "benin", "bénin"],

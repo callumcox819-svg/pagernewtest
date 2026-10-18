@@ -14,7 +14,7 @@ export type FolderMarket = {
 export const FOLDER_MARKETS: Record<FolderMarketCode, FolderMarket> = {
   MA: {
     language: "fr",
-    hints: ["марокк", "мароко", "morocco", "maroc"],
+    hints: ["марокк", "мароко", "марок", "morocco", "maroc", "المغرب"],
     label: "Марокко",
   },
   MR: { language: "fr", hints: ["мавритан", "mauritan"], label: "Мавритания" },
@@ -224,7 +224,7 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
   }
   // Strong acks only — Darija chatter (cv / mzyan) is soft-early, not deposit/TG fuel.
   if (
-    /^(ok|okay|okey|oui|ouais|yes|yep|yeah|si|sí|dale|wakha|تمام|ماشي|دacord|d'accord)([\s,!.❤🤞💪👍]+.*)?$/i.test(
+    /^(ok|okay|okey|oui|ouais|yes|yep|yeah|si|sí|dale|wakha|wa5a|واخا|تمام|ماشي|دacord|d'accord|safi|صافي|hania|labas)([\s,!.❤🤞💪👍]+.*)?$/i.test(
       folded,
     )
   ) {
@@ -235,7 +235,7 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
       ? /^(si|ok|okay|okey|dale|va|vale|listo|de acuerdo|claro|bueno|quiero|me interesa|vamos|perfecto|sale|simon|yes|ya)([\s,!.]+.*)?$/
       : language === "en"
         ? /^(yes|yep|yeah|ok|okay|okey|sure|alright|ready|go|continue|interested|i want|show me|tell me|next|fine|good|perfect|lets go|let's go|i'm in|im in)([\s,!.]+.*)?$/
-        : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|parfait|vas-y|vas y|go|ca marche|je suis pret|pret|interesse|je veux|montre|montrez|explique|continue|suivant|allons-y|d'acc)([\s,!.]+.*)?$/;
+        : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|parfait|vas-y|vas y|go|ca marche|je suis pret|pret|interesse|je veux|montre|montrez|explique|continue|suivant|allons-y|d'acc|wakha|wa5a|safi|hania)([\s,!.]+.*)?$/;
   return pattern.test(folded);
 }
 
@@ -264,7 +264,7 @@ function isSoftAdvanceReply(language: PresetLanguage, text: string): boolean {
   }
   // Darija / thanks / short slang — early funnel only (gated by canSoftAdvanceTo).
   if (
-    /^(cv|cava|ca va|mzyan|ah mzyan|bikhir|merci|thanks|thank you|thx|bien|super|salam)([\s,!.❤🤞💪👍]+.*)?$/i.test(
+    /^(cv|cava|ca va|mzyan|ah mzyan|bikhir|merci|thanks|thank you|thx|bien|super|salam|ahla|labas|nadi|bip|بخير|مزيان)([\s,!.❤🤞💪👍]+.*)?$/i.test(
       folded,
     )
   ) {
@@ -432,6 +432,13 @@ export function planFolderPresetAdvance(
     !atOrPastTable &&
     canSoftAdvanceTo(nextKind) &&
     isSoftAdvanceReply(language, customerText);
+  // Before the money table: any non-decline reply advances intro/details (Darija chatter).
+  const earlyAnyReply =
+    !atOrPastTable &&
+    canSoftAdvanceTo(nextKind) &&
+    !isDecline(language, customerText) &&
+    Boolean(customerText.trim()) &&
+    !customerText.includes("?");
 
   // Registration bundle: soft slang (cv / mzyan) OK. Deposit / ID / TG: strong ack only.
   const regBundle = nextKind === "registration" || nextKind === "link" || nextKind === "promo";
@@ -439,7 +446,7 @@ export function planFolderPresetAdvance(
     ? strongAck || isSoftAdvanceReply(language, customerText)
     : LATE_KINDS.has(nextKind)
       ? strongAck
-      : strongAck || softOk;
+      : strongAck || softOk || earlyAnyReply;
 
   if (!agreed) {
     return null;

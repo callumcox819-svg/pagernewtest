@@ -143,7 +143,7 @@ const COUNTRY_FOLDER_HINTS: Record<string, string[]> = {
   KE: ["кени", "kenya", "kenia", "nairobi"],
   GT: ["гватемал", "guatemala", "guate"],
   EC: ["эквадор", "еквадор", "ecuador", "quito"],
-  MA: ["марокк", "мароко", "morocco", "maroc"],
+  MA: ["марокк", "мароко", "марок", "morocco", "maroc", "المغرب"],
 };
 
 const OPERATOR_COUNTRY_CODES = new Set<WorkerCountry>([

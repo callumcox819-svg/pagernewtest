@@ -114,6 +114,8 @@ const JO_CHANNEL_HINTS = ["jordan", "الأردن", "الاردن"];
 const KE_CHANNEL_HINTS = ["kenya", "kenia", "кени", "nairobi", "kipchoge", "keino"];
 const GT_CHANNEL_HINTS = ["guatemala", "гватемал", "guate"];
 const EC_CHANNEL_HINTS = ["ecuador", "эквадор", "еквадор", "quito"];
+/** Morocco — folder-preset market (МАРОКО saved replies). */
+const MA_CHANNEL_HINTS = ["марокк", "мароко", "марок", "morocco", "maroc", "المغرب"];
 
 export function isClChannelName(name: string): boolean {
   const normalized = name.toLowerCase();
@@ -180,6 +182,14 @@ export function isEcChannelName(name: string): boolean {
   return EC_CHANNEL_HINTS.some((hint) => normalized.includes(hint));
 }
 
+export function isMaChannelName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  if (/\bmorocco\b|\bmaroc\b|\bmarocco\b/.test(normalized) || /المغرب/.test(name)) {
+    return true;
+  }
+  return MA_CHANNEL_HINTS.some((hint) => normalized.includes(hint.toLowerCase()));
+}
+
 export function resolveWorkerCountryForChannel(
   channelName: string,
   savedCountry?: WorkerCountry,
@@ -188,6 +198,10 @@ export function resolveWorkerCountryForChannel(
   // Operator override always wins (e.g. Tchouameni channel set to MG manually).
   if (savedCountry) {
     return savedCountry;
+  }
+  // Morocco before EG name heuristics — "Anas Maroc" must not become Egypt.
+  if (isMaChannelName(channelName)) {
+    return "MA";
   }
   if (isClChannelName(channelName)) {
     return "CL";
@@ -217,6 +231,9 @@ export function defaultCountryForChannelName(name: string): WorkerCountry {
   if (isRwLearnChannelName(name)) {
     return "RW";
   }
+  if (isMaChannelName(name)) {
+    return "MA";
+  }
   if (isClChannelName(name)) {
     return "CL";
   }
@@ -239,16 +256,17 @@ export function defaultCountryForChannelName(name: string): WorkerCountry {
     return "EC";
   }
   const normalized = name.toLowerCase();
-  if (/mahmoud|anas|ahmad|moulaye|egypt|eg/.test(normalized)) {
-    return "EG";
-  }
-  if (/moukoko|ndzi|cameroon|cm|tchouameni/.test(normalized)) {
-    return "CM";
-  }
+  // Folder-only geos before loose EG/CM needles ("eg"/"cm" match inside unrelated names).
   for (const code of FOLDER_ONLY_COUNTRIES) {
-    if (FOLDER_MARKETS[code].hints.some((hint) => normalized.includes(hint))) {
+    if (FOLDER_MARKETS[code].hints.some((hint) => normalized.includes(hint.toLowerCase()))) {
       return code;
     }
+  }
+  if (/\bmahmoud\b|\banas\b|\bahmad\b|\bahmed\b|\bmoulaye\b|\begypt\b|\beg\b/.test(normalized)) {
+    return "EG";
+  }
+  if (/\bmoukoko\b|\bndzi\b|\bcameroon\b|\bcm\b|\btchouameni\b/.test(normalized)) {
+    return "CM";
   }
   return "ZM";
 }
