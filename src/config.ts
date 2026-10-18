@@ -151,6 +151,10 @@ export function resolvePlaybookCountry(country: string | undefined): CountryCode
   ) {
     return "CM";
   }
+  // Pakistan Urdu — Arabic-script OCR/playbook sibling (EG).
+  if (code === "PK") {
+    return "EG";
+  }
   // Unknown / future geos — English playbook is the safest default.
   return "ZM";
 }
@@ -205,7 +209,8 @@ export function resolveYamlTemplateBankName(
     | "BF"
     | "BJ"
     | "CR"
-    | "SN",
+    | "SN"
+    | "PK",
   channelId?: string,
 ): string {
   if (country === "RW") {
@@ -268,7 +273,8 @@ export function resolveYamlTemplateBankName(
     country === "BF" ||
     country === "BJ" ||
     country === "CR" ||
-    country === "SN"
+    country === "SN" ||
+    country === "PK"
   ) {
     return `${country.toLowerCase()}-folder`;
   }
@@ -306,7 +312,8 @@ export function statusMapForCountry(
     | "BF"
     | "BJ"
     | "CR"
-    | "SN",
+    | "SN"
+    | "PK",
 ): ChannelConfig["statusMap"] {
   if (
     country === "RW" ||
@@ -324,7 +331,7 @@ export function statusMapForCountry(
   ) {
     return statusMapForCountry(config, "CM");
   }
-  if (country === "JO") {
+  if (country === "JO" || country === "PK") {
     return statusMapForCountry(config, "EG");
   }
   if (country === "KE") {

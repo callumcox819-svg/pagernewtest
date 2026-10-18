@@ -112,7 +112,7 @@ const MESSAGES: Record<IdleSignalFolderKind, Record<IdleSignalLang, string[]>> =
 };
 
 export function idleSignalLangForCountry(country: WorkerCountry): IdleSignalLang {
-  if (country === "EG" || country === "JO") {
+  if (country === "EG" || country === "JO" || country === "PK") {
     return "ar";
   }
   if (

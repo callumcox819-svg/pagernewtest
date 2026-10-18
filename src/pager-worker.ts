@@ -55,6 +55,7 @@ import {
   isKeChannelName,
   isMaChannelName,
   isMgChannelName,
+  isPkChannelName,
   resolveWorkerCountryForChannel,
   type WorkerCountry,
 } from "./rw-learn.js";
@@ -2093,10 +2094,19 @@ async function processConversation(
   if (workerCountry === "EC") {
     return processEcConversation(deps, state, client, workingConv, runtime, channel);
   }
-  if (isFolderOnlyCountry(workerCountry) || isMaChannelName(runtime.channelName)) {
+  if (
+    isFolderOnlyCountry(workerCountry) ||
+    isMaChannelName(runtime.channelName) ||
+    isPkChannelName(runtime.channelName)
+  ) {
     if (!isFolderOnlyCountry(workerCountry) && isMaChannelName(runtime.channelName)) {
       console.warn(
         `Pager worker: ${runtime.channelName} is a Morocco channel but country=${workerCountry} — routing MA folder presets`,
+      );
+    }
+    if (!isFolderOnlyCountry(workerCountry) && isPkChannelName(runtime.channelName)) {
+      console.warn(
+        `Pager worker: ${runtime.channelName} is a Pakistan channel but country=${workerCountry} — routing PK folder presets`,
       );
     }
     return processFolderMarketConversation(deps, state, client, workingConv, runtime, channel);
@@ -7312,8 +7322,9 @@ async function processFolderMarketConversation(
     (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
   );
   const folderLang = folderMarketLanguage(runtime.runtime.country);
-  const englishLike = folderLang === "es" || folderLang === "en";
-  const lastIncoming = findLatestIncomingFromThread(sorted, conv, englishLike ? "ZM" : "CM");
+  const threadCountry: CountryCode =
+    folderLang === "es" || folderLang === "en" ? "ZM" : folderLang === "ur" ? "EG" : "CM";
+  const lastIncoming = findLatestIncomingFromThread(sorted, conv, threadCountry);
   if (!lastIncoming) {
     return false;
   }
@@ -7321,7 +7332,7 @@ async function processFolderMarketConversation(
   if (
     shouldSkipConversationBotSpokeLast(conv, sorted, lastIncoming, {
       operatorUserId,
-      country: englishLike ? "ZM" : "CM",
+      country: threadCountry,
       catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
     })
   ) {
@@ -7358,7 +7369,7 @@ async function processFolderMarketConversation(
         bypass: folderNewLeadBypass || folderInProgressBypass,
         operatorUserId,
         countryLabel: runtime.runtime.country,
-        country: englishLike ? "ZM" : "DJ",
+        country: threadCountry === "ZM" ? "ZM" : threadCountry === "EG" ? "EG" : "DJ",
         catchUpRead: isCatchUpReadActive(currentState.catchUpRead),
       },
     ))
@@ -7384,7 +7395,7 @@ async function processFolderMarketConversation(
 
   const imageUrl = extractProofImageUrl(lastIncoming);
   const recentCustomerTexts = recentCustomerMessageTexts(sorted, conv);
-  const aiCountry: CountryCode = englishLike ? "ZM" : "CM";
+  const aiCountry: CountryCode = threadCountry;
   const playbook = getPlaybook(deps.config, aiCountry);
   const folderChannel = buildRuntimeChannelConfig(deps.config, currentState, runtime);
 
@@ -7591,6 +7602,22 @@ async function processFolderMarketConversation(
         forceSupportAgent: true,
         folderEnabled,
         aiFolderEnabled,
+        support:
+          runtime.runtime.country === "PK"
+            ? {
+                country: "PK",
+                active: true,
+                phase: "pre_deposit",
+                inProgressFolder: isInProgressStatusConversation(conv),
+                regLinkSent: outgoingTexts.some((text) =>
+                  /https?:\/\/|tinyurl\.com|bit\.ly/i.test(text),
+                ),
+                depositScriptSent: outgoingTexts.some((text) =>
+                  /deposit|ڈپازٹ|ڈیپازٹ/i.test(text),
+                ),
+                gameIdScriptSent: false,
+              }
+            : undefined,
       })
     ) {
       return true;
@@ -8959,6 +8986,7 @@ function pickLiveTemplateBank(
     BJ: ["бенін", "бенин", "benin", "bénin"],
     CR: ["коста", "costa"],
     SN: ["сенегал", "senegal", "sénégal"],
+    PK: ["урду", "urdu", "пакистан", "pakistan", "pakistani", "pkr"],
   };
   const countryHints = hints[country] ?? [];
   const matched = banks.find((bank) => {
@@ -9238,15 +9266,15 @@ async function tryParkConversationNoMoneyOrNotReady(
   if (!replyText?.trim()) {
     replyText =
       parking === "no_money"
-        ? localeCountry === "EG" || localeCountry === "JO"
-          ? "تمام، مفيش مشكلة. لما يكون معاك فلوس ابعتلي وهنكمل."
+        ? localeCountry === "EG" || localeCountry === "JO" || localeCountry === "PK"
+          ? "کوئی بات نہیں۔ جب پیسے ہوں تو مجھے لکھیں، آگے بڑھیں گے۔"
           : localeCountry === "CL" || localeCountry === "GT" || localeCountry === "EC" || localeCountry === "CR"
             ? "Sin problema. Cuando tengas dinero escríbeme y seguimos."
             : localeCountry === "ZM" || localeCountry === "KE" || localeCountry === "RW"
               ? "No problem. Message me when you have money and we'll continue."
               : "Pas de souci. Écris-moi quand tu auras de l'argent et on continue."
-        : localeCountry === "EG" || localeCountry === "JO"
-          ? "تمام. لما تكون جاهز ابعتلي وهنكمل."
+        : localeCountry === "EG" || localeCountry === "JO" || localeCountry === "PK"
+          ? "کوئی بات نہیں۔ جب آپ تیار ہوں تو مجھے لکھیں، آگے بڑھیں گے۔"
           : localeCountry === "CL" || localeCountry === "GT" || localeCountry === "EC" || localeCountry === "CR"
             ? "Sin problema. Cuando estés listo escríbeme y seguimos."
             : localeCountry === "ZM" || localeCountry === "KE" || localeCountry === "RW"

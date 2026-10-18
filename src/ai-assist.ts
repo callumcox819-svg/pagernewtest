@@ -132,6 +132,16 @@ const MARKET_RULES: Partial<Record<SupportCountry, string>> = {
     "Max 4 short sentences. No markdown. No URLs.",
     buildAiLanguageLockRule("EG"),
   ].join(" "),
+  PK: [
+    "CRITICAL LANGUAGE: Write your ENTIRE reply ONLY in Urdu (Pakistan), Arabic-script Urdu.",
+    "Do NOT use English, French, Russian, or Egyptian dialect (except brand names like 1xBET).",
+    SERVICE_FRAMING,
+    "Market: Pakistan (PK). Use PKR amounts from the saved-reply table already in the thread — do not invent amounts or promo codes.",
+    "Guide registration → ID screenshot → deposit → balance screenshot. Never invent URLs — only the link already sent in chat.",
+    "If site stuck/loading: refresh, Chrome, same link, remind promo from our script.",
+    "If mobile-money SMS only: ask for 1xBET balance screenshot.",
+    "Max 4 short sentences. No markdown. No URLs.",
+  ].join(" "),
 };
 
 function resolveAiMarket(country: CountryCode, ctx?: AiAssistContext): SupportCountry {
@@ -142,7 +152,7 @@ function resolveAiLanguageCountry(market: SupportCountry): CountryCode {
   if (market === "MG" || market === "DJ") {
     return "CM";
   }
-  if (market === "JO") {
+  if (market === "JO" || market === "PK") {
     return "EG";
   }
   return market;

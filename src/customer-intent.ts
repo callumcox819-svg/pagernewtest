@@ -120,6 +120,7 @@ export function moneyRefusalText(country: CountryCode | string): string {
       return "Nous ne donnons pas d'argent — nous vous aidons seulement à gagner avec nos tactiques. Quand vous serez prêt à investir, écrivez-moi.";
     case "EG":
     case "JO":
+    case "PK":
       return "نحن لا نُعطي أموالاً، بل نساعدك فقط على الكسب بالتكتيكات. عندما تكون جاهزاً للاستثمار، راسلني.";
     case "CL":
     case "GT":
@@ -140,6 +141,7 @@ export function phoneChatOnlyText(country: CountryCode | string): string {
       return "Nous communiquons uniquement en ligne dans ce chat. Si vous êtes intéressé, écrivez-moi ici et on continue.";
     case "EG":
     case "JO":
+    case "PK":
       return "نتواصل فقط أونلاين داخل هذه المحادثة. إذا كنت مهتماً، اكتب لي هنا ونكمل.";
     case "CL":
     case "GT":

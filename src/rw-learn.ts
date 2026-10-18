@@ -37,7 +37,8 @@ export type WorkerCountry =
   | "BF"
   | "BJ"
   | "CR"
-  | "SN";
+  | "SN"
+  | "PK";
 
 export type RwLearningEventKind =
   | "no_status_lead"
@@ -116,6 +117,8 @@ const GT_CHANNEL_HINTS = ["guatemala", "гватемал", "guate"];
 const EC_CHANNEL_HINTS = ["ecuador", "эквадор", "еквадор", "quito"];
 /** Morocco — folder-preset market (МАРОКО saved replies). */
 const MA_CHANNEL_HINTS = ["марокк", "мароко", "марок", "morocco", "maroc", "المغرب"];
+/** Pakistan — Urdu folder presets («Урду (Пакистан)»). */
+const PK_CHANNEL_HINTS = ["урду", "urdu", "пакистан", "pakistan", "pakistani", "pkr"];
 
 export function isClChannelName(name: string): boolean {
   const normalized = name.toLowerCase();
@@ -190,6 +193,14 @@ export function isMaChannelName(name: string): boolean {
   return MA_CHANNEL_HINTS.some((hint) => normalized.includes(hint.toLowerCase()));
 }
 
+export function isPkChannelName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  if (/\bpakistan\b|\burdu\b|\bpkr\b/.test(normalized) || /пакистан|урду/.test(normalized)) {
+    return true;
+  }
+  return PK_CHANNEL_HINTS.some((hint) => normalized.includes(hint.toLowerCase()));
+}
+
 export function resolveWorkerCountryForChannel(
   channelName: string,
   savedCountry?: WorkerCountry,
@@ -202,6 +213,9 @@ export function resolveWorkerCountryForChannel(
   // Morocco before EG name heuristics — "Anas Maroc" must not become Egypt.
   if (isMaChannelName(channelName)) {
     return "MA";
+  }
+  if (isPkChannelName(channelName)) {
+    return "PK";
   }
   if (isClChannelName(channelName)) {
     return "CL";
@@ -233,6 +247,9 @@ export function defaultCountryForChannelName(name: string): WorkerCountry {
   }
   if (isMaChannelName(name)) {
     return "MA";
+  }
+  if (isPkChannelName(name)) {
+    return "PK";
   }
   if (isClChannelName(name)) {
     return "CL";

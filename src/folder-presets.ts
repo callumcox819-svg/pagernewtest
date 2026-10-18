@@ -1,9 +1,9 @@
 import type { PagerSavedReply } from "./pager-client.js";
 
 /** Melbet-style folder markets only — NOT used for 1xBET KE/GT/EC engines. */
-export type FolderMarketCode = "MA" | "MR" | "DJ" | "BF" | "CM" | "BJ" | "CR" | "SN";
+export type FolderMarketCode = "MA" | "MR" | "DJ" | "BF" | "CM" | "BJ" | "CR" | "SN" | "PK";
 
-export type PresetLanguage = "fr" | "es" | "en";
+export type PresetLanguage = "fr" | "es" | "en" | "ur";
 
 export type FolderMarket = {
   language: PresetLanguage;
@@ -24,10 +24,16 @@ export const FOLDER_MARKETS: Record<FolderMarketCode, FolderMarket> = {
   BJ: { language: "fr", hints: ["бенін", "бенин", "benin", "bénin"], label: "Бенин" },
   CR: { language: "es", hints: ["коста", "costa"], label: "Коста-Рика" },
   SN: { language: "fr", hints: ["сенегал", "senegal", "sénégal"], label: "Сенегал" },
+  /** Saved-reply folder e.g. «скрипт папка Урду (Пакистан)». */
+  PK: {
+    language: "ur",
+    hints: ["урду", "urdu", "пакистан", "pakistan", "pakistani", "pkr"],
+    label: "Пакистан",
+  },
 };
 
 /** Melbet folder-order markets — 1xBET KE/GT/EC use dedicated Pager script engines. */
-export const FOLDER_ONLY_COUNTRIES = ["MA", "MR", "BF", "BJ", "CR", "SN"] as const;
+export const FOLDER_ONLY_COUNTRIES = ["MA", "MR", "BF", "BJ", "CR", "SN", "PK"] as const;
 
 export type FolderOnlyCountry = (typeof FOLDER_ONLY_COUNTRIES)[number];
 
@@ -197,6 +203,14 @@ function isDecline(language: PresetLanguage, text: string): boolean {
       /\b(not interested|none of them|nothing suits|don't want|dont want)\b/.test(folded)
     );
   }
+  if (language === "ur") {
+    const raw = text.trim();
+    return (
+      /^(نہیں|نهیں|نا|نہيں|nahi|nahin|no|nope)\b/i.test(raw) ||
+      /\b(نہیں|نهیں|دلچسپی نہیں|interested nahi|not interested|chor do|band karo)\b/i.test(raw) ||
+      /^(nahi|nahin|na ji)([\s,!.]+.*)?$/i.test(folded)
+    );
+  }
   return (
     /^(non|nan|pas interesse|pas d'argent|j'ai pas|je n'ai pas|plus tard|pas maintenant|arrete|stop|laisse|la)\b/.test(
       folded,
@@ -224,11 +238,17 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
   }
   // Strong acks only — Darija chatter (cv / mzyan) is soft-early, not deposit/TG fuel.
   if (
-    /^(ok|okay|okey|oui|ouais|yes|yep|yeah|si|sí|dale|wakha|wa5a|واخا|تمام|ماشي|دacord|d'accord|safi|صافي|hania|labas)([\s,!.❤🤞💪👍]+.*)?$/i.test(
+    /^(ok|okay|okey|oui|ouais|yes|yep|yeah|si|sí|dale|wakha|wa5a|واخا|تمام|ماشي|دacord|d'accord|safi|صافي|hania|labas|جی|ہاں|हां|haan|han|ji|theek)([\s,!.❤🤞💪👍]+.*)?$/i.test(
       folded,
-    )
+    ) ||
+    /^(جی ہاں|جی هاں|ٹھیک ہے|ठीक ہے)([\s,!.❤🤞💪👍]+.*)?$/i.test(text.trim())
   ) {
     return true;
+  }
+  if (language === "ur") {
+    return /^(جی|ہاں|हां|haan|han|ji|ok|okay|yes|theek|thik|bilkul|zaroor|چلیں|چلو)([\s,!.❤🤞💪👍]+.*)?$/i.test(
+      folded,
+    ) || /^(جی ہاں|ٹھیک|ٹھیک ہے)([\s,!.]+.*)?$/i.test(text.trim());
   }
   const pattern =
     language === "es"
@@ -264,7 +284,7 @@ function isSoftAdvanceReply(language: PresetLanguage, text: string): boolean {
   }
   // Darija / thanks / short slang — early funnel only (gated by canSoftAdvanceTo).
   if (
-    /^(cv|cava|ca va|mzyan|ah mzyan|bikhir|merci|thanks|thank you|thx|bien|super|salam|ahla|labas|nadi|bip|بخير|مزيان)([\s,!.❤🤞💪👍]+.*)?$/i.test(
+    /^(cv|cava|ca va|mzyan|ah mzyan|bikhir|merci|thanks|thank you|thx|bien|super|salam|ahla|labas|nadi|bip|بخير|مزيان|السلام|آپ|acha|achha|shukriya)([\s,!.❤🤞💪👍]+.*)?$/i.test(
       folded,
     )
   ) {

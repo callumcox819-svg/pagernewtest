@@ -36,7 +36,7 @@ export type SupportPhase =
   | "awaiting_deposit_proof"
   | "awaiting_game_id";
 
-export type SupportCountry = CountryCode | "MG" | "DJ" | "JO";
+export type SupportCountry = CountryCode | "MG" | "DJ" | "JO" | "PK";
 
 export type SupportSnapshot = {
   country: SupportCountry;
@@ -124,6 +124,19 @@ const SUPPORT_FUNNEL: Record<SupportCountry, FunnelHistorySignals> = {
     gameIdSent: () => false,
     introScriptKeys: ["01_intro", "02_how_it_works", "03_jod_table", "04_registration"],
     linkResendScriptKeys: ["05_link"],
+    depositScriptKeys: [],
+    gameIdScriptKeys: [],
+  },
+  /** Pakistan folder presets — history signals from outgoing text heuristics. */
+  PK: {
+    regLinkSent: (outgoing) =>
+      outgoing.some((text) => /https?:\/\/|tinyurl\.com|bit\.ly|cutt\.ly/i.test(text)),
+    depositSent: (outgoing) =>
+      outgoing.some((text) => /deposit|ڈپازٹ|ڈیپازٹ|ڈیپوزٹ|رقم جمع/i.test(text)),
+    gameIdSent: (outgoing) =>
+      outgoing.some((text) => /\b(id|آئی\s*ڈی|آئي\s*ڊي)\b/i.test(text)),
+    introScriptKeys: [],
+    linkResendScriptKeys: [],
     depositScriptKeys: [],
     gameIdScriptKeys: [],
   },
