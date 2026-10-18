@@ -189,15 +189,21 @@ function isDecline(language: PresetLanguage, text: string): boolean {
   if (language === "es") {
     return /^(no|nop|nel|luego|despues|ahora no|no tengo|no me interesa|no quiero|para|dejalo|basta)\b/.test(
       folded,
-    );
+    ) || /\b(no me interesa|ninguno|ninguna|no quiero)\b/.test(folded);
   }
   if (language === "en") {
-    return /^(no|nope|nah|later|not now|not interested|stop|leave me|dont|don't|pass)\b/.test(
-      folded,
+    return (
+      /^(no|nope|nah|later|not now|not interested|stop|leave me|dont|don't|pass)\b/.test(folded) ||
+      /\b(not interested|none of them|nothing suits|don't want|dont want)\b/.test(folded)
     );
   }
-  return /^(non|nan|pas interesse|pas d'argent|j'ai pas|je n'ai pas|plus tard|pas maintenant|arrete|stop|laisse|la)\b/.test(
-    folded,
+  return (
+    /^(non|nan|pas interesse|pas d'argent|j'ai pas|je n'ai pas|plus tard|pas maintenant|arrete|stop|laisse|la)\b/.test(
+      folded,
+    ) ||
+    /\b(pas interess|non merci|ne (me )?(prefere|veux|aime|interesse) pas|je (ne )?prefere pas|chuis ne|rien (ne )?(me )?(va|convient|interesse)|pas pour moi|aucun montant|aucune option)\b/.test(
+      folded,
+    )
   );
 }
 

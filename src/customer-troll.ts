@@ -36,6 +36,32 @@ const INTERESTED =
 const HARD_SOFT_REFUSE =
   /\b(orphelin|orphelins|je\s*travail+e?\s*pas|travaille?\s*pas|ch[oô]meur|pas\s*d['']?argent|n['']ai\s*pas\s*(d['']?)?argent)\b/i;
 
+/**
+ * Explicit «nothing suits me / not interested» — move to SPAM after offer table.
+ * Covers typos like «Chuis ne prefere pas».
+ */
+export function isExplicitFunnelDecline(text: string): boolean {
+  const raw = (text || "").trim();
+  if (!raw) {
+    return false;
+  }
+  const t = normalizeCustomerText(raw);
+  if (/^(non|nah|nope|jamais|rien|non merci)\.?!*$/i.test(t)) {
+    return true;
+  }
+  return (
+    /\b(pas interess[eé]|non merci|stop|arr[eê]te|arnaque|scam|laisse[- ]moi|fous[- ]moi|degage)\b/i.test(
+      t,
+    ) ||
+    /\b(ne|n')\s*(me\s*)?(pr[eé]f[eè]re|veux|veut|veux|aime|interesse)\s*pas\b/i.test(t) ||
+    /\b(je\s*)?(ne\s*)?(pr[eé]f[eè]re|veux|aime)\s*pas\b/i.test(t) ||
+    /\b(chuis|je\s*suis)\s+ne\b/i.test(t) ||
+    /\b(rien|aucun|aucune)\s*(ne\s*)?(me\s*)?(va|convient|interesse|plait|pla[iî]t)\b/i.test(t) ||
+    /\b(pas pour moi|rien pour moi|aucun montant|aucune option|rien de tout)\b/i.test(t) ||
+    /\b(je\s*)?(ne\s*)?(prends|choisis|veux)\s*(rien|aucun)\b/i.test(t)
+  );
+}
+
 export type TrollGateOptions = {
   /** Tier table / reg link / deposit scripts already sent in thread. */
   hasFunnelProgress: boolean;
@@ -120,7 +146,7 @@ export function scoreOffTopicTrollMessage(text: string): number {
   if (/^(windows|nike|hyy+|lol+|mdr+|haha+)[.!\s]*$/i.test(t)) {
     score += 2;
   }
-  if (HARD_SOFT_REFUSE.test(t)) {
+  if (HARD_SOFT_REFUSE.test(t) || isExplicitFunnelDecline(raw)) {
     score += 2;
   }
   // Random keyboard smash only — never short real words like «et alors».

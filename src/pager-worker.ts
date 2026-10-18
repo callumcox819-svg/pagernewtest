@@ -59,6 +59,7 @@ import {
   isConversationInAiEnabledFolders,
 } from "./status-folders.js";
 import {
+  isExplicitFunnelDecline,
   isTrollDetectionCountry,
   shouldIgnoreTrollCustomer,
 } from "./customer-troll.js";
@@ -2644,6 +2645,23 @@ async function processCmConversation(
     messageReaction,
   });
 
+  if (
+    await tryHandleDeclinedCustomerToSpam(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "CM",
+      latestCustomerText,
+      intent,
+    )
+  ) {
+    return true;
+  }
+
   let scriptKeys = resolveCmFunnelScripts(
     effectiveStep,
     latestCustomerText,
@@ -5096,6 +5114,23 @@ async function processMgConversation(
     messageReaction,
   });
 
+  if (
+    await tryHandleDeclinedCustomerToSpam(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "MG",
+      latestCustomerText,
+      intent,
+    )
+  ) {
+    return true;
+  }
+
   let scriptKeys = resolveMgFunnelScripts(
     effectiveStep,
     latestCustomerText,
@@ -5577,6 +5612,23 @@ async function processDjConversation(
     funnelStep: effectiveStep,
     messageReaction,
   });
+
+  if (
+    await tryHandleDeclinedCustomerToSpam(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "DJ",
+      latestCustomerText,
+      intent,
+    )
+  ) {
+    return true;
+  }
 
   let scriptKeys = resolveDjFunnelScripts(
     effectiveStep,
@@ -7196,6 +7248,22 @@ async function processFolderMarketConversation(
     return false;
   }
 
+  if (
+    await tryHandleDeclinedCustomerToSpam(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      runtime.runtime.country,
+      latestCustomerText,
+    )
+  ) {
+    return true;
+  }
+
   return trySendFolderPreset(
     deps,
     state,
@@ -7675,6 +7743,53 @@ function hasTrollFunnelProgress(country: string, outgoingTexts: string[]): boole
     );
   }
   return false;
+}
+
+/** Clear refuse («ne préfère pas» / not interested) → SPAM folder + ack. */
+async function tryHandleDeclinedCustomerToSpam(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+  convState: ConversationRuntimeState,
+  convId: string,
+  countryLabel: string,
+  latestCustomerText: string,
+  intent?: string,
+): Promise<boolean> {
+  const declined =
+    intent === "declined" || isExplicitFunnelDecline(latestCustomerText);
+  if (!declined) {
+    return false;
+  }
+  if (convState.ignoredAt || isIgnoreStatusConversation(conv)) {
+    try {
+      await client.acknowledgeConversation(convId);
+    } catch {
+      // non-fatal
+    }
+    return true;
+  }
+
+  console.log(
+    `Pager worker: ${countryLabel} ${convId.slice(0, 8)} declined — moving to SPAM (text=${truncate(latestCustomerText)})`,
+  );
+  const moved = await tryMoveConversationToIgnore(
+    deps,
+    state,
+    client,
+    conv,
+    convId,
+    runtime.channelId,
+    countryLabel,
+  );
+  try {
+    await client.acknowledgeConversation(convId);
+  } catch {
+    // non-fatal
+  }
+  return moved;
 }
 
 async function tryHandleTrollCustomerToIgnore(

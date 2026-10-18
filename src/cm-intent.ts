@@ -24,7 +24,7 @@ const FR_GREETING =
 const FR_INTERESTED =
   /\b(je veux|interesse|interesse|interessee|interessee|m'interesse|ca m'interesse|comment|explique|details|details|investir|gagner|j[' ]?ai vu votre publication|jai vu votre publication|j[' ]?ai vu votre pub|jai vu votre pub|publication|je suis interesse|suis interesse|commen[cç]ons|vous voulez m'aide|veux m'aide|m'aider|aidez[- ]?moi|besoin d'aide)\b/i;
 const FR_DECLINED =
-  /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian)\b|^non[.!]?$/i;
+  /\b(pas intéressé|pas interesse|je ne suis pas intéressé|non merci|stop|arrête|arnaque|escroc|nigerian|ne (me )?(préfère|prefere|veux|aime|interesse) pas|je (ne )?(préfère|prefere) pas|chuis ne|rien (ne )?(me )?(va|convient|interesse)|pas pour moi|aucun montant|aucune option)\b|^non[.!]?$/i;
 const FR_REG_DONE =
   /(déjà|deja).{0,32}(connect|inscription|inscrit|enregistr|1xbet)|je me suis deja connecte|je me suis inscrit|compte.{0,16}(ouvert|créé|cree)|j[' ]?ai (fini|créé|cree).{0,16}(inscription|compte)|c[' ]?est bon j[' ]?ai (créé|cree)|j[' ]?ai (créé|cree)\b|^j[' ]?ai déjà\.?$|^jai deja\.?$|^déjà\.?$|^deja\.?$/i;
 const FR_REG_PENDING =

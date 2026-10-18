@@ -52,7 +52,8 @@ const READY =
 const GREETING = /^(salut|bonjour|bonsoir|hey|hello|hi|yo)([\s,!.]|$)/i;
 const JOINED =
   /\b(je me suis inscrit|inscrit|inscription (faite|terminee|termine)|j'ai cree|j ai cree|account created|registered)\b/i;
-const DECLINED = /\b(pas interesse|non merci|stop|arnaque|scam|laisse[- ]moi)\b/i;
+const DECLINED =
+  /\b(pas interesse|non merci|stop|arnaque|scam|laisse[- ]moi|ne (me )?(prefere|pr[eé]f[eè]re|veux|aime|interesse) pas|je (ne )?(prefere|pr[eé]f[eè]re) pas|chuis ne|rien (ne )?(me )?(va|convient|interesse)|pas pour moi|aucun montant|aucune option)\b/i;
 const BARE_DECLINED = /^(non|nah|nope|jamais|rien|non merci)\.?!*$/i;
 const DEPOSIT_DONE =
   /\b(j'ai (fait|depose)|depot (fait|termine)|deposit done|deposited|apres (le )?depot)\b/i;
