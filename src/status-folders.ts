@@ -703,6 +703,16 @@ export function setAllStatusFolders(
   return folders.map((folder) => ({ ...folder, enabled }));
 }
 
+/** Enable every folder except «Завершено» / Completed (those stay off). */
+export function setAllStatusFoldersExceptCompleted(
+  folders: StatusFolderState[],
+): StatusFolderState[] {
+  return folders.map((folder) => ({
+    ...folder,
+    enabled: !isCompletedStatusName(folder.name),
+  }));
+}
+
 export function toggleStatusFolder(
   folders: StatusFolderState[],
   index: number,

@@ -24,6 +24,7 @@ import {
   countApiStatusFolders,
   isAiFolderEnabled,
   setAllStatusFolders,
+  setAllStatusFoldersExceptCompleted,
   setAllAiStatusFolders,
   stripChannelNamesFromFolders,
   toggleStatusFolder,
@@ -2754,6 +2755,27 @@ async function handleAdminCallback(
     return;
   }
 
+  if (value === "enable_all_folders") {
+    await telegram.answerCallbackQuery(callbackId, "Включаю папки…");
+    const result = await enableAllFoldersForAllUsersExceptCompleted();
+    const text = [
+      "✅ Все папки включены для всех пользователей",
+      `(кроме «Завершено»)`,
+      "",
+      `Обновлено: ${result.updatedUsers} польз.`,
+      result.skippedUsers ? `Без папок (пропущено): ${result.skippedUsers}` : "",
+      `Каналов с оверрайдом: ${result.updatedChannels}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (messageId) {
+      await safeEditMenu(chatId, messageId, text, buildAdminPanelKeyboard());
+    } else {
+      await telegram.sendMessage(chatId, text, buildAdminPanelKeyboard());
+    }
+    return;
+  }
+
   if (value === "users_noop" || value === "uch_noop" || value === "uf_noop") {
     await telegram.answerCallbackQuery(callbackId);
     return;
@@ -3455,6 +3477,50 @@ async function toggleAdminTargetFolder(
     messageId,
     page,
   );
+}
+
+async function enableAllFoldersForAllUsersExceptCompleted(): Promise<{
+  updatedUsers: number;
+  skippedUsers: number;
+  updatedChannels: number;
+}> {
+  const states = await stateStore.listAll();
+  let updatedUsers = 0;
+  let skippedUsers = 0;
+  let updatedChannels = 0;
+
+  for (const state of states) {
+    const catalog = state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+    if (!catalog.length) {
+      skippedUsers += 1;
+      continue;
+    }
+
+    const nextCatalog = setAllStatusFoldersExceptCompleted(catalog);
+    const nextChannels: Record<string, ChannelRuntimeState> = {
+      ...(state.channels ?? {}),
+    };
+
+    for (const [channelId, runtime] of Object.entries(state.channels ?? {})) {
+      if (!runtime.statusFolders?.length) {
+        continue;
+      }
+      nextChannels[channelId] = {
+        ...runtime,
+        statusFolders: setAllStatusFoldersExceptCompleted(runtime.statusFolders),
+      };
+      updatedChannels += 1;
+    }
+
+    await stateStore.patch(state.chatId, {
+      statusFolders: nextCatalog,
+      operatorSettings: buildOperatorSettings(state, { statusFolders: nextCatalog }),
+      channels: nextChannels,
+    });
+    updatedUsers += 1;
+  }
+
+  return { updatedUsers, skippedUsers, updatedChannels };
 }
 
 async function setAllAdminTargetFolders(

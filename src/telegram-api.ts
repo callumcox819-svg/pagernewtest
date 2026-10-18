@@ -993,6 +993,12 @@ export function buildAdminPanelKeyboard(): ReplyMarkup {
         }),
       ],
       [
+        inlineBtn("Включить все папки", "admin:enable_all_folders", {
+          emojiId: PREMIUM_EMOJI.folder,
+          style: "success",
+        }),
+      ],
+      [
         inlineBtn("Доступ к боту", "admin:grant_access", {
           emojiId: PREMIUM_EMOJI.check,
           style: "success",
