@@ -7036,27 +7036,43 @@ async function trySendFolderPreset(
     return false;
   }
 
+  const texts = plan.texts.map((text) => text.trim()).filter(Boolean);
   console.log(
-    `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} ${plan.role}${plan.table ? " table" : ""} from saved replies, no AI`,
+    `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} ${plan.role}${plan.table ? " table" : ""} parts=${texts.length}${plan.moveToInProgress ? " →in_progress" : ""} from saved replies, no AI`,
   );
-  let sent = false;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    sent = await client.sendMessageReliable(convId, plan.text.trim(), {
-      channelId: runtime.channelId,
-      conv,
-    });
-    if (sent) {
-      break;
+
+  let sentAny = false;
+  for (let part = 0; part < texts.length; part += 1) {
+    const text = texts[part]!;
+    let sent = false;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      sent = await client.sendMessageReliable(convId, text, {
+        channelId: runtime.channelId,
+        conv,
+      });
+      if (sent) {
+        break;
+      }
+      await sleep(600 * attempt);
     }
-    await sleep(600 * attempt);
+    if (!sent) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        sendFailures: (convState.sendFailures ?? 0) + 1,
+      });
+      console.error(
+        `Pager worker: preset send failed ${convId.slice(0, 8)} ${plan.role} part=${part + 1}/${texts.length}`,
+      );
+      return sentAny;
+    }
+    sentAny = true;
+    if (part < texts.length - 1) {
+      await sleep(450);
+    }
   }
-  if (!sent) {
-    await patchConversationState(deps.stateStore, state.chatId, convId, {
-      sendFailures: (convState.sendFailures ?? 0) + 1,
-    });
-    console.error(`Pager worker: preset send failed ${convId.slice(0, 8)} ${plan.role}`);
+  if (!sentAny) {
     return false;
   }
+
   await patchConversationState(deps.stateStore, state.chatId, convId, {
     conversationId: convId,
     channelId: runtime.channelId,
@@ -7067,6 +7083,44 @@ async function trySendFolderPreset(
     funnelStep: plan.index + 1,
     sendFailures: 0,
   });
+
+  if (plan.moveToInProgress) {
+    const statusId = findFunnelFollowUpStatusId(state);
+    const operatorId = await client.probeOperatorUserId();
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+    if (statusId && operatorId) {
+      try {
+        await client.patchConversationStatus(convId, statusId, operatorId);
+        console.log(
+          `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} status -> in progress`,
+        );
+        if (currentStatusId !== statusId) {
+          await onMovedToInProgressRegistration(
+            deps,
+            state.chatId,
+            convId,
+            runtime.channelId,
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `Pager worker: ${runtime.runtime.country} status patch failed ${convId.slice(0, 8)}:`,
+          formatError(error),
+        );
+        await schedulePendingInProgressMove(
+          deps,
+          state.chatId,
+          convId,
+          runtime.channelId,
+        );
+      }
+    } else if (!statusId) {
+      console.warn(
+        `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} — no «в процессе» folder found`,
+      );
+    }
+  }
+
   try {
     await client.acknowledgeConversation(convId);
   } catch {

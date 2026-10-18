@@ -43,19 +43,40 @@ export function folderMarketLanguage(country: string): PresetLanguage | undefine
   return isFolderMarket(country) ? FOLDER_MARKETS[country].language : undefined;
 }
 
+export type PresetKind =
+  | "intro"
+  | "details"
+  | "table"
+  | "ready"
+  | "registration"
+  | "link"
+  | "promo"
+  | "ask_id"
+  | "deposit"
+  | "telegram"
+  | "other";
+
 export type PresetPlan =
-  | { action: "send"; text: string; index: number; role: string; table: boolean }
+  | {
+      action: "send";
+      texts: string[];
+      /** Last preset index included in this send bundle. */
+      index: number;
+      role: string;
+      table: boolean;
+      moveToInProgress?: boolean;
+    }
   | { action: "hold"; reason: string };
 
 const AMOUNT_PAIR =
-  /(\d[\d\s.,]{0,12})\s*(?:mru|djf|xof|fcfa|cfa|crc|kes|gtq|usd|eur|€)?\s*[-–—]\s*(\d[\d\s.,]{0,12})/gi;
+  /(\d[\d\s.,]{0,12})\s*(?:mru|djf|xof|fcfa|cfa|crc|kes|gtq|usd|eur|€|mad)?\s*[-–—]\s*(\d[\d\s.,]{0,12})/gi;
 
 export function foldPresetText(value: string): string {
   return value
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
-    .replace(/[’`]/g, "'")
+    .replace(/[’`']/g, "'")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -69,11 +90,75 @@ export function findTablePresetIndex(replies: PagerSavedReply[]): number {
   return replies.findIndex((reply) => isTablePresetText(reply.text));
 }
 
+export function classifyPresetKind(text: string): PresetKind {
+  const raw = (text || "").trim();
+  const t = foldPresetText(raw);
+  if (!t) {
+    return "other";
+  }
+  if (/t\.me\//i.test(raw) || /telegram\.me\//i.test(raw)) {
+    return "telegram";
+  }
+  if (isTablePresetText(raw)) {
+    return "table";
+  }
+  if (
+    /^https?:\/\/\S+$/i.test(raw) ||
+    ((/tinyurl\.com|bit\.ly|cutt\.ly|voici le lien|here'?s the link|lien\s*:/i.test(t) ||
+      (/https?:\/\//i.test(raw) && raw.length < 160)) &&
+      !/deposit|d[eé]p[oô]t|إيداع|telegram|t\.me/i.test(t))
+  ) {
+    return "link";
+  }
+  if (
+    /(?:^|\b)(?:game\s*)?id\b|айди|identifiant|account id|player id|معرف|رقم (?:الحساب|اللاعب)|id du compte|ton id|votre id/i.test(
+      t,
+    )
+  ) {
+    return "ask_id";
+  }
+  if (
+    /deposit|d[eé]p[oô]t|إيداع|ايداع|\bsolde\b|\bbalance\b|bouton.*\$|\$\)/i.test(t) &&
+    !/inscription|تسجيل|registr|chrome/i.test(t)
+  ) {
+    return "deposit";
+  }
+  if (/^(code promo|promo code)\b/i.test(t) || (/code promo|promo code/i.test(t) && t.length < 100)) {
+    return "promo";
+  }
+  if (
+    /inscription|تسجيل|registr|chrome|code promo|lien d'inscription|mrc\d+|bji\d+|mad\d+/i.test(t)
+  ) {
+    return "registration";
+  }
+  if (/pr[eê]t|ready to|d[eé]marrer avec|es-tu pr|هل أنت مستعد/i.test(t)) {
+    return "ready";
+  }
+  if (
+    /[eé]tape par [eé]tape|how it works|comment cela|voici ce que|d[eé]p[oô]t minimum|groupe priv/i.test(
+      t,
+    )
+  ) {
+    return "details";
+  }
+  if (/bonjour|salam|gagner|casino|مرحبا|أهلا|je suis ici/i.test(t)) {
+    return "intro";
+  }
+  return "other";
+}
+
 function replyWasSent(replyText: string, outgoingTexts: string[]): boolean {
   const folded = foldPresetText(replyText);
   const needle = folded.slice(0, 80);
   if (needle.length < 24) {
-    return false;
+    // Short link-only presets: match by URL / full body.
+    const raw = replyText.trim();
+    if (/^https?:\/\/\S+$/i.test(raw)) {
+      return outgoingTexts.some((outgoing) => (outgoing || "").includes(raw));
+    }
+    if (needle.length < 8) {
+      return false;
+    }
   }
   return outgoingTexts.some((outgoing) => {
     const body = foldPresetText(outgoing);
@@ -111,7 +196,7 @@ function isDecline(language: PresetLanguage, text: string): boolean {
       folded,
     );
   }
-  return /^(non|nan|pas interesse|pas d'argent|j'ai pas|je n'ai pas|plus tard|pas maintenant|arrete|stop|laisse)\b/.test(
+  return /^(non|nan|pas interesse|pas d'argent|j'ai pas|je n'ai pas|plus tard|pas maintenant|arrete|stop|laisse|la)\b/.test(
     folded,
   );
 }
@@ -131,9 +216,9 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
   ) {
     return false;
   }
-  // Cross-language thanks / short acks (MA customers often mix FR + EN + AR).
+  // Strong acks only — Darija chatter (cv / mzyan) is soft-early, not deposit/TG fuel.
   if (
-    /^(thank you|thanks|thx|merci|gracias|شكرا|شكراً|تمام|ماشي|ok|okay|okey|oui|ouais|yes|yep|yeah|si|sí|dale)([\s,!.]+.*)?$/i.test(
+    /^(ok|okay|okey|oui|ouais|yes|yep|yeah|si|sí|dale|wakha|تمام|ماشي|دacord|d'accord)([\s,!.❤🤞💪👍]+.*)?$/i.test(
       folded,
     )
   ) {
@@ -143,19 +228,22 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
     language === "es"
       ? /^(si|ok|okay|okey|dale|va|vale|listo|de acuerdo|claro|bueno|quiero|me interesa|vamos|perfecto|sale|simon|yes|ya)([\s,!.]+.*)?$/
       : language === "en"
-        ? /^(yes|yep|yeah|ok|okay|okey|sure|alright|ready|go|continue|interested|i want|show me|tell me|next|fine|good|perfect|lets go|let's go|i'm in|im in|thank you|thanks|thx)([\s,!.]+.*)?$/
-        : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|bien|super|parfait|vas-y|vas y|go|ca marche|je suis pret|pret|interesse|je veux|montre|montrez|explique|continue|suivant|merci|allons-y|d'acc|thank you|thanks)([\s,!.]+.*)?$/;
+        ? /^(yes|yep|yeah|ok|okay|okey|sure|alright|ready|go|continue|interested|i want|show me|tell me|next|fine|good|perfect|lets go|let's go|i'm in|im in)([\s,!.]+.*)?$/
+        : /^(oui|ouais|ouai|ok|okay|okey|d'accord|daccord|dac|yes|si|bien sur|parfait|vas-y|vas y|go|ca marche|je suis pret|pret|interesse|je veux|montre|montrez|explique|continue|suivant|allons-y|d'acc)([\s,!.]+.*)?$/;
   return pattern.test(folded);
 }
 
-/** Soft continue before deposit table: short non-decline replies (names, "ww", emoji…). */
+/** Soft continue only for early narrative steps — never for reg/id/deposit/tg. */
 function isSoftAdvanceReply(language: PresetLanguage, text: string): boolean {
   const raw = text.trim();
   if (!raw || raw.includes("?") || raw.length > 40) {
     return false;
   }
-  if (isDecline(language, raw) || isBareAgreement(language, raw)) {
-    return isBareAgreement(language, raw);
+  if (isBareAgreement(language, raw)) {
+    return true;
+  }
+  if (isDecline(language, raw)) {
+    return false;
   }
   const folded = foldPresetText(raw);
   if (!folded) {
@@ -168,7 +256,14 @@ function isSoftAdvanceReply(language: PresetLanguage, text: string): boolean {
   ) {
     return false;
   }
-  // Very short chatter / name / slang — treat as "keep going" before the table.
+  // Darija / thanks / short slang — early funnel only (gated by canSoftAdvanceTo).
+  if (
+    /^(cv|cava|ca va|mzyan|ah mzyan|bikhir|merci|thanks|thank you|thx|bien|super|salam)([\s,!.❤🤞💪👍]+.*)?$/i.test(
+      folded,
+    )
+  ) {
+    return true;
+  }
   return folded.length <= 24;
 }
 
@@ -177,7 +272,6 @@ function isTableAmountChoice(text: string): boolean {
   if (!folded || folded.length > 40 || text.includes("?")) {
     return false;
   }
-  // Age answers ("20", "20 ans") must never be treated as deposit-table picks.
   if (/^\d{1,2}$/.test(folded) || /^\d{1,2}\s*ans?$/.test(folded)) {
     return false;
   }
@@ -187,10 +281,94 @@ function isTableAmountChoice(text: string): boolean {
   return /\d/.test(folded);
 }
 
+const LATE_KINDS = new Set<PresetKind>([
+  "registration",
+  "link",
+  "promo",
+  "ask_id",
+  "deposit",
+  "telegram",
+]);
+
+function canSoftAdvanceTo(kind: PresetKind): boolean {
+  return !LATE_KINDS.has(kind);
+}
+
+function isNarrativeKind(kind: PresetKind): boolean {
+  return kind === "details" || kind === "other";
+}
+
+function buildSendBundle(
+  replies: PagerSavedReply[],
+  startIndex: number,
+): { texts: string[]; endIndex: number; kinds: PresetKind[]; table: boolean } {
+  const first = replies[startIndex];
+  const firstText = (first?.text || "").trim();
+  const firstKind = classifyPresetKind(firstText);
+  const texts = [firstText];
+  const kinds: PresetKind[] = [firstKind];
+  let endIndex = startIndex;
+
+  // Pair consecutive "how it works" / narrative parts into one turn.
+  if (isNarrativeKind(firstKind) || firstKind === "intro") {
+    const second = replies[startIndex + 1];
+    const secondText = (second?.text || "").trim();
+    if (secondText) {
+      const secondKind = classifyPresetKind(secondText);
+      if (isNarrativeKind(secondKind) && firstKind !== "intro") {
+        texts.push(secondText);
+        kinds.push(secondKind);
+        endIndex = startIndex + 1;
+      } else if (firstKind === "details" && secondKind === "details") {
+        texts.push(secondText);
+        kinds.push(secondKind);
+        endIndex = startIndex + 1;
+      }
+    }
+  }
+
+  // Registration (+ ready) always ships with link + promo in the same turn.
+  if (firstKind === "registration" || firstKind === "ready") {
+    for (let index = startIndex + 1; index < replies.length && index <= startIndex + 3; index += 1) {
+      const text = (replies[index]?.text || "").trim();
+      if (!text) {
+        break;
+      }
+      const kind = classifyPresetKind(text);
+      if (kind === "link" || kind === "promo" || kind === "registration") {
+        texts.push(text);
+        kinds.push(kind);
+        endIndex = index;
+        continue;
+      }
+      break;
+    }
+  }
+
+  // Lone link → attach following promo.
+  if (firstKind === "link") {
+    const next = replies[startIndex + 1];
+    const nextText = (next?.text || "").trim();
+    if (nextText && classifyPresetKind(nextText) === "promo") {
+      texts.push(nextText);
+      kinds.push("promo");
+      endIndex = startIndex + 1;
+    }
+  }
+
+  return {
+    texts: texts.filter(Boolean),
+    endIndex,
+    kinds,
+    table: kinds.includes("table") || texts.some((text) => isTablePresetText(text)),
+  };
+}
+
 /**
- * Next saved reply after an agreement.
- * Preset 2 (index 1) always advances to preset 3 (index 2).
- * If that reply is not the amount table, it is sent as-is; the table is the later step.
+ * Next saved-reply step for folder markets (MA/MR/…).
+ * - Early steps can soft-advance on short replies.
+ * - Reg/link/promo go out together; then chat should move to «в процессе».
+ * - Deposit / TG / ask ID never soft-advance.
  */
 export function planFolderPresetAdvance(
   replies: PagerSavedReply[],
@@ -209,44 +387,73 @@ export function planFolderPresetAdvance(
   const tableIndex = findTablePresetIndex(replies);
 
   if (last < 0) {
-    // Start folder funnel even if the thread has old non-preset outbound
-    // (operator notes / catch-up). Only skip when presets already match.
     const first = replies[0];
     if (!first?.text.trim()) {
       return null;
     }
+    const firstKind = classifyPresetKind(first.text);
+    // Opening intro/details: single message. Registration opener: ship link+promo too.
+    if (firstKind === "registration" || firstKind === "ready" || firstKind === "link") {
+      const bundle = buildSendBundle(replies, 0);
+      return {
+        action: "send",
+        texts: bundle.texts,
+        index: bundle.endIndex,
+        role: `preset:${bundle.endIndex + 1}`,
+        table: bundle.table,
+        moveToInProgress: true,
+      };
+    }
     return {
       action: "send",
-      text: first.text,
+      texts: [first.text.trim()],
       index: 0,
       role: "preset:1",
-      table: tableIndex === 0,
+      table: firstKind === "table",
     };
-  }
-
-  const atOrPastTable = tableIndex >= 0 && last >= tableIndex;
-  const agreed =
-    isBareAgreement(language, customerText) ||
-    (last === tableIndex && isTableAmountChoice(customerText)) ||
-    // Before the amount table, soft-advance on short replies (Thank you / Ww / names).
-    (!atOrPastTable && isSoftAdvanceReply(language, customerText));
-  if (!agreed) {
-    return null;
   }
 
   const next = last + 1;
   if (next >= replies.length) {
     return { action: "hold", reason: "agreement-after-last-preset" };
   }
-  const reply = replies[next];
-  if (!reply?.text.trim()) {
+
+  const nextKind = classifyPresetKind(replies[next]?.text ?? "");
+  const atOrPastTable = tableIndex >= 0 && last >= tableIndex;
+  const tablePick = last === tableIndex && isTableAmountChoice(customerText);
+  const strongAck = isBareAgreement(language, customerText) || tablePick;
+  const softOk =
+    !atOrPastTable &&
+    canSoftAdvanceTo(nextKind) &&
+    isSoftAdvanceReply(language, customerText);
+
+  // Registration bundle: soft slang (cv / mzyan) OK. Deposit / ID / TG: strong ack only.
+  const regBundle = nextKind === "registration" || nextKind === "link" || nextKind === "promo";
+  const agreed = regBundle
+    ? strongAck || isSoftAdvanceReply(language, customerText)
+    : LATE_KINDS.has(nextKind)
+      ? strongAck
+      : strongAck || softOk;
+
+  if (!agreed) {
+    return null;
+  }
+
+  const bundle = buildSendBundle(replies, next);
+  if (!bundle.texts.length) {
     return { action: "hold", reason: "empty-next-preset" };
   }
+
+  const moveToInProgress = bundle.kinds.some(
+    (kind) => kind === "registration" || kind === "link" || kind === "promo",
+  );
+
   return {
     action: "send",
-    text: reply.text,
-    index: next,
-    role: `preset:${next + 1}`,
-    table: next === tableIndex,
+    texts: bundle.texts,
+    index: bundle.endIndex,
+    role: `preset:${bundle.endIndex + 1}`,
+    table: bundle.table,
+    moveToInProgress,
   };
 }
