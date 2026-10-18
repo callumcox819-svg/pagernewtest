@@ -53,6 +53,8 @@ import {
   buildFoldersKeyboard,
   buildAiFoldersKeyboard,
   buildFoldersRetryKeyboard,
+  buildFolderIdleSignalsKeyboard,
+  buildFolderIdleSignalFolderKeyboard,
   CHANNELS_PAGE_SIZE,
   FOLDERS_PAGE_SIZE,
   buildMainMenuKeyboard,
@@ -78,6 +80,13 @@ import {
   revokeBotAccess,
   summarizeOperatorForAdmin,
 } from "./bot-access.js";
+import {
+  defaultThresholdMinutesForKind,
+  getFolderIdleSignalsSettings,
+  listIdleSignalFoldersForUi,
+  resolveFolderIdleConfig,
+  type FolderIdleSignalsSettings,
+} from "./folder-idle-signals.js";
 import {
   configureXPartnersSessionStore,
   getXPartnersClient,
@@ -353,6 +362,19 @@ async function handleCallback(
       }
       await telegram.answerCallbackQuery(callbackId);
     }
+  }
+
+  if (kind === "signals") {
+    await handleFolderIdleSignalsCallback(
+      chatId,
+      callbackId,
+      value,
+      extra,
+      messageId,
+      tail ?? [],
+      state,
+    );
+    return;
   }
 
   if (kind === "channel_open" && value) {
@@ -958,7 +980,7 @@ async function handleCallback(
     }
 
     if (value === "channels") {
-      await showChannelsMenu(chatId, state);
+      await showChannelsMenu(chatId, state, messageId);
       return;
     }
 
@@ -1600,6 +1622,8 @@ function buildOperatorSettings(
       overrides.statusFolders ??
       state.operatorSettings?.statusFolders ??
       state.statusFolders,
+    folderIdleSignals:
+      overrides.folderIdleSignals ?? state.operatorSettings?.folderIdleSignals,
   };
 }
 
@@ -1705,6 +1729,236 @@ function buildChannelRuntimeMap(
       ];
     }),
   );
+}
+
+function listSignalFoldersForState(state: ChatState) {
+  const catalog =
+    state.operatorSettings?.statusFolders ?? state.statusFolders ?? [];
+  return listIdleSignalFoldersForUi(catalog);
+}
+
+function patchFolderIdleSignals(
+  state: ChatState,
+  next: FolderIdleSignalsSettings,
+): NonNullable<ChatState["operatorSettings"]> {
+  return buildOperatorSettings(state, { folderIdleSignals: next });
+}
+
+async function handleFolderIdleSignalsCallback(
+  chatId: number,
+  callbackId: string,
+  value: string,
+  extra: string | undefined,
+  messageId: number | undefined,
+  tail: string[],
+  state: ChatState,
+): Promise<void> {
+  if (value === "noop") {
+    await telegram.answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (value === "menu" || value === "page") {
+    await telegram.answerCallbackQuery(callbackId);
+    const page = value === "page" ? Number(extra) || 0 : 0;
+    await showFolderIdleSignalsMenu(chatId, state, messageId, page);
+    return;
+  }
+
+  if (value === "toggle") {
+    const current = getFolderIdleSignalsSettings(state);
+    const next: FolderIdleSignalsSettings = {
+      ...current,
+      enabled: !current.enabled,
+      folders: { ...current.folders },
+    };
+    const nextState =
+      (await stateStore.patch(chatId, {
+        operatorSettings: patchFolderIdleSignals(state, next),
+      })) ?? state;
+    await telegram.answerCallbackQuery(
+      callbackId,
+      next.enabled ? "Сигналы папок ВКЛ" : "Сигналы папок ВЫКЛ",
+    );
+    await showFolderIdleSignalsMenu(chatId, nextState, messageId, 0);
+    return;
+  }
+
+  if (value === "max_cycle") {
+    const current = getFolderIdleSignalsSettings(state);
+    const cycle = [2, 3, 5];
+    const idx = cycle.indexOf(current.maxPerDay);
+    const maxPerDay = cycle[(idx + 1) % cycle.length] ?? 3;
+    const next: FolderIdleSignalsSettings = {
+      ...current,
+      maxPerDay,
+      folders: { ...current.folders },
+    };
+    const nextState =
+      (await stateStore.patch(chatId, {
+        operatorSettings: patchFolderIdleSignals(state, next),
+      })) ?? state;
+    await telegram.answerCallbackQuery(callbackId, `Макс ${maxPerDay}/день`);
+    await showFolderIdleSignalsMenu(chatId, nextState, messageId, 0);
+    return;
+  }
+
+  if (value === "folder" && extra !== undefined) {
+    await telegram.answerCallbackQuery(callbackId);
+    await showFolderIdleSignalFolderMenu(chatId, state, Number(extra), messageId);
+    return;
+  }
+
+  if (value === "ftoggle" && extra !== undefined) {
+    const index = Number(extra);
+    const folders = listSignalFoldersForState(state);
+    const folder = folders[index];
+    if (!folder) {
+      await telegram.answerCallbackQuery(callbackId, "Папка не найдена");
+      return;
+    }
+    const current = getFolderIdleSignalsSettings(state);
+    const row = resolveFolderIdleConfig(current, folder.id, folder.name);
+    const next: FolderIdleSignalsSettings = {
+      ...current,
+      folders: {
+        ...current.folders,
+        [folder.id]: {
+          ...current.folders[folder.id],
+          enabled: !row.enabled,
+          thresholdMinutes:
+            current.folders[folder.id]?.thresholdMinutes ?? row.thresholdMinutes,
+        },
+      },
+    };
+    const nextState =
+      (await stateStore.patch(chatId, {
+        operatorSettings: patchFolderIdleSignals(state, next),
+      })) ?? state;
+    await telegram.answerCallbackQuery(
+      callbackId,
+      !row.enabled ? `✅ ${folder.name}` : `⬜ ${folder.name}`,
+    );
+    await showFolderIdleSignalFolderMenu(chatId, nextState, index, messageId);
+    return;
+  }
+
+  if (value === "thr" && extra !== undefined && tail[0]) {
+    const index = Number(extra);
+    const minutes = Number(tail[0]);
+    const folders = listSignalFoldersForState(state);
+    const folder = folders[index];
+    if (!folder || ![30, 60, 120].includes(minutes)) {
+      await telegram.answerCallbackQuery(callbackId, "Неверный порог");
+      return;
+    }
+    const current = getFolderIdleSignalsSettings(state);
+    const row = resolveFolderIdleConfig(current, folder.id, folder.name);
+    const next: FolderIdleSignalsSettings = {
+      ...current,
+      folders: {
+        ...current.folders,
+        [folder.id]: {
+          ...current.folders[folder.id],
+          enabled: row.enabled,
+          thresholdMinutes: minutes,
+        },
+      },
+    };
+    const nextState =
+      (await stateStore.patch(chatId, {
+        operatorSettings: patchFolderIdleSignals(state, next),
+      })) ?? state;
+    await telegram.answerCallbackQuery(callbackId, `${folder.name}: ${minutes} мин`);
+    await showFolderIdleSignalFolderMenu(chatId, nextState, index, messageId);
+    return;
+  }
+
+  await telegram.answerCallbackQuery(callbackId);
+}
+
+async function showFolderIdleSignalsMenu(
+  chatId: number,
+  state: ChatState,
+  messageId?: number,
+  page = 0,
+): Promise<void> {
+  const settings = getFolderIdleSignalsSettings(state);
+  const folders = listSignalFoldersForState(state);
+  const rows = folders.map((folder) => {
+    const config = resolveFolderIdleConfig(settings, folder.id, folder.name);
+    return {
+      name: folder.name,
+      kind: folder.kind,
+      enabled: config.enabled,
+      thresholdMinutes: config.thresholdMinutes,
+    };
+  });
+  const onCount = rows.filter((row) => row.enabled).length;
+  const text = [
+    "Сигналы папок",
+    settings.enabled ? "Авто: ВКЛ" : "Авто: ВЫКЛ",
+    `Макс пингов/день на чат: ${settings.maxPerDay}`,
+    `Папок: ${onCount}/${rows.length}`,
+    "",
+    "Тишина = нет входящих и исходящих.",
+    "Язык пинга = гео канала.",
+    "По умолчанию: «в процессе» 30м, остальные 60м.",
+    "Нажми папку — вкл/выкл и порог.",
+  ].join("\n");
+  const keyboard = buildFolderIdleSignalsKeyboard(
+    settings.enabled,
+    settings.maxPerDay,
+    rows,
+    page,
+  );
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
+}
+
+async function showFolderIdleSignalFolderMenu(
+  chatId: number,
+  state: ChatState,
+  folderIndex: number,
+  messageId?: number,
+): Promise<void> {
+  const folders = listSignalFoldersForState(state);
+  const folder = folders[folderIndex];
+  if (!folder) {
+    await showFolderIdleSignalsMenu(chatId, state, messageId, 0);
+    return;
+  }
+  const settings = getFolderIdleSignalsSettings(state);
+  const config = resolveFolderIdleConfig(settings, folder.id, folder.name);
+  const kindLabel =
+    folder.kind === "in_progress"
+      ? "регистрация"
+      : folder.kind === "waiting_id"
+        ? "жду ID"
+        : "общий";
+  const text = [
+    `Сигнал: ${folder.name}`,
+    `Тип: ${kindLabel}`,
+    `Папка: ${config.enabled ? "ВКЛ" : "ВЫКЛ"}`,
+    `Порог тишины: ${config.thresholdMinutes} мин`,
+    `Дефолт типа: ${defaultThresholdMinutesForKind(folder.kind)} мин`,
+    "",
+    "Тексты на языке гео канала.",
+  ].join("\n");
+  const keyboard = buildFolderIdleSignalFolderKeyboard(
+    folderIndex,
+    folder.name,
+    config.enabled,
+    config.thresholdMinutes,
+  );
+  if (!messageId) {
+    await telegram.sendMessage(chatId, text, keyboard);
+    return;
+  }
+  await safeEditMenu(chatId, messageId, text, keyboard);
 }
 
 async function showChannelsMenu(chatId: number, state: ChatState, messageId?: number, page = 0) {

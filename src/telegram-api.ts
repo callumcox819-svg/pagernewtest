@@ -448,6 +448,12 @@ export function buildChannelKeyboard(
     }),
   ]);
   rows.push([
+    inlineBtn("Сигналы папок", "signals:menu", {
+      emojiId: PREMIUM_EMOJI.status,
+      style: "primary",
+    }),
+  ]);
+  rows.push([
     inlineBtn("Включить все", "channels:all_on", {
       emojiId: PREMIUM_EMOJI.check,
       style: "success",
@@ -459,6 +465,107 @@ export function buildChannelKeyboard(
   ]);
 
   return { inline_keyboard: rows };
+}
+
+export const SIGNALS_FOLDERS_PAGE_SIZE = 8;
+
+export function buildFolderIdleSignalsKeyboard(
+  enabled: boolean,
+  maxPerDay: number,
+  folders: Array<{
+    name: string;
+    kind: string;
+    enabled: boolean;
+    thresholdMinutes: number;
+  }>,
+  page = 0,
+): ReplyMarkup {
+  const totalPages = Math.max(1, Math.ceil(folders.length / SIGNALS_FOLDERS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * SIGNALS_FOLDERS_PAGE_SIZE;
+  const slice = folders.slice(start, start + SIGNALS_FOLDERS_PAGE_SIZE);
+
+  const rows: InlineKeyboardButton[][] = [
+    [
+      inlineBtn(enabled ? "Авто: ВКЛ" : "Авто: ВЫКЛ", "signals:toggle", {
+        emojiId: enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+        style: enabled ? "success" : "danger",
+      }),
+      inlineBtn(`Макс/день: ${maxPerDay}`, "signals:max_cycle", {
+        emojiId: PREMIUM_EMOJI.chart,
+      }),
+    ],
+  ];
+
+  for (const [offset, folder] of slice.entries()) {
+    const index = start + offset;
+    const mark = folder.enabled ? "✅" : "⬜";
+    rows.push([
+      inlineBtn(
+        truncateLabel(`${mark} ${folder.name} · ${folder.thresholdMinutes}м`, 32),
+        `signals:folder:${index}`,
+        {
+          emojiId: folder.enabled ? PREMIUM_EMOJI.folder : PREMIUM_EMOJI.cross,
+          style: folder.enabled ? "primary" : undefined,
+        },
+      ),
+    ]);
+  }
+
+  if (totalPages > 1) {
+    const nav: InlineKeyboardButton[] = [];
+    if (safePage > 0) {
+      nav.push(
+        inlineBtn("◀", `signals:page:${safePage - 1}`, { emojiId: PREMIUM_EMOJI.left }),
+      );
+    }
+    nav.push(
+      inlineBtn(`${safePage + 1}/${totalPages}`, "signals:noop", {
+        emojiId: PREMIUM_EMOJI.chart,
+      }),
+    );
+    if (safePage < totalPages - 1) {
+      nav.push(
+        inlineBtn("▶", `signals:page:${safePage + 1}`, { emojiId: PREMIUM_EMOJI.right }),
+      );
+    }
+    rows.push(nav);
+  }
+
+  rows.push([
+    inlineBtn("◀️ В каналы", "menu:channels", { emojiId: PREMIUM_EMOJI.back }),
+  ]);
+  return { inline_keyboard: rows };
+}
+
+export function buildFolderIdleSignalFolderKeyboard(
+  folderIndex: number,
+  _folderName: string,
+  enabled: boolean,
+  thresholdMinutes: number,
+): ReplyMarkup {
+  const thr = [30, 60, 120] as const;
+  return {
+    inline_keyboard: [
+      [
+        inlineBtn(enabled ? "Папка: ВКЛ" : "Папка: ВЫКЛ", `signals:ftoggle:${folderIndex}`, {
+          emojiId: enabled ? PREMIUM_EMOJI.check : PREMIUM_EMOJI.cross,
+          style: enabled ? "success" : "danger",
+        }),
+      ],
+      thr.map((minutes) =>
+        inlineBtn(
+          minutes === thresholdMinutes ? `· ${minutes}м ·` : `${minutes}м`,
+          `signals:thr:${folderIndex}:${minutes}`,
+          {
+            emojiId: PREMIUM_EMOJI.status,
+            style: minutes === thresholdMinutes ? "primary" : undefined,
+          },
+        ),
+      ),
+      [inlineBtn("◀️ К сигналам", "signals:menu", { emojiId: PREMIUM_EMOJI.back })],
+    ],
+  };
 }
 
 /** Per-channel settings hub opened from the channel name button. */

@@ -81,6 +81,12 @@ import {
   shouldSendInProgressFollowUp,
 } from "./in-progress-followup.js";
 import {
+  buildFolderIdleSignalSentPatch,
+  evaluateFolderIdleSignalSend,
+  isFolderIdleSignalsEnabled,
+  shouldQueueFolderIdleSignal,
+} from "./folder-idle-signals.js";
+import {
   buildSupportSnapshot,
   filterScriptKeysForSupportAgent,
   inProgressFollowUpEligible,
@@ -1197,6 +1203,20 @@ async function buildWorkQueue(
           continue;
         }
 
+        if (
+          (isCm || isCl || isZm || isKe || isMg || isDj || isJo || isRw || isEg) &&
+          isFolderIdleSignalsEnabled(chatState)
+        ) {
+          const statusFolders = resolveChannelStatusFolders(chatState, channel.channelId);
+          if (shouldQueueFolderIdleSignal(conv, chatState, statusFolders)) {
+            if (!selected.has(conv.id)) {
+              selected.set(conv.id, conv);
+              addedThisPage += 1;
+            }
+            continue;
+          }
+        }
+
           if (
           (isCm || isCl || isZm || isKe || isMg || isDj || isJo || isRw || isEg) &&
           isInProgressStatusConversation(conv)
@@ -1529,6 +1549,65 @@ async function onMovedToIgnore(
     inProgressFollowUpDueAt: undefined,
     inProgressMutedAt: new Date().toISOString(),
   });
+}
+
+async function trySendFolderIdleSignal(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+): Promise<boolean> {
+  if (!isFolderIdleSignalsEnabled(state)) {
+    return false;
+  }
+  if (isClosedRegistrationStatusConversation(conv) || isIgnoreStatusConversation(conv)) {
+    return false;
+  }
+
+  const folderCatalog = resolveChannelStatusFolders(state, runtime.channelId);
+  if (!shouldQueueFolderIdleSignal(conv, state, folderCatalog)) {
+    return false;
+  }
+
+  const convId = conv.id;
+  const messages = await client.listMessages(convId, 1, 80);
+  const evaluated = evaluateFolderIdleSignalSend({
+    conv,
+    state,
+    country: runtime.runtime.country,
+    messages,
+    folderCatalog,
+  });
+  if (!evaluated.ok) {
+    return false;
+  }
+
+  await tryTakeConversationForProcessing(client, convId, runtime.runtime.country);
+  const sent = await client.sendMessageReliable(convId, evaluated.text, {
+    channelId: runtime.channelId,
+    conv,
+  });
+  if (!sent) {
+    return false;
+  }
+
+  await patchConversationState(
+    deps.stateStore,
+    state.chatId,
+    convId,
+    buildFolderIdleSignalSentPatch(
+      convId,
+      runtime.channelId,
+      evaluated.dayKey,
+      evaluated.nextCount,
+      evaluated.kind,
+    ),
+  );
+  console.log(
+    `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} folder idle signal sent (kind=${evaluated.kind})`,
+  );
+  return true;
 }
 
 async function trySendInProgressRegistrationFollowUp(
@@ -1885,7 +1964,15 @@ async function processConversation(
     return false;
   }
 
-  if (await trySendInProgressRegistrationFollowUp(deps, state, client, workingConv, runtime)) {
+  if (await trySendFolderIdleSignal(deps, state, client, workingConv, runtime)) {
+    return true;
+  }
+
+  // Legacy in-progress ping — only when folder idle signals master toggle is off.
+  if (
+    !isFolderIdleSignalsEnabled(state) &&
+    (await trySendInProgressRegistrationFollowUp(deps, state, client, workingConv, runtime))
+  ) {
     return true;
   }
 

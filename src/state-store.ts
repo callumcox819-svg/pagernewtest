@@ -74,6 +74,11 @@ export type ConversationRuntimeState = {
   ignoredAt?: string;
   /** Chile funnel reply language (es/en/fr). */
   clReplyLanguage?: "es" | "en" | "fr";
+  /** Folder idle signals: UTC day key YYYY-MM-DD. */
+  folderIdleSignalDay?: string;
+  folderIdleSignalCountToday?: number;
+  folderIdleSignalLastSentAt?: string;
+  folderIdleSignalLastKind?: "in_progress" | "waiting_id" | "generic" | "skip";
 };
 
 export type ChatState = {
@@ -93,6 +98,18 @@ export type ChatState = {
   operatorSettings?: {
     enabledChannelIds: string[];
     statusFolders?: StatusFolderState[];
+    /** Auto pings when a chat is fully silent in a status folder. */
+    folderIdleSignals?: {
+      enabled: boolean;
+      maxPerDay?: number;
+      folders?: Record<
+        string,
+        {
+          enabled?: boolean;
+          thresholdMinutes?: number;
+        }
+      >;
+    };
   };
   /** When true, worker skips auto-replies for this Telegram operator. */
   paused?: boolean;
