@@ -193,7 +193,13 @@ export function describeSupportPhase(support: SupportSnapshot): string {
   if (!support.active) {
     return "";
   }
-  const base = `Country ${support.country}; reply ONLY in ${describeAiMarketLanguage(support.country === "MG" || support.country === "DJ" ? "CM" : support.country === "JO" ? "EG" : support.country)}. Folder «в процессе регистрации» — scripts already sent link and steps.`;
+  const languageCountry: CountryCode =
+    support.country === "MG" || support.country === "DJ"
+      ? "CM"
+      : support.country === "JO" || support.country === "PK"
+        ? "EG"
+        : support.country;
+  const base = `Country ${support.country}; reply ONLY in ${describeAiMarketLanguage(languageCountry)}. Folder «в процессе регистрации» — scripts already sent link and steps.`;
   switch (support.phase) {
     case "pre_deposit":
       return `${base} Coach first deposit on the official app/site, payment method for this market, ask for balance screenshot when done. If the customer says they have NO account yet / not registered — do NOT ask for account ID or deposit; scripts resend the registration link.`;
@@ -238,7 +244,12 @@ export function supportAgentSkipsEarlyAi(
     return false;
   }
   const cfg = getSupportFunnelConfig(country);
-  const helpCountry = country === "MG" || country === "DJ" || country === "JO" ? "ZM" : country;
+  const helpCountry: CountryCode =
+    country === "MG" || country === "DJ" || country === "JO" || country === "PK"
+      ? country === "JO" || country === "PK"
+        ? "EG"
+        : "ZM"
+      : country;
   const mechanical = new Set([
     ...cfg.introScriptKeys,
     ...cfg.depositScriptKeys,
