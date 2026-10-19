@@ -6,6 +6,7 @@ import {
   type SupportSnapshot,
 } from "./ai-support-phase.js";
 import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion, isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
+import { isClearNotReadyPhrase, isClearNoMoneyPhrase } from "./funnel-parking.js";
 import { isDepositTierChoice, isCmRegistrationHelpRequest, wantsRegistrationLink as cmWantsRegistrationLink } from "./cm-intent.js";
 import {
   tierSentInHistory as cmTierSentInHistory,
@@ -115,7 +116,7 @@ export function isSimpleFunnelAcknowledgment(text: string): boolean {
   return FUNNEL_ACK.test(t) || /^[\s👍👌✅🔥🙏😊🙂]+$/u.test(t);
 }
 
-/** Post-«в процессе» — reply to real customer text; skip only «Ok» / «yes» / decline spam. */
+/** Post-«в процессе» — reply to real customer text; skip acks / wait / no-money / decline. */
 export function customerWantsSupportAgentReply(text: string, intent: string): boolean {
   const t = (text || "").trim();
   if (!t) {
@@ -125,6 +126,10 @@ export function customerWantsSupportAgentReply(text: string, intent: string): bo
     return false;
   }
   if (intent === "declined") {
+    return false;
+  }
+  // «Attend» / later / no money — park path handles these; AI must not push deposit.
+  if (isClearNotReadyPhrase(t) || isClearNoMoneyPhrase(t)) {
     return false;
   }
   if (isSimpleFunnelAcknowledgment(t)) {

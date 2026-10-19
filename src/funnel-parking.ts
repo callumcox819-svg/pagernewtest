@@ -49,15 +49,21 @@ export function isClearNotReadyPhrase(text: string): boolean {
     return false;
   }
   return (
-    /\b(не\s*готов|неготов|пока\s*не\s*готов|не\s*сейчас|потом|позднее|позже)\b/i.test(t) ||
-    /\b(pas\s*pr[eê]t|je\s*ne\s*suis\s*pas\s*pr[eê]t|pas\s*maintenant|plus\s*tard|une\s*autre\s*fois|demain|quand\s*j['']?aurai|trop\s*occup[eé]|pas\s*le\s*temps|je\s*reviens)\b/i.test(
+    /\b(не\s*готов|неготов|пока\s*не\s*готов|не\s*сейчас|потом|позднее|позже|подожди|подождите|погоди)\b/i.test(
       t,
     ) ||
-    /\b(not\s*ready|not\s*now|later|tomorrow|another\s*time|too\s*busy|no\s*time|come\s*back)\b/i.test(
+    // «Attend» / «Attends» / «Attendez» = wait — not ready now (common MG/CM typo without -s).
+    /^(attend|attends|attendez|attendez\s*svp|attends?\s*(un\s*peu|un\s*moment|stp|svt|svp)?)\.?!*$/i.test(
       t,
     ) ||
-    /(بعدين|مش دلوقتي|مش الآن|لاحقا|مشغول|مش فاضي)/i.test(t) ||
-    /\b(no\s*estoy\s*listo|luego|mas\s*tarde|ahora\s*no|ma[nñ]ana)\b/i.test(t)
+    /\b(pas\s*pr[eê]t|je\s*ne\s*suis\s*pas\s*pr[eê]t|pas\s*maintenant|plus\s*tard|une\s*autre\s*fois|demain|quand\s*j['']?aurai|trop\s*occup[eé]|pas\s*le\s*temps|je\s*reviens|un\s*moment|laisse[- ]moi|attends?\s*un\s*peu)\b/i.test(
+      t,
+    ) ||
+    /\b(not\s*ready|not\s*now|later|tomorrow|another\s*time|too\s*busy|no\s*time|come\s*back|^wait\b|wait\s*(a\s*bit|please)?)\b/i.test(
+      t,
+    ) ||
+    /(بعدين|مش دلوقتي|مش الآن|لاحقا|مشغول|مش فاضي|استنى|استني)/i.test(t) ||
+    /\b(no\s*estoy\s*listo|luego|mas\s*tarde|ahora\s*no|ma[nñ]ana|espera|esperame)\b/i.test(t)
   );
 }
 
