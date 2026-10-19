@@ -5099,6 +5099,78 @@ async function processZmConversation(
     }
   }
 
+  // Last resort: after link, positive/ready/registered without ID → ask account number.
+  if (
+    !scriptKeys.length &&
+    zmRegLinkSentInHistory(outgoingTexts) &&
+    (intent === "ready" ||
+      intent === "positive" ||
+      intent === "joined" ||
+      /\b(yes|ok|okay|done|registered|finished)\b/i.test(latestCustomerText)) &&
+    !/\b(?:17|18|19)\d{7,10}\b/.test([latestCustomerText, ...recentCustomerTexts].join("\n"))
+  ) {
+    const lastAskMs = Date.parse(convState.lastReplyAt ?? "");
+    const askedIdRecently =
+      convState.lastReplyRole === "07_game_id" &&
+      Number.isFinite(lastAskMs) &&
+      Date.now() - lastAskMs < 45 * 60 * 1000;
+    if (askedIdRecently) {
+      console.log(`Pager worker: ZM ${convId.slice(0, 8)} waiting for ID (asked <45m ago)`);
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return false;
+    }
+    console.log(
+      `Pager worker: ZM ${convId.slice(0, 8)} post-link yes/ready → force ask game_id`,
+    );
+    const remind =
+      (await resolveScriptTextByKey(client, {
+        folderId:
+          runtime.runtime.templateBankId || pickLiveTemplateBank(currentState, "ZM")?.id,
+        liveBanks: currentState.pagerAccount?.liveTemplateBanks,
+        country: "ZM",
+        scriptKey: "07_game_id",
+      })) ||
+      "Please send me your account number — you'll find it in your profile. It begins with 17.";
+    await tryTakeConversationForProcessing(client, convId, "ZM");
+    const sent = await client.sendMessageReliable(convId, remind.trim(), {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (sent) {
+      const waitingId = findZmWaitingIdStatusId(currentState);
+      const operatorId = waitingId ? await client.probeOperatorUserId() : "";
+      const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+      if (waitingId && operatorId && currentStatusId !== waitingId) {
+        try {
+          await client.patchConversationStatus(convId, waitingId, operatorId);
+        } catch {
+          // non-fatal
+        }
+      }
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        currentStage: "waiting_id",
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: "07_game_id",
+        sendFailures: 0,
+      });
+      console.log(`Pager worker: ZM ${convId.slice(0, 8)} asked game_id after hang recovery`);
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return true;
+    }
+  }
+
   if (
     await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
       country: "ZM",

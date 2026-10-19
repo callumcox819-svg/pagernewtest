@@ -230,8 +230,11 @@ export function isRegistrationConfirmed(text: string): boolean {
     return false;
   }
   return (
-    /\b(registered|registration done|account created|i registered|done registering)\b/i.test(t) ||
-    /\b(waiting for the next step|next step)\b/i.test(t)
+    /\b(registered|registration done|account created|i('ve| have)? registered|i('m| am) registered|done registering|already registered|finished registr|i('m| am) done|its? done|i('ve| have)? (finished|created|opened))\b/i.test(
+      t,
+    ) ||
+    /\b(waiting for the next step|next step)\b/i.test(t) ||
+    /^(done|finished|registered)\s*[!.]*$/i.test(t)
   );
 }
 

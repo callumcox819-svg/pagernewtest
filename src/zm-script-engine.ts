@@ -534,19 +534,23 @@ export function resolveZmFunnelScripts(
     return ["06_deposit"];
   }
 
+  const registrationConfirmed =
+    isRegistrationConfirmed(t) || intent === "joined" || intent === "game_id_text";
+
+  // After link: ask ID on registered / ready / yes-ok — never overnight «no script» on Yes.
+  if (!idReceived && linkSent && (registrationConfirmed || intent === "ready" || intent === "positive")) {
+    return ["07_game_id"];
+  }
+
   if (!gameIdAskSent && !depositSent) {
     if (!t && !options?.hasImage) {
       return [];
     }
-    if (isBarePostLinkAcknowledgment(t, intent)) {
+    if (isBarePostLinkAcknowledgment(t, intent) && !registrationConfirmed) {
+      // Soft ack once is fine; ready/positive already handled above.
       return [];
     }
-    if (
-      isRegistrationConfirmed(t) ||
-      intent === "joined" ||
-      intent === "game_id_text" ||
-      idReceived
-    ) {
+    if (registrationConfirmed || idReceived) {
       return ["07_game_id"];
     }
     return [];
@@ -562,10 +566,8 @@ export function resolveZmFunnelScripts(
         ));
     if (
       depositProof ||
-      isRegistrationConfirmed(t) ||
-      intent === "joined" ||
-      idReceived ||
-      intent === "game_id_text"
+      registrationConfirmed ||
+      idReceived
     ) {
       return ["07_game_id"];
     }
@@ -573,15 +575,16 @@ export function resolveZmFunnelScripts(
   }
 
   if (gameIdAskSent && !depositSent) {
+    if (!idReceived && (registrationConfirmed || intent === "ready" || intent === "positive")) {
+      return ["07_game_id"];
+    }
     if (
       idReceived ||
       options?.hasImage ||
       intent === "game_id_text" ||
       intent === "image_only" ||
-      isRegistrationConfirmed(t) ||
-      intent === "joined" ||
       wantsDepositNow(t, intent) ||
-      (signal && !isBarePostLinkAcknowledgment(t, intent))
+      (signal && !isBarePostLinkAcknowledgment(t, intent) && !registrationConfirmed)
     ) {
       return ["06_deposit"];
     }

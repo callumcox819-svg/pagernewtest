@@ -318,7 +318,7 @@ function isBareAgreement(language: PresetLanguage, text: string): boolean {
 /** Soft continue only for early narrative steps — never for reg/id/deposit/tg. */
 function isSoftAdvanceReply(language: PresetLanguage, text: string): boolean {
   const raw = text.trim();
-  if (!raw || raw.includes("?") || raw.length > 40) {
+  if (!raw || raw.includes("?") || raw.length > 48) {
     return false;
   }
   if (isBareAgreement(language, raw)) {
@@ -347,6 +347,45 @@ function isSoftAdvanceReply(language: PresetLanguage, text: string): boolean {
     return true;
   }
   return folded.length <= 24;
+}
+
+/** Customer is registering / registered — advance to ask_id (or next funnel step). */
+function isRegistrationProgressReply(language: PresetLanguage, text: string): boolean {
+  const raw = (text || "").trim();
+  if (!raw || raw.length > 120 || isDecline(language, raw)) {
+    return false;
+  }
+  const folded = foldPresetText(raw);
+  if (!folded) {
+    return false;
+  }
+  // MA Darija / FR — «Hta nsawb cont akhor», fini, deja, etc.
+  if (
+    /\b(nsawb|nsoub|ndir|ghadi|ghang|hta|compte|cont\b|akhor|inscrit|nsjl|nsajel|sajel|darit|dirt|finich|fini|termine|deja|je (vais|suis)|j ai (fini|fait|cree)|cest (fait|bon))\b/.test(
+      folded,
+    )
+  ) {
+    return true;
+  }
+  // PE / ES
+  if (
+    language === "es" &&
+    /\b(ya me registre|me registre|registrad[oa]|listo|hecho|termine|ya esta|ya cree|creo la cuenta|abri|cuenta|ya lo hice|ya hice|estoy listo|voy a registr)\b/.test(
+      folded,
+    )
+  ) {
+    return true;
+  }
+  // PK / Urdu (latin + common)
+  if (
+    language === "ur" &&
+    /\b(register|registered|account ban|account bana|hogaya|ho gaya|done|kar liya|ban gaya)\b/.test(
+      folded,
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isTableAmountChoice(text: string): boolean {
@@ -516,13 +555,17 @@ export function planFolderPresetAdvance(
     Boolean(customerText.trim()) &&
     !customerText.includes("?");
 
-  // Registration bundle: soft slang (cv / mzyan) OK. Deposit / ID / TG: strong ack only.
+  // Registration bundle: soft slang OK. Ask-ID: also accept «I'm registering / done».
+  // Deposit / TG stay strong-ack only (money / handoff).
   const regBundle = nextKind === "registration" || nextKind === "link" || nextKind === "promo";
+  const regProgress = isRegistrationProgressReply(language, customerText);
   const agreed = regBundle
-    ? strongAck || isSoftAdvanceReply(language, customerText)
-    : LATE_KINDS.has(nextKind)
-      ? strongAck
-      : strongAck || softOk || earlyAnyReply;
+    ? strongAck || isSoftAdvanceReply(language, customerText) || regProgress
+    : nextKind === "ask_id"
+      ? strongAck || isSoftAdvanceReply(language, customerText) || regProgress
+      : LATE_KINDS.has(nextKind)
+        ? strongAck
+        : strongAck || softOk || earlyAnyReply || regProgress;
 
   if (!agreed) {
     return null;
