@@ -86,13 +86,16 @@ export function isCustomerSaysNotRegisteredYet(text: string): boolean {
   if (/\b(no i am not|not yet|no not yet|no i haven'?t|no i have not)\b/i.test(t)) {
     return true;
   }
-  // «Mon inscription n'est pas encore terminé» — still registering, NOT «no money» / «not ready».
+  // Still registering — NOT finished, NOT deposit.
+  // «Je continue mon inscription», «pas encore terminé», «en train de m'inscrire»…
   if (
+    /\b(je\s+)?continue\s+(mon|ma|l['']?)?\s*inscription\b/i.test(t) ||
+    /\b(je\s+suis\s+en\s+train|en\s+train)\s+.{0,24}\binscri/i.test(t) ||
     /\binscription\b.{0,40}\b(pas\s*(encore\s*)?(termin|fini|fait)|n['']?est\s*pas\s*(encore\s*)?(termin|fini))\b/i.test(
       t,
     ) ||
     /\b(pas\s*(encore\s*)?(termin|fini)[eé]?)(.{0,20}\binscription\b|\bcompte\b)/i.test(t) ||
-    /\b(mon|ma|l['']?)inscription\b.{0,24}\b(pas|encore|termin|fini)\b/i.test(t)
+    /\b(mon|ma|l['']?)inscription\b.{0,24}\b(pas|encore|termin|fini|continue)\b/i.test(t)
   ) {
     return true;
   }

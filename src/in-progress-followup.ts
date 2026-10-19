@@ -571,9 +571,11 @@ export function classifyInProgressRegistrationReply(
     country === "EC"
   ) {
     if (
-      /\b(pas encore|non|encore non|je (vais|m[' ]?occupe|m[' ]?en occupe|travaille|suis en train)|bientôt|bientot|en cours|plus tard|après|apres|je m[' ]?en occupe|j[' ]?y travaille|ocupo|todavía no|todavia no|aún no|aun no|otra dia|otro dia|une autre jour|un autre jour)\b/.test(
+      /\b(pas encore|non|encore non|je (vais|m[' ]?occupe|m['']?en occupe|travaille|suis en train)|bientôt|bientot|en cours|plus tard|après|apres|je m['']?en occupe|j['']?y travaille|ocupo|todavía no|todavia no|aún no|aun no|otra dia|otro dia|une autre jour|un autre jour)\b/.test(
         t,
       ) ||
+      /\b(je\s+)?continue\s+(mon|ma|l['']?)?\s*inscription\b/.test(t) ||
+      /\bcontinue\s+.{0,20}\binscription\b/.test(t) ||
       /^(non|no)\s*[!.]*$/.test(t)
     ) {
       return "not_yet";

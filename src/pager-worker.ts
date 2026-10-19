@@ -5467,7 +5467,12 @@ async function processMgConversation(
   }
 
   // AI catches Darija / soft positives the regex intent missed — push next funnel scripts.
-  if (!scriptKeys.length && latestCustomerText) {
+  // Never advance on «je continue mon inscription» / still registering.
+  if (
+    !scriptKeys.length &&
+    latestCustomerText &&
+    !isCustomerSaysNotRegisteredYet(latestCustomerText)
+  ) {
     const aiGo = await aiLooksLikeFunnelAdvance(deps.env, latestCustomerText, {
       recentCustomerTexts,
       lastBotText: outgoingTexts[outgoingTexts.length - 1] || "",
@@ -5491,6 +5496,42 @@ async function processMgConversation(
           `Pager worker: MG ${convId.slice(0, 8)} AI advance → scripts=[${scriptKeys.join(",")}]`,
         );
       }
+    }
+  }
+
+  // Still registering after link — soft wait, never deposit lecture.
+  if (
+    !scriptKeys.length &&
+    isCustomerSaysNotRegisteredYet(latestCustomerText) &&
+    mgRegLinkSentInHistory(outgoingTexts)
+  ) {
+    const waitText =
+      "Ok boss, finis ton inscription. Quand c'est terminé, écris-moi ici et on continue (je te demanderai ton identifiant de jeu).";
+    await tryTakeConversationForProcessing(client, convId, "MG");
+    const sentWait = await client.sendMessageReliable(convId, waitText, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (sentWait) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: "still_registering_wait",
+        sendFailures: 0,
+        inProgressMutedAt: new Date().toISOString(),
+      });
+      console.log(
+        `Pager worker: MG ${convId.slice(0, 8)} still-registering wait (text=${truncate(latestCustomerText)})`,
+      );
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return true;
     }
   }
 

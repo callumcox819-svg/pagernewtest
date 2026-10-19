@@ -48,7 +48,9 @@ function normalizeMgText(text: string): string {
 const INTERESTED =
   /\b(interesse|interessé|ca m'interesse|cela m'interesse|dis[- ]moi|explique|je veux|j'aimerais|aimerais|en savoir plus|interested|tell me more|inscri)\b/i;
 const POSITIVE =
-  /\b(oui|ouais|ok|okay|okey|d'accord|daccord|dac|bien|super|parfait|merci|yes|yeah|yep|sure|continue|vas[- ]y)\b/i;
+  /\b(oui|ouais|ok|okay|okey|d'accord|daccord|dac|bien|super|parfait|merci|yes|yeah|yep|sure|vas[- ]y)\b/i;
+/** «Continue» alone can mean funnel yes — but «je continue mon inscription» is NOT done. */
+const POSITIVE_CONTINUE = /\bcontinue\b/i;
 const READY =
   /\b(je suis pret|je suis prete|pret|prete|ready|on commence|je veux commencer|veux commencer|allons[- ]y|je suis partant|c'est bon|j'aimerais inscri)\b/i;
 const HELP_ASK =
@@ -120,7 +122,16 @@ export function classifyMgIntent(
   if (INTERESTED.test(t)) {
     return "interested";
   }
-  if (POSITIVE.test(t) || POSITIVE_EMOJI.test(raw) || isPositiveMessageReaction(options?.messageReaction)) {
+  // «Je continue mon inscription» — still registering, never «positive» → deposit.
+  if (isCustomerSaysNotRegisteredYet(raw) || isCustomerSaysNotRegisteredYet(t)) {
+    return "unknown";
+  }
+  if (
+    POSITIVE.test(t) ||
+    (POSITIVE_CONTINUE.test(t) && !/\binscription\b/i.test(t)) ||
+    POSITIVE_EMOJI.test(raw) ||
+    isPositiveMessageReaction(options?.messageReaction)
+  ) {
     return "positive";
   }
   if (/\?/.test(raw) || /^(comment|pourquoi|c'est quoi|cest quoi|quoi)/i.test(t)) {
@@ -139,7 +150,16 @@ export function classifyMgIntent(
 export function isFunnelPositiveReaction(text: string, _effectiveStep: number): boolean {
   const raw = (text || "").trim();
   const t = normalizeMgText(raw);
-  return POSITIVE.test(t) || READY.test(t) || POSITIVE_EMOJI.test(raw) || INTERESTED.test(t);
+  if (isCustomerSaysNotRegisteredYet(raw) || isCustomerSaysNotRegisteredYet(t)) {
+    return false;
+  }
+  return (
+    POSITIVE.test(t) ||
+    (POSITIVE_CONTINUE.test(t) && !/\binscription\b/i.test(t)) ||
+    READY.test(t) ||
+    POSITIVE_EMOJI.test(raw) ||
+    INTERESTED.test(t)
+  );
 }
 
 export function isReadyForRegistration(text: string): boolean {

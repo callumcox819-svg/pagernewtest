@@ -39,7 +39,8 @@ export async function aiLooksLikeFunnelAdvance(
     .join(" | ");
   const system = [
     "You classify if a customer message is a POSITIVE funnel signal for a betting-registration assistant.",
-    "Reply YES if they agree, show interest, pick a table amount, say ready, say done/registered, send ID-like digits, want to continue (any language incl. Darija/French/Arabic/English/Spanish).",
+    "Reply YES if they agree, show interest, pick a table amount, say ready, say DONE/registered, send ID-like digits (any language incl. Darija/French/Arabic/English/Spanish).",
+    "CRITICAL → Reply NO if they are STILL registering: «je continue mon inscription», still on signup, not finished yet, en cours, pas encore terminé. That is NOT ready for deposit/ID advance.",
     "Reply NO if decline, insult, off-topic spam, pure confusion question with no go-ahead, or unrelated.",
     "Reply with exactly YES or NO.",
   ].join(" ");

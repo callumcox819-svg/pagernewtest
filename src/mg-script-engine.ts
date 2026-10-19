@@ -469,8 +469,28 @@ export function resolveMgFunnelScripts(
   const idReceived = customerIdReceived(t, recentTexts, options?.proofKind, options?.proofText);
   const answeredRegPing = confirmsRegistrationAfterAsk(t, lastBotText);
 
+  // Still registering («je continue mon inscription») — never ID/deposit/table.
+  if (notRegisteredYet) {
+    if (linkSent) {
+      return [];
+    }
+    if (!introSent) {
+      return ["01_intro"];
+    }
+    if (!explainSent) {
+      const next = nextMgExplainScript(out);
+      return next ? [next] : [];
+    }
+    return registrationResendScriptKeys("ZM", linkSent);
+  }
+
   // «Oui» after «terminé votre inscription?» → ask ID. Never re-pitch 02/03 money table.
-  if (answeredRegPing || (lastBotAskedRegistrationDone(lastBotText) && signal && /^(oui|ouais|yes|si|ok)\b/i.test(t))) {
+  if (
+    answeredRegPing ||
+    (lastBotAskedRegistrationDone(lastBotText) &&
+      signal &&
+      /^(oui|ouais|yes|si|ok)\b/i.test(t))
+  ) {
     if (!idReceived) {
       return ["07_game_id"];
     }
@@ -481,32 +501,6 @@ export function resolveMgFunnelScripts(
       return ["04_registration", "05_link"];
     }
     return [];
-  }
-
-  if (notRegisteredYet) {
-    if (!introSent) {
-      return ["01_intro"];
-    }
-    if (!explainSent) {
-      const next = nextMgExplainScript(out);
-      return next ? [next] : [];
-    }
-    if (
-      linkSent &&
-      !wantsRegistrationLink(t) &&
-      !isRegistrationHelpRequest(t) &&
-      !isMgRegistrationAccountQuestion(t)
-    ) {
-      // Customer flipped to «registered» after earlier «pas encore» — still ask ID.
-      if (!idReceived && registrationConfirmed) {
-        return ["07_game_id"];
-      }
-      if (!gameIdAskSent && !depositSent && idReceived) {
-        return ["07_game_id"];
-      }
-      return [];
-    }
-    return registrationResendScriptKeys("ZM", linkSent);
   }
 
   if (isRegistrationHelpRequest(t) || isMgRegistrationAccountQuestion(t)) {
