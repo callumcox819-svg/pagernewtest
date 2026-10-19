@@ -124,6 +124,11 @@ const IDLE_REGISTRATION_ASK_NEEDLES: Record<InProgressFollowUpCountry, string[]>
   CM: [
     "terminé l'inscription",
     "termine l'inscription",
+    "terminé votre inscription",
+    "termine votre inscription",
+    "avez terminé votre inscription",
+    "avez termine votre inscription",
+    "faites-le-moi savoir",
     "étape de l'inscription",
     "etape de l'inscription",
     "toujours en train de vous inscrire",
@@ -131,6 +136,11 @@ const IDLE_REGISTRATION_ASK_NEEDLES: Record<InProgressFollowUpCountry, string[]>
   MG: [
     "terminé l'inscription",
     "termine l'inscription",
+    "terminé votre inscription",
+    "termine votre inscription",
+    "avez terminé votre inscription",
+    "avez termine votre inscription",
+    "faites-le-moi savoir",
     "étape de l'inscription",
     "etape de l'inscription",
     "toujours en train de vous inscrire",
@@ -138,6 +148,11 @@ const IDLE_REGISTRATION_ASK_NEEDLES: Record<InProgressFollowUpCountry, string[]>
   DJ: [
     "terminé l'inscription",
     "termine l'inscription",
+    "terminé votre inscription",
+    "termine votre inscription",
+    "avez terminé votre inscription",
+    "avez termine votre inscription",
+    "faites-le-moi savoir",
     "étape de l'inscription",
     "etape de l'inscription",
     "toujours en train de vous inscrire",
@@ -445,7 +460,11 @@ export function isWeakInProgressSilenceReply(
     return /^(تمام|طيب|حاضر|اوك|أوك|ماشي|ماشى|نعم)[.!\s]*$/u.test(trimmed);
   }
   if (country === "CM" || country === "MG" || country === "DJ") {
-    return /^(ok|okay|okey|oui|d'accord|d accord|dac|dacc|bien|super|parfait|merci|thanks|thank you|salut|bonjour|bonsoir|yes|yeah|yep|hum+|hm+|mhm+)[.!\s]*$/i.test(
+    // Bare «Oui» / «Yes» answers «finished registration?» — never treat as silence.
+    if (/^(oui|ouais|yes|si|sí)\s*[!.]*$/iu.test(trimmed)) {
+      return false;
+    }
+    return /^(ok|okay|okey|d'accord|d accord|dac|dacc|bien|super|parfait|merci|thanks|thank you|salut|bonjour|bonsoir|yeah|yep|hum+|hm+|mhm+)[.!\s]*$/i.test(
       trimmed,
     );
   }

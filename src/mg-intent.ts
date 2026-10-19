@@ -198,17 +198,21 @@ export function isMgDepositPaymentQuestion(text: string): boolean {
   );
 }
 
-/** Idle / in-progress ping asked whether registration is done. */
+/** Idle / in-progress / AI ping asked whether registration is done. */
 export function lastBotAskedRegistrationDone(botText: string): boolean {
   const t = normalizeMgText(botText || "");
   if (!t) {
     return false;
   }
   return (
-    /termin[e ].{0,40}inscription|avez[- ]vous.{0,40}(inscrit|inscription)|deja inscrit|etes[- ]vous toujours.{0,40}inscri|etape.{0,30}inscription|finished registration|have you.{0,40}register|are you still.{0,40}register/i.test(
+    /termin[eé].{0,48}inscription|inscription.{0,24}termin|avez[- ]vous.{0,40}(inscrit|inscription)|deja inscrit|etes[- ]vous toujours.{0,40}inscri|etape.{0,30}inscription|finished registration|have you.{0,40}register|are you still.{0,40}register/i.test(
       t,
     ) ||
-    /terminer l'inscription|termine l'inscription|avez-vous termine/i.test(t)
+    /terminer l'inscription|termine l'inscription|termine votre inscription|avez[- ]vous termine|faites[- ]le[- ]moi savoir/i.test(
+      t,
+    ) ||
+    // AI combo ping: ready to earn + finished registration.
+    (/pret a commencer|gagner de l'argent/.test(t) && /inscription/.test(t))
   );
 }
 

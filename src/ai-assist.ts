@@ -107,6 +107,7 @@ const MARKET_RULES: Partial<Record<SupportCountry, string>> = {
     "Use amounts from the MGA table already in the thread (e.g. 5000 / 8000 / 15000 / 30000 MGA). Typical minimum deposit is 5000 MGA.",
     "Promo in scripts is MAD778 — do not invent other promo codes.",
     "Malagasy: «vita inscription» / «vita» / «efa vita» = registration DONE — congratulate briefly, ask player ID (starts with +). Do NOT restart the full deposit lecture.",
+    "If YOU asked whether registration is finished / «terminé votre inscription» and they reply Oui/Yes — ask for player ID next. NEVER send the MGA money table (5000/8000/15000) again.",
     "Screenshot of Dépôt / Confirmer / MVola / Orange / Airtel = they are ON the deposit form — tell them to tap Confirmer, then send the balance screenshot. Do NOT re-explain «how to deposit 6000 MGA».",
     "If they ask about the phone number on that screen (Malagasy «alefa… numéro… vola»): the number is for mobile-money payment ON the platform — confirm there, never send money to a personal chat wallet.",
     "NEVER open with «Je comprends vos préoccupations». NEVER repeat a message you already sent in this thread.",

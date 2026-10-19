@@ -467,6 +467,21 @@ export function resolveMgFunnelScripts(
   const depositSent = depositSentInHistory(out);
   const signal = positiveSignal(t, intent, effectiveStep);
   const idReceived = customerIdReceived(t, recentTexts, options?.proofKind, options?.proofText);
+  const answeredRegPing = confirmsRegistrationAfterAsk(t, lastBotText);
+
+  // «Oui» after «terminé votre inscription?» → ask ID. Never re-pitch 02/03 money table.
+  if (answeredRegPing || (lastBotAskedRegistrationDone(lastBotText) && signal && /^(oui|ouais|yes|si|ok)\b/i.test(t))) {
+    if (!idReceived) {
+      return ["07_game_id"];
+    }
+    if (linkSent && !depositSent) {
+      return ["06_deposit"];
+    }
+    if (!linkSent) {
+      return ["04_registration", "05_link"];
+    }
+    return [];
+  }
 
   if (notRegisteredYet) {
     if (!introSent) {
