@@ -1057,16 +1057,6 @@ async function handleCallback(
       return;
     }
 
-    if (value === "reset") {
-      await stateStore.delete(chatId);
-      const nextState = await getOrCreateState(chatId);
-      await telegram.sendMessage(
-        chatId,
-        `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
-        await menuKeyboard(chatId),
-      );
-      return;
-    }
   }
 
   if (kind === "stats") {
@@ -1364,17 +1354,6 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
     return;
   }
 
-  if (command === "/reset") {
-    await stateStore.delete(chatId);
-    const nextState = await getOrCreateState(chatId);
-    await telegram.sendMessage(
-      chatId,
-      `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
-      buildMainMenuKeyboard(),
-    );
-    return;
-  }
-
   if (command === "/status") {
     await sendStatus(chatId, state);
     return;
@@ -1387,7 +1366,7 @@ async function handleCommand(chatId: number, commandText: string, state: ChatSta
 
   await telegram.sendMessage(
     chatId,
-    "Unknown command. Available: /start, /pause, /reset_pause, /account, /channels, /status, /reset",
+    "Unknown command. Available: /start, /pause, /reset_pause, /account, /channels, /status",
     buildMainMenuKeyboard(),
   );
 }
@@ -3754,7 +3733,6 @@ type MenuAction =
   | "status"
   | "stats"
   | "learn"
-  | "reset"
   | "admin";
 
 const XP_STATS_COUNTRIES: XPartnersCountry[] = ["CM", "EG", "ZM", "RW"];
@@ -3794,9 +3772,6 @@ function resolveMenuTextAction(text?: string): MenuAction | undefined {
   }
   if (/rw\s*воронка|обучение\s*rw|^обучение$|rw\s*learn|^learn$/.test(normalized)) {
     return "learn";
-  }
-  if (/^сброс$|^reset$/.test(normalized)) {
-    return "reset";
   }
   if (/админ|admin/.test(normalized)) {
     return "admin";
@@ -3857,15 +3832,6 @@ async function dispatchMenuAction(
     const latest = (await stateStore.get(chatId)) ?? state;
     await telegram.sendMessage(chatId, formatRwLearningSummary(latest.rwLearning), buildMainMenuKeyboard());
     return;
-  }
-  if (action === "reset") {
-    await stateStore.delete(chatId);
-    const nextState = await getOrCreateState(chatId);
-    await telegram.sendMessage(
-      chatId,
-      `State reset.\nChannel: ${getEffectiveChannel(nextState).name}\nStage: ${nextState.currentStage}`,
-      buildMainMenuKeyboard(),
-    );
   }
 }
 

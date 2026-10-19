@@ -970,12 +970,6 @@ export function buildMainMenuKeyboard(options?: { isAdmin?: boolean }): ReplyMar
         style: "primary",
       }),
     ],
-    [
-      inlineBtn("Сброс", "menu:reset", {
-        emojiId: PREMIUM_EMOJI.reset,
-        style: "danger",
-      }),
-    ],
   ];
   if (options?.isAdmin) {
     rows.push([
