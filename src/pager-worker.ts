@@ -10276,14 +10276,18 @@ async function trySendRegistrationFormHelp(
   ctx: SpecialResponseContext & { outgoingTexts: string[] },
   combinedText: string,
 ): Promise<boolean> {
-  const country = String(ctx.channel.country || "");
-  if (country !== "CM" && country !== "MG") {
+  // Real market (MG/DJ…), not YAML playbook sibling (CM) — promo/link must match the channel.
+  const market = resolveSupportMarketFromRuntime(ctx.runtime);
+  if (market !== "CM" && market !== "MG" && market !== "DJ") {
     return false;
   }
-  if (country === "CM" && !cmRegLinkSentInHistory(ctx.outgoingTexts)) {
+  if (market === "CM" && !cmRegLinkSentInHistory(ctx.outgoingTexts)) {
     return false;
   }
-  if (country === "MG" && !mgRegLinkSentInHistory(ctx.outgoingTexts)) {
+  if (market === "MG" && !mgRegLinkSentInHistory(ctx.outgoingTexts)) {
+    return false;
+  }
+  if (market === "DJ" && !djRegLinkSentInHistory(ctx.outgoingTexts)) {
     return false;
   }
   if (!isRegistrationFormInProgress(combinedText)) {
@@ -10292,7 +10296,7 @@ async function trySendRegistrationFormHelp(
   const noNet = /aucune\s*connexion|pas\s*d['']?internet|no\s*internet|hors\s*ligne/i.test(
     combinedText,
   );
-  const promo = country === "MG" ? "MAD778" : "CASH056";
+  const promo = market === "MG" ? "MAD778" : market === "DJ" ? "BJI777" : "CASH056";
   const body = [
     "Tu es encore sur la page d'inscription — le compte n'est pas encore créé.",
     `Termine l'inscription, mets le code promo ${promo}, puis envoie-moi une capture une fois le compte ouvert.`,
@@ -10300,7 +10304,7 @@ async function trySendRegistrationFormHelp(
       ? "Je vois aussi un problème de connexion : essaie le Wi-Fi ou un autre navigateur (Google Chrome), puis réessaie."
       : "Si la page bloque, essaie Google Chrome ou le Wi-Fi.",
   ].join(" ");
-  await tryTakeConversationForProcessing(ctx.client, ctx.convId, country);
+  await tryTakeConversationForProcessing(ctx.client, ctx.convId, market);
   const sent = await ctx.client.sendMessageReliable(ctx.convId, body, {
     channelId: ctx.runtime.channelId,
     conv: ctx.conv,
@@ -10309,7 +10313,7 @@ async function trySendRegistrationFormHelp(
     return false;
   }
   console.log(
-    `Pager worker: ${country} ${ctx.convId.slice(0, 8)} registration-form help (not game id) build=${getDeployLabel()}`,
+    `Pager worker: ${market} ${ctx.convId.slice(0, 8)} registration-form help promo=${promo} build=${getDeployLabel()}`,
   );
   await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
     conversationId: ctx.convId,

@@ -115,7 +115,8 @@ const MARKET_RULES: Partial<Record<SupportCountry, string>> = {
     "Market: Madagascar (MG). Currency is MGA (Ariary) ONLY.",
     "NEVER write CFA, FCFA, francs CFA, or Cameroon deposit amounts (1 000 / 1 500 CFA).",
     "Use amounts from the MGA table already in the thread (e.g. 5000 / 8000 / 15000 / 30000 MGA). Typical minimum deposit is 5000 MGA.",
-    "Promo in scripts is MAD778 — do not invent other promo codes.",
+    "Promo code is MAD778 ONLY. NEVER write CASH056, CMR056, BJI777, ZAM577, or any Cameroon/other promo.",
+    "Screenshot of INSCRIPTION / Étape X sur Y / code promo form = still registering — tell them to finish signup with promo MAD778; NEVER ask for player ID yet.",
     "Malagasy: «vita inscription» / «vita» / «efa vita» = registration DONE — congratulate briefly, ask player ID (starts with +). Do NOT restart the full deposit lecture.",
     "If YOU asked whether registration is finished / «terminé votre inscription» and they reply Oui/Yes — ask for player ID next. NEVER send the MGA money table (5000/8000/15000) again.",
     "If they say «je continue mon inscription» / still registering / not finished — acknowledge briefly and wait. NEVER send deposit (Déposer / $) or the money table.",
@@ -136,7 +137,7 @@ const MARKET_RULES: Partial<Record<SupportCountry, string>> = {
     "Market: Djibouti (DJ). Currency is DJF ONLY.",
     "NEVER write CFA, FCFA, MGA, or Cameroon/Madagascar amounts.",
     "Use amounts from the DJF table already in the thread (e.g. 100 / 200 / 500 / 1000 DJF). Typical starter amounts are around 40–300 DJF as in scripts.",
-    "Promo in scripts is BJI777 — do not invent other promo codes.",
+    "Promo code is BJI777 ONLY. NEVER write CASH056, MAD778, or other-country promos.",
     "Guide deposit on the platform. Ask for a screenshot after top-up.",
     "Link issues: Wi‑Fi, Google Chrome — never paste a new URL.",
     "If they say NOT registered yet / no account — do NOT ask for ID or deposit; registration scripts handle that.",
@@ -255,13 +256,17 @@ function buildUserPrompt(ctx: AiAssistContext): string {
   if (market === "MG") {
     parts.push(
       "Currency lock: MGA only. Never mention CFA/FCFA. Match deposit amounts to the MGA table in recent outgoings.",
+      "Promo lock: MAD778 only. Never write CASH056 or any other promo code.",
     );
   } else if (market === "DJ") {
     parts.push(
       "Currency lock: DJF only. Never mention CFA/FCFA/MGA. Match amounts to the DJF table in recent outgoings.",
+      "Promo lock: BJI777 only. Never write CASH056 or MAD778.",
     );
   } else if (market === "JO") {
     parts.push("Currency lock: JOD only. Never mention CFA/MGA/DJF.");
+  } else if (market === "CM") {
+    parts.push("Promo lock: CASH056 only for Cameroon. Never write MAD778.");
   }
   if (ctx.support?.active) {
     parts.push(`Support phase: ${ctx.support.phase}`);
@@ -456,7 +461,7 @@ function sanitizeAiReply(
     console.warn("AI assist rejected reply containing URL/link");
     return undefined;
   }
-  const trimmed = reply.trim();
+  let trimmed = reply.trim().replace(/\*{1,2}/g, "");
   const resolvedMarket = market;
   const hasCfa = /\b(cfa|fcfa|f\.?\s*cfa|francs?\s*cfa)\b/i.test(trimmed);
   if (resolvedMarket === "MG" && hasCfa) {
@@ -469,6 +474,26 @@ function sanitizeAiReply(
   ) {
     console.warn("AI assist replaced DJ reply containing wrong currency with DJF tip");
     return DJ_DEPOSIT_CURRENCY_FALLBACK;
+  }
+  // Wrong-country promo codes (AI often leaks CASH056 onto MG/DJ).
+  if (resolvedMarket === "MG") {
+    if (/\b(cash056|cmr056|bji777|zam577|zam777)\b/i.test(trimmed)) {
+      console.warn("AI assist rewrote wrong promo → MAD778 for MG");
+      trimmed = trimmed.replace(/\b(cash056|cmr056|bji777|zam577|zam777)\b/gi, "MAD778");
+    }
+    if (!/\bmad778\b/i.test(trimmed) && /\bcode promo\b/i.test(trimmed)) {
+      trimmed = trimmed.replace(/\bcode promo\b/i, "code promo MAD778");
+    }
+  } else if (resolvedMarket === "DJ") {
+    if (/\b(cash056|cmr056|mad778|zam577|zam777)\b/i.test(trimmed)) {
+      console.warn("AI assist rewrote wrong promo → BJI777 for DJ");
+      trimmed = trimmed.replace(/\b(cash056|cmr056|mad778|zam577|zam777)\b/gi, "BJI777");
+    }
+  } else if (resolvedMarket === "CM") {
+    if (/\b(mad778|bji777)\b/i.test(trimmed)) {
+      console.warn("AI assist rewrote wrong promo → CASH056 for CM");
+      trimmed = trimmed.replace(/\b(mad778|bji777)\b/gi, "CASH056");
+    }
   }
   if (languageCountry && aiReplyLooksWrongLanguage(languageCountry, trimmed)) {
     return undefined;
@@ -594,9 +619,9 @@ export async function maybeAiAssistVision(
           : "",
         ctx.support?.active ? `Support phase: ${ctx.support.phase}` : "",
         market === "MG"
-          ? "Currency lock: MGA only. Never mention CFA/FCFA."
+          ? "Currency lock: MGA only. Never mention CFA/FCFA. Promo lock: MAD778 only — never CASH056."
           : market === "DJ"
-            ? "Currency lock: DJF only. Never mention CFA/MGA."
+            ? "Currency lock: DJF only. Never mention CFA/MGA. Promo lock: BJI777 only."
             : "",
       ]
         .filter(Boolean)
