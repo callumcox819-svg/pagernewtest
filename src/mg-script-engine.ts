@@ -538,8 +538,7 @@ export function resolveMgFunnelScripts(
       wantsRegistrationBundle(t, intent, effectiveStep, recentTexts) ||
       isRegistrationHelpRequest(t) ||
       wantsRegistrationLink(t) ||
-      registrationConfirmed ||
-      intent === "joined"
+      registrationConfirmed
     ) {
       return ["04_registration", "05_link"];
     }

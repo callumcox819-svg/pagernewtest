@@ -430,11 +430,7 @@ export function resolveDjFunnelScripts(
     if (djRegistrationInstructionsSentInHistory(out)) {
       return nextDjRegScripts(out);
     }
-    if (
-      wantsRegistrationBundle(t, intent, effectiveStep) ||
-      registrationConfirmed ||
-      intent === "joined"
-    ) {
+    if (wantsRegistrationBundle(t, intent, effectiveStep) || registrationConfirmed) {
       return [...DJ_REG_BUNDLE];
     }
     return [];
