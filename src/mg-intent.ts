@@ -50,10 +50,15 @@ const INTERESTED =
 const POSITIVE =
   /\b(oui|ouais|ok|okay|okey|d'accord|daccord|dac|bien|super|parfait|merci|yes|yeah|yep|sure|continue|vas[- ]y)\b/i;
 const READY =
-  /\b(je suis pret|je suis prete|pret|prete|ready|on commence|allons[- ]y|je suis partant|c'est bon|j'aimerais inscri)\b/i;
+  /\b(je suis pret|je suis prete|pret|prete|ready|on commence|je veux commencer|veux commencer|allons[- ]y|je suis partant|c'est bon|j'aimerais inscri)\b/i;
+const HELP_ASK =
+  /\b(besoin d['']?aide|aide[- ]moi|aidez[- ]moi|help me|j['']?ai besoin)\b/i;
 const GREETING = /^(salut|bonjour|bonsoir|hey|hello|hi|yo)([\s,!.]|$)/i;
 const JOINED =
   /\b(je me suis inscrit|inscrit|inscription (faite|terminee|termine)|j'ai cree|j ai cree|account created|registered|deja termin|deja fini|deja inscrit)\b/i;
+/** «J'ai déjà un compte» / typo «une compt» — already has account → ask ID, not silence. */
+const ALREADY_HAS_ACCOUNT =
+  /\b(j['']?ai\s+deja\s+(un\s+|une\s+)?(compte|compt)|deja\s+(un\s+|une\s+)?(compte|compt)|already\s+have\s+(an?\s+)?account|j['']?ai\s+un\s+compte)\b/i;
 /** Malagasy: «vita inscription» / «vita» / «efa vita» = registration finished. */
 const JOINED_MG =
   /\b(vita\s*(ny\s*)?(inscription|inscri|registre|register|compte|kaonty)?|efa\s*vita|vita\s*aho|efa\s*nisoratra|nisoratra|vita\s*ny\s*rehetra)\b/i;
@@ -97,11 +102,20 @@ export function classifyMgIntent(
   if (DEPOSIT_DONE.test(t)) {
     return "deposit_done";
   }
-  if (JOINED.test(t) || JOINED_MG.test(t) || JOINED_MG.test(raw)) {
+  if (
+    JOINED.test(t) ||
+    JOINED_MG.test(t) ||
+    JOINED_MG.test(raw) ||
+    ALREADY_HAS_ACCOUNT.test(t) ||
+    ALREADY_HAS_ACCOUNT.test(raw)
+  ) {
     return "joined";
   }
   if (READY.test(t)) {
     return "ready";
+  }
+  if (HELP_ASK.test(t) || HELP_ASK.test(raw)) {
+    return "question";
   }
   if (INTERESTED.test(t)) {
     return "interested";
@@ -145,11 +159,20 @@ export function isRegistrationConfirmed(text: string): boolean {
     JOINED.test(t) ||
     JOINED_MG.test(t) ||
     JOINED_MG.test(raw) ||
+    ALREADY_HAS_ACCOUNT.test(t) ||
+    ALREADY_HAS_ACCOUNT.test(raw) ||
     /\b(deja inscrit|deja termine|deja fini|j'ai (fini|fait|inscrit|enregistr)|c'est (fait|bon)|je suis inscrit|termine|fini)\b/i.test(
       t,
     ) ||
     /^(deja|c'est fait|oui c'est (fait|bon)|vita)\b/i.test(t)
   );
+}
+
+/** True when customer says they already have a casino/1xBET account (typos OK). */
+export function isMgAlreadyHasAccount(text: string): boolean {
+  const raw = (text || "").trim();
+  const t = normalizeMgText(raw);
+  return ALREADY_HAS_ACCOUNT.test(t) || ALREADY_HAS_ACCOUNT.test(raw);
 }
 
 /**

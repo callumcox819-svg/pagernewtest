@@ -48,10 +48,16 @@ const INTERESTED =
 const POSITIVE =
   /\b(oui|ouais|ok|okay|okey|d'accord|daccord|dac|bien|super|parfait|merci|yes|yeah|yep|sure|continue|vas[- ]y|choisis|je choisis)\b/i;
 const READY =
-  /\b(je suis pret|je suis prete|pret|prete|ready|on commence|allons[- ]y|je suis partant|c'est bon|j'aimerais inscri|demarrer|je demarre)\b/i;
+  /\b(je suis pret|je suis prete|pret|prete|ready|on commence|je veux commencer|veux commencer|allons[- ]y|je suis partant|c'est bon|j'aimerais inscri|demarrer|je demarre)\b/i;
+const HELP_ASK =
+  /\b(besoin d['']?aide|aide[- ]moi|aidez[- ]moi|help me|j['']?ai besoin)\b/i;
 const GREETING = /^(salut|bonjour|bonsoir|hey|hello|hi|yo)([\s,!.]|$)/i;
 const JOINED =
   /\b(je me suis inscrit|inscrit|inscription (faite|terminee|termine)|j'ai cree|j ai cree|account created|registered)\b/i;
+const ALREADY_HAS_ACCOUNT =
+  /\b(j['']?ai\s+deja\s+(un\s+|une\s+)?(compte|compt)|deja\s+(un\s+|une\s+)?(compte|compt)|already\s+have\s+(an?\s+)?account|j['']?ai\s+un\s+compte)\b/i;
+const WHATSAPP_OFF =
+  /\b(whats?app|wathapp|wachap|watsap|wa\b)\b/i;
 const DECLINED =
   /\b(pas interesse|non merci|stop|arnaque|scam|laisse[- ]moi|ne (me )?(prefere|pr[eé]f[eè]re|veux|aime|interesse) pas|je (ne )?(prefere|pr[eé]f[eè]re) pas|chuis ne|rien (ne )?(me )?(va|convient|interesse)|pas pour moi|aucun montant|aucune option)\b/i;
 const BARE_DECLINED = /^(non|nah|nope|jamais|rien|non merci)\.?!*$/i;
@@ -92,11 +98,14 @@ export function classifyDjIntent(
   if (DEPOSIT_DONE.test(t)) {
     return "deposit_done";
   }
-  if (JOINED.test(t)) {
+  if (JOINED.test(t) || ALREADY_HAS_ACCOUNT.test(t) || ALREADY_HAS_ACCOUNT.test(raw)) {
     return "joined";
   }
   if (READY.test(t)) {
     return "ready";
+  }
+  if (HELP_ASK.test(t) || HELP_ASK.test(raw) || WHATSAPP_OFF.test(t) || WHATSAPP_OFF.test(raw)) {
+    return "question";
   }
   if (INTERESTED.test(t)) {
     return "interested";
@@ -133,14 +142,23 @@ export function isReadyForRegistration(text: string): boolean {
 }
 
 export function isRegistrationConfirmed(text: string): boolean {
-  const t = normalizeDjText(text);
+  const raw = (text || "").trim();
+  const t = normalizeDjText(raw);
   return (
     JOINED.test(t) ||
+    ALREADY_HAS_ACCOUNT.test(t) ||
+    ALREADY_HAS_ACCOUNT.test(raw) ||
     /\b(deja inscrit|deja termine|deja fini|j'ai (fini|fait|inscrit|enregistr)|c'est (fait|bon)|je suis inscrit|termine|fini)\b/i.test(
       t,
     ) ||
     /^(deja|c'est fait|oui c'est (fait|bon))\b/i.test(t)
   );
+}
+
+export function isDjWhatsAppOffTopic(text: string): boolean {
+  const raw = (text || "").trim();
+  const t = normalizeDjText(raw);
+  return WHATSAPP_OFF.test(t) || WHATSAPP_OFF.test(raw);
 }
 
 export function isRegistrationHelpRequest(text: string): boolean {

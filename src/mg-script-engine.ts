@@ -533,10 +533,13 @@ export function resolveMgFunnelScripts(
 
   if (!linkSent) {
     // After the MGA table: tier pick / oui / prêt / «et alors» / «étapes» → registration.
+    // «J'ai déjà un compte» also needs our link+promo before we can ask ID.
     if (
       wantsRegistrationBundle(t, intent, effectiveStep, recentTexts) ||
       isRegistrationHelpRequest(t) ||
-      wantsRegistrationLink(t)
+      wantsRegistrationLink(t) ||
+      registrationConfirmed ||
+      intent === "joined"
     ) {
       return ["04_registration", "05_link"];
     }

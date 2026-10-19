@@ -265,6 +265,7 @@ import {
   wantsRegistrationLink as djWantsRegistrationLink,
   isDjDepositAmountChoice,
   isDjOfferTableChoice,
+  isDjWhatsAppOffTopic,
 } from "./dj-intent.js";
 import {
   classifyJoMessage,
@@ -5868,6 +5869,46 @@ async function processMgConversation(
   ) {
     return true;
   }
+
+  // Unread hang: force one AI turn, then always ack so Pager blue dots don't stick.
+  const mgUnreadWaiting =
+    hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection);
+  if (mgUnreadWaiting && latestCustomerText) {
+    if (
+      await tryRunAiAgentTurn(
+        deps,
+        state,
+        client,
+        conv,
+        runtime,
+        convId,
+        convState,
+        lastIncoming,
+        {
+          country: "CM",
+          customerText: latestCustomerText,
+          recentCustomerTexts,
+          outgoingTexts,
+          funnelStep: effectiveStep,
+          intent: intent === "unknown" ? "question" : intent,
+          scriptKeys: [],
+          support,
+          forceSupportAgent: true,
+          aiFolderEnabled,
+        },
+      )
+    ) {
+      return true;
+    }
+    try {
+      await client.acknowledgeConversation(convId);
+      console.log(
+        `Pager worker: MG ${convId.slice(0, 8)} ack unread after no-script (text=${truncate(latestCustomerText)})`,
+      );
+    } catch {
+      // non-fatal
+    }
+  }
   console.log(
     `Pager worker: skip ${convId.slice(0, 8)} MG — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,
   );
@@ -6499,6 +6540,73 @@ async function processDjConversation(
     }))
   ) {
     return true;
+  }
+
+  // WhatsApp off-topic — keep them in Messenger, don't leave unread.
+  if (isDjWhatsAppOffTopic(latestCustomerText)) {
+    const tip =
+      "On discute uniquement ici dans Messenger — pas besoin de WhatsApp. Continue ici et je t'aide étape par étape.";
+    await tryTakeConversationForProcessing(client, convId, "DJ");
+    const sentTip = await client.sendMessageReliable(convId, tip, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (sentTip) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: "whatsapp_offtopic",
+        sendFailures: 0,
+      });
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return true;
+    }
+  }
+
+  const djUnreadWaiting =
+    hasUnreadMarkers(conv) || isIncomingDirection(conv.lastMessageDirection);
+  if (djUnreadWaiting && latestCustomerText) {
+    if (
+      await tryRunAiAgentTurn(
+        deps,
+        state,
+        client,
+        conv,
+        runtime,
+        convId,
+        convState,
+        lastIncoming,
+        {
+          country: "CM",
+          customerText: latestCustomerText,
+          recentCustomerTexts,
+          outgoingTexts,
+          funnelStep: effectiveStep,
+          intent: intent === "unknown" ? "question" : intent,
+          scriptKeys: [],
+          support,
+          forceSupportAgent: true,
+          aiFolderEnabled,
+        },
+      )
+    ) {
+      return true;
+    }
+    try {
+      await client.acknowledgeConversation(convId);
+      console.log(
+        `Pager worker: DJ ${convId.slice(0, 8)} ack unread after no-script (text=${truncate(latestCustomerText)})`,
+      );
+    } catch {
+      // non-fatal
+    }
   }
   console.log(
     `Pager worker: skip ${convId.slice(0, 8)} DJ — no script (step=${effectiveStep}, intent=${intent}, text=${truncate(latestCustomerText)})`,

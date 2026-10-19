@@ -370,6 +370,7 @@ export function resolveDjFunnelScripts(
   const offerSent = offerScriptsSentInHistory(out);
   const linkSent = regLinkSentInHistory(out);
   const signal = positiveSignal(t, intent, effectiveStep);
+  const registrationConfirmed = isRegistrationConfirmed(t) || intent === "joined";
 
   if (notRegisteredYet) {
     if (!introSent) {
@@ -429,7 +430,11 @@ export function resolveDjFunnelScripts(
     if (djRegistrationInstructionsSentInHistory(out)) {
       return nextDjRegScripts(out);
     }
-    if (wantsRegistrationBundle(t, intent, effectiveStep)) {
+    if (
+      wantsRegistrationBundle(t, intent, effectiveStep) ||
+      registrationConfirmed ||
+      intent === "joined"
+    ) {
       return [...DJ_REG_BUNDLE];
     }
     return [];
