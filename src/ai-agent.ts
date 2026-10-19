@@ -115,7 +115,7 @@ export function isSimpleFunnelAcknowledgment(text: string): boolean {
   return FUNNEL_ACK.test(t) || /^[\s👍👌✅🔥🙏😊🙂]+$/u.test(t);
 }
 
-/** Post-«в процессе» — reply only when the customer asked something, not «Ok» / «yes» spam. */
+/** Post-«в процессе» — reply to real customer text; skip only «Ok» / «yes» / decline spam. */
 export function customerWantsSupportAgentReply(text: string, intent: string): boolean {
   const t = (text || "").trim();
   if (!t) {
@@ -127,21 +127,10 @@ export function customerWantsSupportAgentReply(text: string, intent: string): bo
   if (intent === "declined") {
     return false;
   }
-  if (isLinkAccessProblemMessage(t) || isScamOrTrustQuestion(t) || isCustomerClarificationMessage(t)) {
-    return true;
-  }
   if (isSimpleFunnelAcknowledgment(t)) {
     return false;
   }
-  if (isComplexCustomerMessage(t)) {
-    return true;
-  }
-  if (/\?/.test(t)) {
-    return true;
-  }
-  if (intent === "question") {
-    return true;
-  }
+  // Pure greetings / one-word acks — do not burn an AI turn.
   if (
     t.length <= 24 &&
     /^(ok|okay|yes|oui|d'accord|right now|hum|humm|we|n+|nn|merci|thanks|thank you|bye|salut|bonsoir|bonjour)\b/i.test(
@@ -150,7 +139,8 @@ export function customerWantsSupportAgentReply(text: string, intent: string): bo
   ) {
     return false;
   }
-  return t.length >= 20;
+  // Short real lines («Bon et alors», Darija/MG chatter) used to die on length>=20.
+  return true;
 }
 
 /**

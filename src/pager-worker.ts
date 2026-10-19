@@ -482,7 +482,7 @@ function resolveConversationFolderGates(
 ): { botFolderEnabled: boolean; aiFolderEnabled: boolean } {
   const resolvedChannelId = channelId || conv.channelId || conv.channel?.id || undefined;
   return {
-    botFolderEnabled: isConversationInOperatorEnabledFolders(conv, state),
+    botFolderEnabled: isConversationInOperatorEnabledFolders(conv, state, resolvedChannelId),
     aiFolderEnabled: isConversationInAiEnabledFolders(conv, state, resolvedChannelId),
   };
 }
@@ -1674,7 +1674,7 @@ async function trySendInProgressRegistrationFollowUp(
     return false;
   }
 
-  const statusFolders = state.operatorSettings?.statusFolders ?? state.statusFolders;
+  const statusFolders = resolveChannelStatusFolders(state, runtime.channelId);
   if (!isInProgressFollowUpFolderEnabled(conv, statusFolders)) {
     return false;
   }
@@ -2640,7 +2640,7 @@ async function processCmConversation(
   // Operator enabled «Без статусу» only → never script/AI chats already in «в процессе».
   if (
     !isNoStatusConversation(conv) &&
-    !isConversationInOperatorEnabledFolders(conv, currentState)
+    !isConversationInOperatorEnabledFolders(conv, currentState, runtime.channelId)
   ) {
     console.log(
       `Pager worker: skip ${convId.slice(0, 8)} CM — folder not enabled (status=${conv.status?.name || "none"})`,

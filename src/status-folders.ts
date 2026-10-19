@@ -139,11 +139,26 @@ export function resolveChannelStatusFolders(
   const aiById = new Map(
     channelFolders.map((folder) => [folder.id, folder.aiEnabled]),
   );
-  const resolved = catalog.map((folder) => ({
-    ...folder,
-    enabled: enabledById.has(folder.id) ? Boolean(enabledById.get(folder.id)) : false,
-    aiEnabled: aiById.has(folder.id) ? aiById.get(folder.id) : folder.aiEnabled,
-  }));
+  // If the channel already had «all folders on», new Pager statuses must inherit ON
+  // (otherwise «в процесі» appears later and silently stays off).
+  const channelAllOn = areAllFoldersEnabledExceptCompleted(channelFolders);
+  const resolved = catalog.map((folder) => {
+    if (enabledById.has(folder.id)) {
+      return {
+        ...folder,
+        enabled: Boolean(enabledById.get(folder.id)),
+        aiEnabled: aiById.has(folder.id) ? aiById.get(folder.id) : folder.aiEnabled,
+      };
+    }
+    if (channelAllOn && !isCompletedStatusName(folder.name)) {
+      return { ...folder, enabled: true, aiEnabled: true };
+    }
+    return {
+      ...folder,
+      enabled: false,
+      aiEnabled: folder.aiEnabled,
+    };
+  });
   // Keep synthetic "" in sync with any live Pager «Без статусу» UUID the operator enabled.
   const noStatusLiveEnabled = resolved.some(
     (folder) =>
@@ -250,8 +265,18 @@ export function isConversationInAiEnabledFolders(
   },
   channelId?: string,
 ): boolean {
-  const enabled = channelId
-    ? getChannelAiEnabledFolderIds(state, channelId)
+  const resolvedChannelId = channelId || conv.channelId || conv.channel?.id || "";
+  if (resolvedChannelId && isInProgressStatusConversation(conv)) {
+    const folders = resolveChannelStatusFolders(state, resolvedChannelId).map((folder) => ({
+      ...folder,
+      enabled: isAiFolderEnabled(folder),
+    }));
+    if (isInProgressFollowUpFolderEnabled(conv, folders)) {
+      return true;
+    }
+  }
+  const enabled = resolvedChannelId
+    ? getChannelAiEnabledFolderIds(state, resolvedChannelId)
     : getAiEnabledFolderIds(state);
   if (!enabled || enabled.size === 0) {
     return false;
@@ -381,14 +406,35 @@ export function isConversationInOperatorEnabledFolders(
   state: {
     statusFolders?: StatusFolderState[];
     operatorSettings?: { statusFolders?: StatusFolderState[] };
+    channels?: Record<string, { statusFolders?: StatusFolderState[] }>;
   },
+  channelId?: string,
 ): boolean {
+  const resolvedChannelId = channelId || conv.channelId || conv.channel?.id || "";
+  if (resolvedChannelId) {
+    const folders = resolveChannelStatusFolders(state, resolvedChannelId);
+    if (!folders.length) {
+      return false;
+    }
+    if (isInProgressStatusConversation(conv)) {
+      return isInProgressFollowUpFolderEnabled(conv, folders);
+    }
+    const enabled = getChannelEnabledFolderIds(state, resolvedChannelId);
+    if (!enabled || enabled.size === 0) {
+      return false;
+    }
+    return conversationAllowedInFolders(conv, enabled);
+  }
+
   const folders = state.operatorSettings?.statusFolders ?? state.statusFolders;
   // Folders configured but none enabled → process nothing (never fall back to all inbox).
   if (folders?.length) {
     const enabled = getEnabledFolderIds(state);
     if (!enabled || enabled.size === 0) {
       return false;
+    }
+    if (isInProgressStatusConversation(conv)) {
+      return isInProgressFollowUpFolderEnabled(conv, folders);
     }
     return conversationAllowedInFolders(conv, enabled);
   }
