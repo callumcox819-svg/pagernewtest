@@ -54,6 +54,9 @@ const READY =
 const GREETING = /^(salut|bonjour|bonsoir|hey|hello|hi|yo)([\s,!.]|$)/i;
 const JOINED =
   /\b(je me suis inscrit|inscrit|inscription (faite|terminee|termine)|j'ai cree|j ai cree|account created|registered|deja termin|deja fini|deja inscrit)\b/i;
+/** Malagasy: «vita inscription» / «vita» / «efa vita» = registration finished. */
+const JOINED_MG =
+  /\b(vita\s*(ny\s*)?(inscription|inscri|registre|register|compte|kaonty)?|efa\s*vita|vita\s*aho|efa\s*nisoratra|nisoratra|vita\s*ny\s*rehetra)\b/i;
 const DECLINED =
   /\b(pas interesse|non merci|stop|arnaque|scam|laisse[- ]moi|ne (me )?(prefere|pr[eé]f[eè]re|veux|aime|interesse) pas|je (ne )?(prefere|pr[eé]f[eè]re) pas|chuis ne|rien (ne )?(me )?(va|convient|interesse)|pas pour moi|aucun montant|aucune option)\b/i;
 const BARE_DECLINED = /^(non|nah|nope|jamais|rien|non merci)\.?!*$/i;
@@ -94,7 +97,7 @@ export function classifyMgIntent(
   if (DEPOSIT_DONE.test(t)) {
     return "deposit_done";
   }
-  if (JOINED.test(t)) {
+  if (JOINED.test(t) || JOINED_MG.test(t) || JOINED_MG.test(raw)) {
     return "joined";
   }
   if (READY.test(t)) {
@@ -136,13 +139,39 @@ export function isReadyForRegistration(text: string): boolean {
 }
 
 export function isRegistrationConfirmed(text: string): boolean {
-  const t = normalizeMgText(text);
+  const raw = (text || "").trim();
+  const t = normalizeMgText(raw);
   return (
     JOINED.test(t) ||
+    JOINED_MG.test(t) ||
+    JOINED_MG.test(raw) ||
     /\b(deja inscrit|deja termine|deja fini|j'ai (fini|fait|inscrit|enregistr)|c'est (fait|bon)|je suis inscrit|termine|fini)\b/i.test(
       t,
     ) ||
-    /^(deja|c'est fait|oui c'est (fait|bon))\b/i.test(t)
+    /^(deja|c'est fait|oui c'est (fait|bon)|vita)\b/i.test(t)
+  );
+}
+
+/**
+ * Customer asks about the phone / MVola number on the deposit screen
+ * («Alefa amin'ny numéro omeny io jany ny vola» = send money to that number).
+ */
+export function isMgDepositPaymentQuestion(text: string): boolean {
+  const raw = (text || "").trim();
+  const t = normalizeMgText(raw);
+  if (!t) {
+    return false;
+  }
+  return (
+    /\b(alefa|omeny).{0,60}\b(numero|num[eé]ro|vola|mvola|airtel|orange)\b/i.test(t) ||
+    /\b(alefa|omeny).{0,60}\b(numero|num[eé]ro|vola|mvola|airtel|orange)\b/i.test(raw) ||
+    /\b(envoyer|envoie|envoyer).{0,40}\b(l['']argent|argent|vola).{0,40}\b(numero|num[eé]ro)\b/i.test(
+      t,
+    ) ||
+    /\b(c['']est (le )?bon num[eé]ro|quel num[eé]ro|a quel num[eé]ro|sur quel num[eé]ro)\b/i.test(
+      t,
+    ) ||
+    /\b(mvola|orange\s*money|airtel\s*money).{0,40}\b(numero|num[eé]ro|confirmer)\b/i.test(t)
   );
 }
 

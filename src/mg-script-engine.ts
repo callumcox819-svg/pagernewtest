@@ -8,6 +8,7 @@ import {
   customerAgreedAfterOfferTable,
   registrationResendScriptKeys,
 } from "./funnel-common.js";
+import { looksLikeDepositFormInProgress } from "./funnel-screenshot.js";
 import {
   type MgIntent,
   classifyMgIntent,
@@ -18,6 +19,7 @@ import {
   lastBotAskedRegistrationDone,
   isRegistrationHelpRequest,
   isMgRegistrationAccountQuestion,
+  isMgDepositPaymentQuestion,
   isBarePostLinkAcknowledgment,
   isMgDepositAmountChoice,
   isMgOfferTableChoice,
@@ -446,6 +448,10 @@ export function resolveMgFunnelScripts(
     isRegistrationConfirmed(t) ||
     intent === "joined" ||
     confirmsRegistrationAfterAsk(t, lastBotText);
+  const depositFormOpen =
+    looksLikeDepositFormInProgress(options?.proofText || "") ||
+    looksLikeDepositFormInProgress(t);
+  const depositPaymentAsk = isMgDepositPaymentQuestion(t);
 
   if (intent === "declined") {
     return [];
@@ -543,7 +549,14 @@ export function resolveMgFunnelScripts(
     return ["06_deposit"];
   }
 
-  if (!idReceived && (registrationConfirmed || intent === "game_id_text")) {
+  // «Vita inscription» / deposit form open / asking about MVola number → ID next, not AI lecture.
+  if (
+    !idReceived &&
+    (registrationConfirmed ||
+      intent === "game_id_text" ||
+      depositFormOpen ||
+      (depositPaymentAsk && linkSent))
+  ) {
     // Re-nudge ID even if ask/deposit already in thread — stops «Déjà terminé» hangs.
     return ["07_game_id"];
   }

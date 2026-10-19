@@ -8,6 +8,7 @@ import {
   type CmProofScriptAction,
 } from "./cm-proof.js";
 import {
+  looksLikeDepositFormInProgress,
   looksLikeMobileMoneySms,
   looksLikePlatformBalance,
   looksLikeSiteLoadingStuck,
@@ -102,6 +103,15 @@ export function classifyProofFromText(
     };
   }
 
+  // Open Dépôt / Confirmer / MVola screen — progress, not funded balance.
+  if (scene.scene === "deposit_form" || looksLikeDepositFormInProgress(inputText)) {
+    return {
+      proofKind: "unclear_screenshot",
+      combinedText: inputText,
+      reason: "Deposit form in progress (Dépôt/Confirmer) — wait for balance after confirm",
+    };
+  }
+
   // Still filling the INSCRIPTION form — not proof of a finished account.
   if (isRegistrationFormInProgress(inputText) || scene.scene === "registration_form") {
     return {
@@ -164,11 +174,13 @@ export function classifyProofFromText(
   }
 
   const hasDepositMarker =
-    playbook.depositKeywords.some((keyword) => normalized.includes(normalize(keyword))) ||
-    /(balance|deposit|funded|egp|usd|zar|ksh|kes|fcfa|zmw|kwacha|رصيد|ايداع|إيداع|solde|recharger|retrait)/i.test(
-      inputText,
-    ) ||
-    (country === "CM" && /\b\d{2,5}\s*F\b/i.test(inputText) && /(1xbet|xbet)/i.test(inputText));
+    !looksLikeDepositFormInProgress(inputText) &&
+    (playbook.depositKeywords.some((keyword) => normalized.includes(normalize(keyword))) ||
+      /(balance|funded|egp|usd|zar|ksh|kes|fcfa|zmw|kwacha|رصيد|ايداع|إيداع|solde|recharger|retrait)/i.test(
+        inputText,
+      ) ||
+      (/(deposit|d[eé]p[oô]t)/i.test(inputText) && /\b(solde|balance)\b/i.test(inputText)) ||
+      (country === "CM" && /\b\d{2,5}\s*F\b/i.test(inputText) && /(1xbet|xbet)/i.test(inputText)));
 
   if (hasDepositMarker) {
     return {

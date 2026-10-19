@@ -71,3 +71,49 @@ export function looksLikeOwnScriptEcho(
   }
   return snippetHits >= 1 && t.length >= 100;
 }
+
+/**
+ * AI drafted the same pitch again («Je comprends vos préoccupations…» / same deposit lecture).
+ * Do not send — scripts or silence beat a loop.
+ */
+export function looksLikeRepeatedAiReply(
+  candidate: string,
+  recentOutgoingTexts?: string[],
+): boolean {
+  const t = (candidate || "").trim().toLowerCase();
+  if (!t || t.length < 40) {
+    return false;
+  }
+  const head = t.slice(0, 42);
+  const cannedOpener =
+    /je comprends vos pr[eé]occupations|je suis l[aà] pour vous aider|il semble que vous soyez en attente/i.test(
+      t,
+    );
+  for (const out of (recentOutgoingTexts ?? []).slice(-4)) {
+    const o = (out || "").trim().toLowerCase();
+    if (!o || o.length < 40) {
+      continue;
+    }
+    if (o.startsWith(head.slice(0, 32)) || t.startsWith(o.slice(0, 32))) {
+      return true;
+    }
+    if (
+      cannedOpener &&
+      /je comprends vos pr[eé]occupations|je suis l[aà] pour vous aider|il semble que vous soyez en attente/i.test(
+        o,
+      )
+    ) {
+      return true;
+    }
+    // Same deposit-amount lecture twice in a row.
+    if (
+      /\b6000\s*mga\b/.test(t) &&
+      /\b6000\s*mga\b/.test(o) &&
+      /d[eé]p[oô]t|deposit|capture d['']?[eé]cran/i.test(t) &&
+      /d[eé]p[oô]t|deposit|capture d['']?[eé]cran/i.test(o)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}

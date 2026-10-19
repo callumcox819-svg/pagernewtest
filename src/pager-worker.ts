@@ -27,7 +27,8 @@ import {
   maybeAiVisionExtractCmProof,
 } from "./ai-assist.js";
 import { extractCmClientLoginId17, isRegistrationFormInProgress } from "./cm-proof.js";
-import { looksLikeOwnScriptEcho } from "./funnel-outbound.js";
+import { looksLikeOwnScriptEcho, looksLikeRepeatedAiReply } from "./funnel-outbound.js";
+import { looksLikeDepositFormInProgress } from "./funnel-screenshot.js";
 import {
   isLinkAccessProblemMessage,
   isCustomerClarificationMessage,
@@ -239,6 +240,7 @@ import {
   isRegistrationHelpRequest as mgIsRegistrationHelpRequest,
   wantsRegistrationLink as mgWantsRegistrationLink,
   isMgDepositAmountChoice,
+  isMgDepositPaymentQuestion,
   isMgOfferTableChoice,
 } from "./mg-intent.js";
 import {
@@ -5776,6 +5778,42 @@ async function processMgConversation(
   }
   }
 
+  // Deposit form open / «alefa… numéro… vola» — short coach, no AI deposit lecture loop.
+  if (
+    !scriptKeys.length &&
+    (isMgDepositPaymentQuestion(latestCustomerText) ||
+      looksLikeDepositFormInProgress(proofText) ||
+      looksLikeDepositFormInProgress(latestCustomerText))
+  ) {
+    const tip =
+      "Le numéro à l'écran sert au paiement mobile money sur la plateforme. Appuie sur Confirmer, termine le dépôt, puis envoie-moi une capture de ton solde. Ne m'envoie pas d'argent en privé.";
+    await tryTakeConversationForProcessing(client, convId, "MG");
+    const sentTip = await client.sendMessageReliable(convId, tip, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (sentTip) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: "deposit_form_coach",
+        sendFailures: 0,
+      });
+      console.log(
+        `Pager worker: MG ${convId.slice(0, 8)} deposit-form coach (text=${truncate(latestCustomerText)})`,
+      );
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return true;
+    }
+  }
+
   // Pre-reg funnel: templates own positive turns; AI only for complex/scam/link issues.
   const mgPreRegFunnel =
     mgScriptSentInHistory(outgoingTexts, "01_intro") &&
@@ -7013,6 +7051,12 @@ async function tryRunAiAgentTurn(
     agentTrigger: options.agentTrigger,
   });
   if (!aiText) {
+    return false;
+  }
+  if (looksLikeRepeatedAiReply(aiText, options.outgoingTexts)) {
+    console.log(
+      `Pager worker: skip ${convId.slice(0, 8)} ${options.country} — AI repeat blocked (same pitch)`,
+    );
     return false;
   }
   await tryTakeConversationForProcessing(client, convId, options.country);

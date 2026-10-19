@@ -7,6 +7,7 @@ export type FunnelScreenshotScene =
   | "wrong_betting_brand"
   | "site_loading_stuck"
   | "registration_form"
+  | "deposit_form"
   | "account_id_ready"
   | "mobile_money_sms"
   | "platform_balance"
@@ -154,9 +155,38 @@ export function looksLikeSiteLoadingStuck(text: string): boolean {
   return (formish && stuck) || (formish && !extractFunnelAccountId(text) && stuck);
 }
 
+/**
+ * Deposit UI open (Dépôt / Confirmer / MVola…) — in progress, NOT a balance proof.
+ * Must win over generic «deposit» keyword → deposit_balance mis-class.
+ */
+export function looksLikeDepositFormInProgress(text: string): boolean {
+  const t = fold(text);
+  if (!t || looksLikeMobileMoneySms(text)) {
+    return false;
+  }
+  // Funded wallet screen: Solde/Balance without Confirmer + wallet picker.
+  if (/\b(solde|balance)\b/i.test(t) && !/\bconfirmer\b/i.test(t)) {
+    return false;
+  }
+  const depositUi =
+    /\b(d[eé]p[oô]t|depot|deposit|faire un d[eé]p[oô]t)\b/i.test(t) ||
+    /\b(confirmer|confirm)\b/i.test(t);
+  const walletUi =
+    /\b(mvola|orange\s*money|airtel(\s*money)?|mobile\s*money|mtn\s*momo)\b/i.test(t) ||
+    /\b(choisir|methode|m[eé]thode|paiement|payment)\b/i.test(t);
+  const phoneField = /\b(0\d{8,10}|\+261\d{8,9}|num[eé]ro|telephone|t[eé]l[eé]phone)\b/i.test(
+    t,
+  );
+  return depositUi && (walletUi || (phoneField && /\bconfirmer\b/i.test(t)));
+}
+
 export function looksLikePlatformBalance(text: string): boolean {
   const t = fold(text);
   if (!t || looksLikeMobileMoneySms(text)) {
+    return false;
+  }
+  // Open deposit form ≠ funded balance.
+  if (looksLikeDepositFormInProgress(text)) {
     return false;
   }
   const hasPlatform =
@@ -224,6 +254,13 @@ export function readFunnelScreenshot(text: string): FunnelScreenshotRead {
 
   if (looksLikeSiteLoadingStuck(raw)) {
     return { scene: "site_loading_stuck", reason: "registration UI stuck/loading" };
+  }
+
+  if (looksLikeDepositFormInProgress(raw)) {
+    return {
+      scene: "deposit_form",
+      reason: "deposit form open (Dépôt/Confirmer) — not balance proof yet",
+    };
   }
 
   if (looksLikePlatformBalance(raw)) {
