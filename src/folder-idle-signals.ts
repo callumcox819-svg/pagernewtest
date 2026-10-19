@@ -289,6 +289,65 @@ export function resolveLastAnyActivityMs(messages: PagerMessage[]): number | nul
   return newest;
 }
 
+/** Last customer (incoming) message time — for stuck chats the bot never answered. */
+export function resolveLastCustomerActivityMs(messages: PagerMessage[]): number | null {
+  let newest: number | null = null;
+  for (const message of messages) {
+    if (!isIncomingDirection(message.messageDirection)) {
+      continue;
+    }
+    const ts = Date.parse(parseMessageTimestamp(message.createdAt));
+    if (!Number.isFinite(ts)) {
+      continue;
+    }
+    if (newest === null || ts > newest) {
+      newest = ts;
+    }
+  }
+  return newest;
+}
+
+/**
+ * Silence clock for idle pings:
+ * - bot spoke last → wait from that bot message (awaiting customer);
+ * - customer spoke last (bot silent / no script) → wait from customer message.
+ */
+export function resolveIdleSilenceAnchorMs(messages: PagerMessage[]): number | null {
+  let lastIn: number | null = null;
+  let lastOut: number | null = null;
+  for (const message of messages) {
+    const ts = Date.parse(parseMessageTimestamp(message.createdAt));
+    if (!Number.isFinite(ts)) {
+      continue;
+    }
+    if (isIncomingDirection(message.messageDirection)) {
+      if (lastIn === null || ts > lastIn) {
+        lastIn = ts;
+      }
+      continue;
+    }
+    if (
+      isOutgoingDirection(message.messageDirection) ||
+      Boolean(message.isDelivered || message.facebookMessageId)
+    ) {
+      if (lastOut === null || ts > lastOut) {
+        lastOut = ts;
+      }
+    }
+  }
+  if (lastIn === null && lastOut === null) {
+    return null;
+  }
+  if (lastIn === null) {
+    return lastOut;
+  }
+  if (lastOut === null) {
+    return lastIn;
+  }
+  // Newest side wins as the silence anchor.
+  return Math.max(lastIn, lastOut);
+}
+
 export function folderIdleSignalDayCount(
   convState: ConversationRuntimeState | undefined,
   nowMs = Date.now(),
@@ -400,7 +459,7 @@ export function evaluateFolderIdleSignalSend(input: {
     return { ok: false, reason: "cooldown" };
   }
 
-  const lastActivityMs = resolveLastAnyActivityMs(input.messages);
+  const lastActivityMs = resolveIdleSilenceAnchorMs(input.messages);
   if (lastActivityMs === null) {
     return { ok: false, reason: "no_activity" };
   }

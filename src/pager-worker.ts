@@ -2143,11 +2143,9 @@ async function processConversation(
     return true;
   }
 
-  // Legacy in-progress ping — only when folder idle signals master toggle is off.
-  if (
-    !isFolderIdleSignalsEnabled(state) &&
-    (await trySendInProgressRegistrationFollowUp(deps, state, client, workingConv, runtime))
-  ) {
+  // Legacy in-progress ping — always as fallback (idle may be off, misconfigured, or muted).
+  // Cooldown shared via inProgressFollowUpSentAt (idle sets it when kind=in_progress).
+  if (await trySendInProgressRegistrationFollowUp(deps, state, client, workingConv, runtime)) {
     return true;
   }
 
@@ -4373,6 +4371,40 @@ async function processKeConversation(
     messageReaction,
   });
 
+  if (
+    await tryHandleDeclinedCustomerToSpam(
+      deps,
+      currentState,
+      client,
+      conv,
+      runtime,
+      convState,
+      convId,
+      "KE",
+      latestCustomerText,
+      intent,
+    )
+  ) {
+    return true;
+  }
+  if (intent === "declined") {
+    await patchConversationState(deps.stateStore, state.chatId, convId, {
+      conversationId: convId,
+      channelId: runtime.channelId,
+      inProgressMutedAt: new Date().toISOString(),
+      ignoredAt: convState.ignoredAt ?? new Date().toISOString(),
+    });
+    try {
+      await client.acknowledgeConversation(convId);
+    } catch {
+      // non-fatal
+    }
+    console.log(
+      `Pager worker: KE ${convId.slice(0, 8)} declined — muted/ack (text=${truncate(latestCustomerText)})`,
+    );
+    return true;
+  }
+
   let scriptKeys = resolveKeFunnelScripts(
     effectiveStep,
     latestCustomerText,
@@ -6347,6 +6379,70 @@ async function processDjConversation(
     );
     if (aiHandledEarly) {
       return true;
+    }
+  }
+
+  // After link: Ok / ready / registered → ask game ID (DJ has no 07_game_id script key).
+  if (
+    !scriptKeys.length &&
+    djRegLinkSentInHistory(outgoingTexts) &&
+    (intent === "ready" ||
+      intent === "positive" ||
+      intent === "joined" ||
+      /\b(oui|ok|okay|deja|termine|inscrit|fini|done|yes)\b/i.test(latestCustomerText))
+  ) {
+    const askAlready = outgoingTexts.some((text) =>
+      /identifiant de jeu|commence par \+/i.test(text),
+    );
+    const lastAskMs = Date.parse(convState.lastReplyAt ?? "");
+    const askedRecently =
+      (convState.lastReplyRole === "07_game_id" || convState.lastReplyRole === "ask_id") &&
+      Number.isFinite(lastAskMs) &&
+      Date.now() - lastAskMs < 45 * 60 * 1000;
+    if (askAlready && askedRecently) {
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return false;
+    }
+    if (!askAlready || !askedRecently) {
+      const askId = inProgressAskIdMessage("DJ");
+      await tryTakeConversationForProcessing(client, convId, "DJ");
+      const sent = await client.sendMessageReliable(convId, askId, {
+        channelId: runtime.channelId,
+        conv,
+      });
+      if (sent) {
+        const waitingId = findZmWaitingIdStatusId(currentState);
+        const operatorId = waitingId ? await client.probeOperatorUserId() : "";
+        const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+        if (waitingId && operatorId && currentStatusId !== waitingId) {
+          try {
+            await client.patchConversationStatus(convId, waitingId, operatorId);
+          } catch {
+            // non-fatal
+          }
+        }
+        await patchConversationState(deps.stateStore, state.chatId, convId, {
+          conversationId: convId,
+          channelId: runtime.channelId,
+          currentStage: "waiting_id",
+          lastCustomerMessageId: lastIncoming.id,
+          lastCustomerMessageAt: lastIncoming.createdAt,
+          lastReplyAt: new Date().toISOString(),
+          lastReplyRole: "07_game_id",
+          sendFailures: 0,
+        });
+        console.log(`Pager worker: DJ ${convId.slice(0, 8)} post-link → ask ID`);
+        try {
+          await client.acknowledgeConversation(convId);
+        } catch {
+          // non-fatal
+        }
+        return true;
+      }
     }
   }
 

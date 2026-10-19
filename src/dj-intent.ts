@@ -136,7 +136,10 @@ export function isRegistrationConfirmed(text: string): boolean {
   const t = normalizeDjText(text);
   return (
     JOINED.test(t) ||
-    /\b(deja inscrit|j'ai (fini|fait|inscrit|enregistr)|c'est (fait|bon)|je suis inscrit|termine)\b/i.test(t)
+    /\b(deja inscrit|deja termine|deja fini|j'ai (fini|fait|inscrit|enregistr)|c'est (fait|bon)|je suis inscrit|termine|fini)\b/i.test(
+      t,
+    ) ||
+    /^(deja|c'est fait|oui c'est (fait|bon))\b/i.test(t)
   );
 }
 
