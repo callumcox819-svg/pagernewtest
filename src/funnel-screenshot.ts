@@ -208,6 +208,36 @@ export function looksLikeDepositFormInProgress(text: string): boolean {
   return depositUi && (walletUi || (phoneField && /\bconfirmer\b/i.test(t)));
 }
 
+/** Wallet amount on UI, including 0 (e.g. «0 MGA», «1020 F»). */
+export function extractWalletBalanceAmount(text: string): number | undefined {
+  const match = (text || "").match(
+    /\b(\d{1,7}(?:[.,]\d{1,2})?)\s*(mga|ar|fcfa|xof|djf|kes|egp|zmw|jod|gtq|F)\b/i,
+  );
+  if (!match?.[1]) {
+    // «Solde : 0» / «Balance 0» without currency code.
+    const bare = (text || "").match(/\b(?:solde|balance)\s*[:.]?\s*(\d{1,7}(?:[.,]\d{1,2})?)\b/i);
+    if (!bare?.[1]) {
+      return undefined;
+    }
+    const n = Number(bare[1].replace(",", "."));
+    return Number.isFinite(n) ? n : undefined;
+  }
+  const n = Number(match[1].replace(",", "."));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Profile/wallet with 0 — registered maybe, but NOT a deposit proof. */
+export function isUnfundedWalletScreenshot(text: string): boolean {
+  const amount = extractWalletBalanceAmount(text);
+  if (amount === 0) {
+    return true;
+  }
+  return /\b0(?:[.,]0+)?\s*(mga|ar|fcfa|xof|djf|kes|egp|zmw|jod|gtq|F)\b/i.test(text || "");
+}
+
+/**
+ * Funded 1xBET wallet (balance > 0). «0 MGA» + «Faire un dépôt» is NOT deposit proof.
+ */
 export function looksLikePlatformBalance(text: string): boolean {
   const t = fold(text);
   if (!t || looksLikeMobileMoneySms(text)) {
@@ -217,13 +247,17 @@ export function looksLikePlatformBalance(text: string): boolean {
   if (looksLikeDepositFormInProgress(text)) {
     return false;
   }
+  if (isUnfundedWalletScreenshot(text)) {
+    return false;
+  }
   const hasPlatform =
-    /\b(1xbet|xbet|1x\s*bet|faire un d[eé]p[oô]t|mes paris|office)\b/i.test(t);
-  const hasBalance =
-    /\b(solde|balance|wallet)\b/i.test(t) ||
-    /\b\d{3,7}\s*(mga|ar|fcfa|xof|djf|kes|egp|zmw|jod|gtq)\b/i.test(t) ||
-    /\b\d{3,7}\s*F\b/i.test(text);
-  return hasPlatform && hasBalance;
+    /\b(1xbet|xbet|1x\s*bet|1xlite|faire un d[eé]p[oô]t|mes paris|office)\b/i.test(t);
+  const amount = extractWalletBalanceAmount(text);
+  if (amount !== undefined) {
+    return hasPlatform && amount > 0;
+  }
+  // No parseable amount — do not treat «Faire un dépôt» profile chrome as funded.
+  return false;
 }
 
 export function looksLikeAccountIdReady(text: string): boolean {
@@ -245,14 +279,7 @@ export function looksLikeAccountIdReady(text: string): boolean {
 }
 
 function parseBalanceAmount(text: string): number | undefined {
-  const match = text.match(
-    /\b(\d{3,7}(?:[.,]\d{1,2})?)\s*(mga|ar|fcfa|xof|djf|kes|egp|zmw|jod|gtq|F)\b/i,
-  );
-  if (!match?.[1]) {
-    return undefined;
-  }
-  const n = Number(match[1].replace(",", "."));
-  return Number.isFinite(n) ? n : undefined;
+  return extractWalletBalanceAmount(text);
 }
 
 /** Classify OCR/caption of a customer screenshot for funnel routing. */
@@ -294,9 +321,19 @@ export function readFunnelScreenshot(text: string): FunnelScreenshotRead {
   if (looksLikePlatformBalance(raw)) {
     return {
       scene: "platform_balance",
-      reason: "1xBET balance / wallet visible",
+      reason: "1xBET funded balance visible",
       accountId: extractFunnelAccountId(raw),
       balanceAmount: parseBalanceAmount(raw),
+    };
+  }
+
+  // Profile / wallet with 0 — account exists, deposit not done.
+  if (isUnfundedWalletScreenshot(raw) && extractFunnelAccountId(raw)) {
+    return {
+      scene: "account_id_ready",
+      reason: "wallet shows 0 — need first deposit, not completed",
+      accountId: extractFunnelAccountId(raw),
+      balanceAmount: 0,
     };
   }
 

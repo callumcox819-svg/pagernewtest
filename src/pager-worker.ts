@@ -28,7 +28,6 @@ import {
 } from "./ai-assist.js";
 import { extractCmClientLoginId17, isRegistrationFormInProgress } from "./cm-proof.js";
 import { looksLikeOwnScriptEcho, looksLikeRepeatedAiReply } from "./funnel-outbound.js";
-import { looksLikeDepositFormInProgress } from "./funnel-screenshot.js";
 import {
   isLinkAccessProblemMessage,
   isCustomerClarificationMessage,
@@ -50,6 +49,8 @@ import {
 import { aiLooksLikeFunnelAdvance } from "./funnel-ai-advance.js";
 import {
   extractWrongBettingBrandLabel,
+  isUnfundedWalletScreenshot,
+  looksLikeDepositFormInProgress,
   looksLikeWrongBettingBrand,
   readFunnelScreenshot,
   wrongBettingBrandCoachReply,
@@ -8163,8 +8164,10 @@ async function processFolderMarketConversation(
           planForcedNextFolderPreset(replies, outgoingTexts) ??
           undefined;
       } else if (
-        scene.scene === "platform_balance" ||
-        classification.proofKind === "deposit_balance_screenshot"
+        (scene.scene === "platform_balance" ||
+          classification.proofKind === "deposit_balance_screenshot") &&
+        !isUnfundedWalletScreenshot(classification.combinedText) &&
+        (scene.balanceAmount === undefined || scene.balanceAmount > 0)
       ) {
         depositProofConfirmed = true;
         // Prefer Telegram handoff after deposit proof; then move to «Завершено».
@@ -10699,10 +10702,43 @@ async function tryHandleCustomerImage(
     }
   }
 
-  // Any geo: confirmed 1xBET balance screenshot → «Завершено» (after optional AI/TG reply below).
+  // Any geo: funded balance (> 0) → «Завершено». 0 MGA profile is NOT proof.
+  const funnelShot = readFunnelScreenshot(ocrCombinedText);
   const depositBalanceProof =
-    proofKind === "deposit_balance_screenshot" ||
-    readFunnelScreenshot(ocrCombinedText).scene === "platform_balance";
+    (proofKind === "deposit_balance_screenshot" || funnelShot.scene === "platform_balance") &&
+    !isUnfundedWalletScreenshot(ocrCombinedText) &&
+    (funnelShot.balanceAmount === undefined || funnelShot.balanceAmount > 0);
+
+  // Empty wallet screenshot — ask for real deposit, never congratulate / Завершено.
+  if (isUnfundedWalletScreenshot(ocrCombinedText)) {
+    const tip =
+      "Je vois ton compte, mais le solde est à 0 — le dépôt n'est pas encore fait. Clique sur « Faire un dépôt », recharge ton compte, puis envoie-moi une capture où le solde est supérieur à 0.";
+    await tryTakeConversationForProcessing(ctx.client, ctx.convId, resolveSupportMarketFromRuntime(ctx.runtime));
+    const sentTip = await ctx.client.sendMessageReliable(ctx.convId, tip, {
+      channelId: ctx.runtime.channelId,
+      conv: ctx.conv,
+    });
+    if (sentTip) {
+      await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+        conversationId: ctx.convId,
+        channelId: ctx.runtime.channelId,
+        lastCustomerMessageId: ctx.lastIncoming.id,
+        lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: "zero_balance_coach",
+        sendFailures: 0,
+      });
+      console.log(
+        `Pager worker: ${resolveSupportMarketFromRuntime(ctx.runtime)} ${ctx.convId.slice(0, 8)} zero-balance coach (not deposit proof)`,
+      );
+      try {
+        await ctx.client.acknowledgeConversation(ctx.convId);
+      } catch {
+        // non-fatal
+      }
+      return true;
+    }
+  }
 
   const funnelStep = ctx.funnelStep ?? ctx.convState.funnelStep ?? 0;
   const market = resolveSupportMarketFromRuntime(ctx.runtime);

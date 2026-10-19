@@ -8,6 +8,7 @@ import {
   type CmProofScriptAction,
 } from "./cm-proof.js";
 import {
+  isUnfundedWalletScreenshot,
   looksLikeDepositFormInProgress,
   looksLikeMobileMoneySms,
   looksLikePlatformBalance,
@@ -121,11 +122,23 @@ export function classifyProofFromText(
     };
   }
 
+  // 0 MGA / empty wallet — never «deposit done».
+  if (isUnfundedWalletScreenshot(inputText)) {
+    return {
+      proofKind:
+        scene.accountId || scene.scene === "account_id_ready"
+          ? "id_screenshot"
+          : "unclear_screenshot",
+      combinedText: inputText,
+      reason: "Wallet balance is 0 — first deposit not done",
+    };
+  }
+
   if (scene.scene === "platform_balance" || looksLikePlatformBalance(inputText)) {
     return {
       proofKind: "deposit_balance_screenshot",
       combinedText: inputText,
-      reason: scene.reason || "1xBET balance visible",
+      reason: scene.reason || "1xBET funded balance visible",
     };
   }
 
@@ -173,20 +186,17 @@ export function classifyProofFromText(
     };
   }
 
+  // «Faire un dépôt» on an empty profile is NOT funded proof.
   const hasDepositMarker =
     !looksLikeDepositFormInProgress(inputText) &&
-    (playbook.depositKeywords.some((keyword) => normalized.includes(normalize(keyword))) ||
-      /(balance|funded|egp|usd|zar|ksh|kes|fcfa|zmw|kwacha|رصيد|ايداع|إيداع|solde|recharger|retrait)/i.test(
-        inputText,
-      ) ||
-      (/(deposit|d[eé]p[oô]t)/i.test(inputText) && /\b(solde|balance)\b/i.test(inputText)) ||
-      (country === "CM" && /\b\d{2,5}\s*F\b/i.test(inputText) && /(1xbet|xbet)/i.test(inputText)));
+    !isUnfundedWalletScreenshot(inputText) &&
+    looksLikePlatformBalance(inputText);
 
   if (hasDepositMarker) {
     return {
       proofKind: "deposit_balance_screenshot",
       combinedText: inputText,
-      reason: "Detected balance or deposit markers",
+      reason: "Detected funded 1xBET balance",
     };
   }
 

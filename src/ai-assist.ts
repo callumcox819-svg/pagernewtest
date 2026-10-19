@@ -121,6 +121,7 @@ const MARKET_RULES: Partial<Record<SupportCountry, string>> = {
     "If YOU asked whether registration is finished / «terminé votre inscription» and they reply Oui/Yes — ask for player ID next. NEVER send the MGA money table (5000/8000/15000) again.",
     "If they say «je continue mon inscription» / still registering / not finished — acknowledge briefly and wait. NEVER send deposit (Déposer / $) or the money table.",
     "Screenshot of Dépôt / Confirmer / MVola / Orange / Airtel = they are ON the deposit form — tell them to tap Confirmer, then send the balance screenshot. Do NOT re-explain «how to deposit 6000 MGA».",
+    "Screenshot of profile / Compte with 0 MGA = NOT deposited yet. Never congratulate a deposit. Ask them to Faire un dépôt (min 5000 MGA) then send balance > 0.",
     "If they ask about the phone number on that screen (Malagasy «alefa… numéro… vola»): the number is for mobile-money payment ON the platform — confirm there, never send money to a personal chat wallet.",
     "NEVER open with «Je comprends vos préoccupations». NEVER repeat a message you already sent in this thread.",
     "Guide deposit on the platform (Déposer / green $). Ask for a screenshot after top-up.",
@@ -379,7 +380,8 @@ function buildVisionSystemPrompt(
     "If registration button is loading / page stuck ON OUR 1xBET / 1xlite link: help refresh + Chrome + same link already in chat + remind promo from our script. No new URLs.",
     "If mobile-money SMS only: ask for 1xBET balance screenshot — SMS is not enough.",
     "If account ID / DÉPÔT screen with ID: acknowledge and push deposit (scripts may send deposit text).",
-    "If 1xBET / 1xlite balance visible: congratulate — deposit proof OK.",
+    "CRITICAL: If wallet/profile shows 0 / 0 MGA / 0 F / solde 0 — that is NOT a deposit. NEVER say «Félicitations pour votre dépôt». Tell them the balance is empty and they must still make the first deposit, then send a screenshot AFTER the money appears.",
+    "If 1xBET / 1xlite balance is clearly > 0: congratulate — deposit proof OK.",
     buildSystemPrompt(country, support ? ({ country, support } as AiAssistContext) : undefined),
     supportHint,
     "Plain text reply only. No URLs. Never invent links.",
@@ -474,6 +476,17 @@ function sanitizeAiReply(
   ) {
     console.warn("AI assist replaced DJ reply containing wrong currency with DJF tip");
     return DJ_DEPOSIT_CURRENCY_FALLBACK;
+  }
+  // Never congratulate a deposit when the model invents one on a 0-balance screen.
+  if (
+    /\bf[eé]licitations\b/i.test(trimmed) &&
+    /\bd[eé]p[oô]t\b/i.test(trimmed) &&
+    /\b0\s*(mga|ar|fcfa|f|djf|kes|egp|zmw)\b/i.test(trimmed)
+  ) {
+    console.warn("AI assist replaced fake deposit congrats on 0 balance");
+    return resolvedMarket === "MG"
+      ? "Je vois ton compte, mais le solde est à 0 — le dépôt n'est pas encore fait. Clique sur « Faire un dépôt », recharge (minimum 5000 MGA), puis envoie une capture avec un solde supérieur à 0."
+      : "Je vois ton compte, mais le solde est à 0 — le dépôt n'est pas encore fait. Clique sur « Faire un dépôt », recharge ton compte, puis envoie une capture avec un solde supérieur à 0.";
   }
   // Wrong-country promo codes (AI often leaks CASH056 onto MG/DJ).
   if (resolvedMarket === "MG") {
