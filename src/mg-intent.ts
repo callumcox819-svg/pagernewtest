@@ -139,7 +139,39 @@ export function isRegistrationConfirmed(text: string): boolean {
   const t = normalizeMgText(text);
   return (
     JOINED.test(t) ||
-    /\b(deja inscrit|j'ai (fini|fait|inscrit|enregistr)|c'est (fait|bon)|je suis inscrit|termine)\b/i.test(t)
+    /\b(deja inscrit|deja termine|deja fini|j'ai (fini|fait|inscrit|enregistr)|c'est (fait|bon)|je suis inscrit|termine|fini)\b/i.test(
+      t,
+    ) ||
+    /^(deja|c'est fait|oui c'est (fait|bon))\b/i.test(t)
+  );
+}
+
+/** Idle / in-progress ping asked whether registration is done. */
+export function lastBotAskedRegistrationDone(botText: string): boolean {
+  const t = normalizeMgText(botText || "");
+  if (!t) {
+    return false;
+  }
+  return (
+    /termin[e ].{0,40}inscription|avez[- ]vous.{0,40}(inscrit|inscription)|deja inscrit|etes[- ]vous toujours.{0,40}inscri|etape.{0,30}inscription|finished registration|have you.{0,40}register|are you still.{0,40}register/i.test(
+      t,
+    ) ||
+    /terminer l'inscription|termine l'inscription|avez-vous termine/i.test(t)
+  );
+}
+
+/** «Oui» / soft yes only counts as registered when the bot just asked about registration. */
+export function confirmsRegistrationAfterAsk(text: string, lastBotText: string): boolean {
+  if (isRegistrationConfirmed(text)) {
+    return true;
+  }
+  if (!lastBotAskedRegistrationDone(lastBotText)) {
+    return false;
+  }
+  const t = normalizeMgText(text);
+  return (
+    /^(oui|ouais|yes|si|ok|okay|done|fait|termine|deja)\b/i.test(t) ||
+    /\b(deja termin|fini|inscrit|termine|fait)\b/i.test(t)
   );
 }
 

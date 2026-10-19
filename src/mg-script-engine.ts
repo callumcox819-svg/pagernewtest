@@ -13,7 +13,9 @@ import {
   classifyMgIntent,
   isFunnelPositiveReaction,
   isReadyForRegistration,
+  confirmsRegistrationAfterAsk,
   isRegistrationConfirmed,
+  lastBotAskedRegistrationDone,
   isRegistrationHelpRequest,
   isMgRegistrationAccountQuestion,
   isBarePostLinkAcknowledgment,
@@ -337,9 +339,15 @@ export function mgAllowsMultiSend(scriptKeys: string[]): boolean {
   return scriptKeys.some((key) => MG_REG_SEND_KEYS.has(key));
 }
 
-export type MgStatusMoveTarget = "in_progress_registration" | "registration_complete";
+export type MgStatusMoveTarget =
+  | "in_progress_registration"
+  | "registration_complete"
+  | "waiting_id";
 
 export function mgStatusMoveTarget(sentScriptKeys: string[]): MgStatusMoveTarget | null {
+  if (sentScriptKeys.includes("07_game_id")) {
+    return "waiting_id";
+  }
   if (sentScriptKeys.includes("06_deposit")) {
     return "registration_complete";
   }
@@ -433,6 +441,11 @@ export function resolveMgFunnelScripts(
   const t = (text || "").trim();
   const out = outgoingTexts;
   const recentTexts = options?.recentCustomerTexts ?? [];
+  const lastBotText = out.length ? out[out.length - 1]! : "";
+  const registrationConfirmed =
+    isRegistrationConfirmed(t) ||
+    intent === "joined" ||
+    confirmsRegistrationAfterAsk(t, lastBotText);
 
   if (intent === "declined") {
     return [];
@@ -463,11 +476,7 @@ export function resolveMgFunnelScripts(
       !isRegistrationHelpRequest(t) &&
       !isMgRegistrationAccountQuestion(t)
     ) {
-      if (
-        !gameIdAskSent &&
-        !depositSent &&
-        (isRegistrationConfirmed(t) || intent === "joined" || idReceived)
-      ) {
+      if (!gameIdAskSent && !depositSent && (registrationConfirmed || idReceived)) {
         return ["07_game_id"];
       }
       return [];
@@ -486,11 +495,7 @@ export function resolveMgFunnelScripts(
     if (!linkSent) {
       return ["04_registration", "05_link"];
     }
-    if (
-      !gameIdAskSent &&
-      !depositSent &&
-      (isRegistrationConfirmed(t) || intent === "joined" || idReceived)
-    ) {
+    if (!gameIdAskSent && !depositSent && (registrationConfirmed || idReceived)) {
       return ["07_game_id"];
     }
     if (!depositSent && (idReceived || signal || options?.hasImage)) {
@@ -528,6 +533,8 @@ export function resolveMgFunnelScripts(
     return [];
   }
 
+  // After link: ask game ID when customer confirms registration (incl. «Oui» after ping).
+  // Deposit only after ID is received (or game-id already asked and they want deposit).
   if (!depositSent && idReceived) {
     return ["06_deposit"];
   }
@@ -536,14 +543,15 @@ export function resolveMgFunnelScripts(
     if (!t && !options?.hasImage) {
       return [];
     }
-    if (isBarePostLinkAcknowledgment(t, intent)) {
+    if (isBarePostLinkAcknowledgment(t, intent) && !registrationConfirmed) {
       return [];
     }
     if (
-      isRegistrationConfirmed(t) ||
-      intent === "joined" ||
+      registrationConfirmed ||
       intent === "game_id_text" ||
-      idReceived
+      idReceived ||
+      (lastBotAskedRegistrationDone(lastBotText) &&
+        (intent === "positive" || intent === "ready"))
     ) {
       return ["07_game_id"];
     }
@@ -553,8 +561,7 @@ export function resolveMgFunnelScripts(
   if (depositSent && !gameIdAskSent) {
     if (
       intent === "deposit_done" ||
-      isRegistrationConfirmed(t) ||
-      intent === "joined" ||
+      registrationConfirmed ||
       idReceived ||
       intent === "game_id_text" ||
       options?.hasImage
@@ -570,10 +577,8 @@ export function resolveMgFunnelScripts(
       options?.hasImage ||
       intent === "game_id_text" ||
       intent === "image_only" ||
-      isRegistrationConfirmed(t) ||
-      intent === "joined" ||
       wantsDepositNow(t, intent) ||
-      (signal && !isBarePostLinkAcknowledgment(t, intent))
+      (signal && !isBarePostLinkAcknowledgment(t, intent) && !registrationConfirmed)
     ) {
       return ["06_deposit"];
     }

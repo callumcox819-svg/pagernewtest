@@ -84,6 +84,8 @@ import {
   hasCustomerIncomingAfter,
   hasManualOperatorReplyAfterInProgress,
   resolveRecentInProgressEnteredAtMs,
+  inProgressAskIdAlreadySent,
+  inProgressAskIdMessage,
   inProgressFollowUpAlreadySent,
   inProgressFollowUpMessage,
   isInProgressFollowUpAttemptCoolingDown,
@@ -93,6 +95,7 @@ import {
   isInProgressBotMuted,
   isInProgressFollowUpCountry,
   latestIncomingCustomerText,
+  outgoingAskedRegistrationStatus,
   shouldHandleInProgressFollowUpCustomerReply,
   shouldQueueInProgressFollowUp,
   shouldSendInProgressFollowUp,
@@ -1713,7 +1716,12 @@ async function trySendInProgressRegistrationFollowUp(
   const enteredMs = enteredAt ? Date.parse(enteredAt) : Number.NaN;
   if (Number.isFinite(enteredMs) && hasCustomerIncomingAfter(messages, enteredMs, country)) {
     // Customer already wrote — do NOT mute. Handle ping reply or let CM/AI fall through.
-    if (shouldHandleInProgressFollowUpCustomerReply(convState)) {
+    const outForReply = collectOutgoingTextsForFollowUpCountry(country, messages);
+    if (
+      shouldHandleInProgressFollowUpCustomerReply(convState, {
+        registrationAskInThread: outgoingAskedRegistrationStatus(country, outForReply),
+      })
+    ) {
       return tryHandleInProgressFollowUpCustomerReply(
         deps,
         state,
@@ -1721,21 +1729,7 @@ async function trySendInProgressRegistrationFollowUp(
         conv,
         runtime,
         messages,
-        country === "CM"
-          ? collectCmOutgoingTexts(messages)
-          : country === "CL"
-            ? collectClOutgoingTexts(messages)
-            : country === "ZM"
-              ? collectZmOutgoingTexts(messages)
-              : country === "MG"
-                ? collectMgOutgoingTexts(messages)
-              : country === "DJ"
-                ? collectDjOutgoingTexts(messages)
-              : country === "JO"
-                ? collectJoOutgoingTexts(messages)
-              : country === "EG"
-                ? collectEgOutgoingTexts(messages)
-                : collectRwOutgoingTexts(messages),
+        outForReply,
       );
     }
     console.log(
@@ -1760,22 +1754,7 @@ async function trySendInProgressRegistrationFollowUp(
     return false;
   }
 
-  const outgoingTexts =
-    country === "CM"
-      ? collectCmOutgoingTexts(messages)
-      : country === "CL"
-        ? collectClOutgoingTexts(messages)
-        : country === "ZM"
-          ? collectZmOutgoingTexts(messages)
-          : country === "MG"
-            ? collectMgOutgoingTexts(messages)
-          : country === "DJ"
-            ? collectDjOutgoingTexts(messages)
-          : country === "JO"
-            ? collectJoOutgoingTexts(messages)
-          : country === "EG"
-            ? collectEgOutgoingTexts(messages)
-            : collectRwOutgoingTexts(messages);
+  const outgoingTexts = collectOutgoingTextsForFollowUpCountry(country, messages);
 
   if (inProgressPlanAskAlreadySent(country, outgoingTexts)) {
     await patchConversationState(deps.stateStore, state.chatId, convId, {
@@ -1787,7 +1766,11 @@ async function trySendInProgressRegistrationFollowUp(
     return false;
   }
 
-  if (shouldHandleInProgressFollowUpCustomerReply(convState)) {
+  if (
+    shouldHandleInProgressFollowUpCustomerReply(convState, {
+      registrationAskInThread: outgoingAskedRegistrationStatus(country, outgoingTexts),
+    })
+  ) {
     return tryHandleInProgressFollowUpCustomerReply(
       deps,
       state,
@@ -1838,6 +1821,89 @@ async function trySendInProgressRegistrationFollowUp(
     `Pager worker: ${country} ${convId.slice(0, 8)} in-progress follow-up sent (variant=${variant})`,
   );
   return true;
+}
+
+function collectOutgoingTextsForFollowUpCountry(
+  country: WorkerCountry,
+  messages: PagerMessage[],
+): string[] {
+  if (country === "CM") {
+    return collectCmOutgoingTexts(messages);
+  }
+  if (country === "CL") {
+    return collectClOutgoingTexts(messages);
+  }
+  if (country === "GT") {
+    return collectGtOutgoingTexts(messages);
+  }
+  if (country === "EC") {
+    return collectEcOutgoingTexts(messages);
+  }
+  if (country === "ZM") {
+    return collectZmOutgoingTexts(messages);
+  }
+  if (country === "MG") {
+    return collectMgOutgoingTexts(messages);
+  }
+  if (country === "DJ") {
+    return collectDjOutgoingTexts(messages);
+  }
+  if (country === "JO") {
+    return collectJoOutgoingTexts(messages);
+  }
+  if (country === "EG") {
+    return collectEgOutgoingTexts(messages);
+  }
+  if (country === "KE") {
+    return collectKeOutgoingTexts(messages);
+  }
+  return collectRwOutgoingTexts(messages);
+}
+
+/** Folder-idle or legacy ping: customer answered «Oui» / registered → ask ID. */
+async function tryHandleRegistrationPingCustomerReply(
+  deps: WorkerDeps,
+  state: ChatState,
+  client: PagerClient,
+  conv: PagerConversation,
+  runtime: EnabledChannel,
+): Promise<boolean> {
+  const country = runtime.runtime.country;
+  if (!isInProgressFollowUpCountry(country)) {
+    return false;
+  }
+  const messages = await client.listMessages(conv.id, 1, 80);
+  const outgoingTexts = collectOutgoingTextsForFollowUpCountry(country, messages);
+  if (!outgoingAskedRegistrationStatus(country, outgoingTexts)) {
+    return false;
+  }
+  const customerText = latestIncomingCustomerText(messages);
+  if (!customerText) {
+    return false;
+  }
+  const sorted = [...messages].sort(
+    (left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""),
+  );
+  const newest = sorted[0];
+  if (!newest || !isIncomingDirection(newest.messageDirection)) {
+    return false;
+  }
+  const kind = classifyInProgressRegistrationReply(country, customerText);
+  if (kind !== "yes" && kind !== "not_yet") {
+    return false;
+  }
+  if (kind === "yes" && inProgressAskIdAlreadySent(country, outgoingTexts)) {
+    return false;
+  }
+  return tryHandleInProgressFollowUpCustomerReply(
+    deps,
+    state,
+    client,
+    conv,
+    runtime,
+    messages,
+    outgoingTexts,
+  );
 }
 
 async function tryHandleInProgressFollowUpCustomerReply(
@@ -1902,14 +1968,53 @@ async function tryHandleInProgressFollowUpCustomerReply(
   }
 
   if (kind === "yes") {
-    // Already registered — stop automation pings.
+    // Registered — ask for ID (never send deposit preset here), mute further pings.
+    if (!inProgressAskIdAlreadySent(country, outgoingTexts)) {
+      const askId = inProgressAskIdMessage(country);
+      await tryTakeConversationForProcessing(client, convId, country);
+      const sent = await client.sendMessageReliable(convId, askId, {
+        channelId: runtime.channelId,
+        conv,
+      });
+      if (sent) {
+        const waitingId = findZmWaitingIdStatusId(state);
+        const operatorId = waitingId ? await client.probeOperatorUserId() : "";
+        const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+        if (waitingId && operatorId && currentStatusId !== waitingId) {
+          try {
+            await client.patchConversationStatus(convId, waitingId, operatorId);
+            console.log(
+              `Pager worker: ${country} ${convId.slice(0, 8)} status -> waiting ID after reg yes`,
+            );
+          } catch (error) {
+            console.warn(
+              `Pager worker: waiting-id status failed ${convId.slice(0, 8)}:`,
+              formatError(error),
+            );
+          }
+        }
+        await patchConversationState(deps.stateStore, state.chatId, convId, {
+          conversationId: convId,
+          channelId: runtime.channelId,
+          inProgressMutedAt: new Date().toISOString(),
+          currentStage: "waiting_id",
+          lastReplyAt: new Date().toISOString(),
+          lastReplyRole: "07_game_id",
+          sendFailures: 0,
+        });
+        console.log(
+          `Pager worker: ${country} ${convId.slice(0, 8)} in-progress yes → ask ID`,
+        );
+        return true;
+      }
+    }
     await patchConversationState(deps.stateStore, state.chatId, convId, {
       conversationId: convId,
       channelId: runtime.channelId,
       inProgressMutedAt: new Date().toISOString(),
     });
     console.log(
-      `Pager worker: ${country} ${convId.slice(0, 8)} in-progress muted after reply kind=yes`,
+      `Pager worker: ${country} ${convId.slice(0, 8)} in-progress muted after reply kind=yes (ID already asked)`,
     );
     return false;
   }
@@ -2025,6 +2130,14 @@ async function processConversation(
   }
 
   if (await trySendFolderIdleSignal(deps, state, client, workingConv, runtime)) {
+    return true;
+  }
+
+  // Reply to registration ping (folder idle or legacy) → ask ID, never deposit preset.
+  if (
+    isInProgressStatusConversation(workingConv) &&
+    (await tryHandleRegistrationPingCustomerReply(deps, state, client, workingConv, runtime))
+  ) {
     return true;
   }
 
@@ -5247,7 +5360,7 @@ async function processMgConversation(
   if (!scriptKeys.length && latestCustomerText) {
     const aiGo = await aiLooksLikeFunnelAdvance(deps.env, latestCustomerText, {
       recentCustomerTexts,
-      lastBotText: outgoingTexts[0] || "",
+      lastBotText: outgoingTexts[outgoingTexts.length - 1] || "",
       languageHint: "fr",
     });
     if (aiGo) {
@@ -5257,10 +5370,11 @@ async function processMgConversation(
         scriptKeys = ["02_how_it_works", "03_mga_table"];
       } else if (!mgRegLinkSentInHistory(outgoingTexts)) {
         scriptKeys = ["04_registration", "05_link"];
+      } else if (!mgScriptSentInHistory(outgoingTexts, "07_game_id")) {
+        // After link: always ask ID before deposit instructions.
+        scriptKeys = ["07_game_id"];
       } else if (!mgDepositSentInHistory(outgoingTexts)) {
         scriptKeys = ["06_deposit"];
-      } else if (!mgScriptSentInHistory(outgoingTexts, "07_game_id")) {
-        scriptKeys = ["07_game_id"];
       }
       if (scriptKeys.length) {
         console.log(
@@ -5390,7 +5504,19 @@ async function processMgConversation(
   }
 
   const statusTarget = mgStatusMoveTarget(sentScriptKeys);
-  if (
+  if (statusTarget === "waiting_id" || sentScriptKeys.includes("07_game_id")) {
+    const waitingId = findZmWaitingIdStatusId(currentState);
+    const operatorId = waitingId ? await client.probeOperatorUserId() : "";
+    const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+    if (waitingId && operatorId && currentStatusId !== waitingId) {
+      try {
+        await client.patchConversationStatus(convId, waitingId, operatorId);
+        console.log(`Pager worker: MG ${convId.slice(0, 8)} status -> waiting ID`);
+      } catch (error) {
+        console.warn(`Pager worker: waiting-id status failed ${convId.slice(0, 8)}:`, formatError(error));
+      }
+    }
+  } else if (
     statusTarget === "in_progress_registration" ||
     sentScriptKeys.includes("05_link") ||
     mgRegLinkSentInHistory(coveredOutgoing)
@@ -7624,7 +7750,7 @@ async function processFolderMarketConversation(
   }
 
   // Regex gates missed a positive — ask AI, then force next saved reply.
-  const lastBot = outgoingTexts[0] || outgoingTexts[outgoingTexts.length - 1] || "";
+  const lastBot = outgoingTexts[outgoingTexts.length - 1] || outgoingTexts[0] || "";
   const aiAdvance =
     !screenshotHelpIntent &&
     Boolean(latestCustomerText) &&
@@ -7637,7 +7763,18 @@ async function processFolderMarketConversation(
     const folderId =
       runtime.runtime.templateBankId || pickLiveTemplateBank(currentState, runtime.runtime.country)?.id;
     const replies = folderId ? await client.getSavedReplies(folderId).catch(() => []) : [];
-    const nextPlan = planForcedNextFolderPreset(replies, outgoingTexts);
+    // After registration ping / soft yes — jump to ask_id, never blind-next into deposit.
+    const regCountry = isInProgressFollowUpCountry(runtime.runtime.country)
+      ? runtime.runtime.country
+      : null;
+    const preferAskId =
+      regCountry &&
+      (outgoingAskedRegistrationStatus(regCountry, outgoingTexts) ||
+        classifyInProgressRegistrationReply(regCountry, latestCustomerText) === "yes");
+    const nextPlan = preferAskId
+      ? planFolderPresetForKinds(replies, outgoingTexts, ["ask_id"]) ??
+        planForcedNextFolderPreset(replies, outgoingTexts)
+      : planForcedNextFolderPreset(replies, outgoingTexts);
     if (
       nextPlan &&
       nextPlan.action === "send" &&
@@ -7656,7 +7793,7 @@ async function processFolderMarketConversation(
       ))
     ) {
       console.log(
-        `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} AI advance → next saved reply`,
+        `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} AI advance → ${preferAskId ? "ask_id/next" : "next"} saved reply`,
       );
       return true;
     }

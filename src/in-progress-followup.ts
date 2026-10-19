@@ -87,6 +87,68 @@ const PLAN_ASK_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
   JO: ["متى تخطط للتسجيل"],
 };
 
+/** Ask for account/game ID after customer confirms registration (idle ping or follow-up). */
+const ASK_ID_MESSAGES: Record<InProgressFollowUpCountry, string> = {
+  ZM: "Please send me your account number — you'll find it in your profile. It begins with 17.",
+  RW: "Please send me your account number — you'll find it in your profile. It begins with 17.",
+  KE: "Please send me your account number — you'll find it in your profile. It begins with 17.",
+  CM: "Envoie-moi ton identifiant de jeu ; tu le trouveras dans ton profil (dans le coin droit). Il commence par +.",
+  MG: "Envoie-moi ton identifiant de jeu ; tu le trouveras dans ton profil (dans le coin droit). Il commence par +.",
+  DJ: "Envoie-moi ton identifiant de jeu ; tu le trouveras dans ton profil (dans le coin droit). Il commence par +.",
+  CL: "Envíame tu ID de juego; lo encuentras en tu perfil (esquina derecha). Empieza por +.",
+  GT: "Envíame tu ID de juego; lo encuentras en tu perfil (esquina derecha). Empieza por +.",
+  EC: "Envíame tu ID de juego; lo encuentras en tu perfil (esquina derecha). Empieza por +.",
+  EG: "ابعتلي رقم الحساب من البروفايل — بيبدأ بـ 17.",
+  JO: "ابعتلي رقم الحساب من البروفايل — بيبدأ بـ 17.",
+};
+
+const ASK_ID_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
+  ZM: ["account number", "begins with 17"],
+  RW: ["account number", "begins with 17"],
+  KE: ["account number", "begins with 17"],
+  CM: ["identifiant de jeu", "commence par +"],
+  MG: ["identifiant de jeu", "commence par +"],
+  DJ: ["identifiant de jeu", "commence par +"],
+  CL: ["id de juego", "empieza por"],
+  GT: ["id de juego", "empieza por"],
+  EC: ["id de juego", "empieza por"],
+  EG: ["رقم الحساب", "بيبدأ"],
+  JO: ["رقم الحساب", "بيبدأ"],
+};
+
+/** Idle-signal registration pings (folder idle) — same intent as FOLLOWUP_NEEDLES. */
+const IDLE_REGISTRATION_ASK_NEEDLES: Record<InProgressFollowUpCountry, string[]> = {
+  ZM: ["finished registration", "stuck in registration", "registration step"],
+  RW: ["finished registration", "stuck in registration", "registration step"],
+  KE: ["finished registration", "stuck in registration", "registration step"],
+  CM: [
+    "terminé l'inscription",
+    "termine l'inscription",
+    "étape de l'inscription",
+    "etape de l'inscription",
+    "toujours en train de vous inscrire",
+  ],
+  MG: [
+    "terminé l'inscription",
+    "termine l'inscription",
+    "étape de l'inscription",
+    "etape de l'inscription",
+    "toujours en train de vous inscrire",
+  ],
+  DJ: [
+    "terminé l'inscription",
+    "termine l'inscription",
+    "étape de l'inscription",
+    "etape de l'inscription",
+    "toujours en train de vous inscrire",
+  ],
+  CL: ["terminaste el registro", "etapa del registro", "sigues en el proceso"],
+  GT: ["terminaste el registro", "etapa del registro", "sigues en el proceso"],
+  EC: ["terminaste el registro", "etapa del registro", "sigues en el proceso"],
+  EG: ["أنهيت التسجيل", "مرحلة من التسجيل", "خطوة التسجيل"],
+  JO: ["أنهيت التسجيل", "مرحلة من التسجيل", "خطوة التسجيل"],
+};
+
 function stableHash(value: string): number {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -117,6 +179,56 @@ export function inProgressFollowUpMessage(
 
 export function inProgressPlanAskMessage(country: InProgressFollowUpCountry): string {
   return PLAN_ASK_MESSAGES[country];
+}
+
+export function inProgressAskIdMessage(country: InProgressFollowUpCountry): string {
+  return ASK_ID_MESSAGES[country];
+}
+
+export function inProgressAskIdAlreadySent(
+  country: InProgressFollowUpCountry,
+  outgoingTexts: string[],
+): boolean {
+  const blob = outgoingTexts.join("\n");
+  const needles = ASK_ID_NEEDLES[country];
+  if (country === "EG" || country === "JO") {
+    return needles.some((needle) => blob.includes(needle));
+  }
+  const lower = blob.toLowerCase();
+  return needles.some((needle) => lower.includes(needle.toLowerCase()));
+}
+
+/** Bot asked whether registration is done (legacy follow-up or folder idle ping). */
+export function outgoingAskedRegistrationStatus(
+  country: InProgressFollowUpCountry,
+  outgoingTexts: string[],
+): boolean {
+  if (inProgressFollowUpAlreadySent(country, outgoingTexts)) {
+    return true;
+  }
+  const blob = outgoingTexts.join("\n");
+  const needles = IDLE_REGISTRATION_ASK_NEEDLES[country];
+  if (country === "EG" || country === "JO") {
+    return needles.some((needle) => blob.includes(needle));
+  }
+  const lower = blob.toLowerCase();
+  return needles.some((needle) => lower.includes(needle.toLowerCase()));
+}
+
+export function lastOutgoingAskedRegistrationStatus(
+  country: InProgressFollowUpCountry,
+  lastBotText: string,
+): boolean {
+  const t = (lastBotText || "").trim();
+  if (!t) {
+    return false;
+  }
+  const needles = [...FOLLOWUP_NEEDLES[country], ...IDLE_REGISTRATION_ASK_NEEDLES[country]];
+  if (country === "EG" || country === "JO") {
+    return needles.some((needle) => t.includes(needle));
+  }
+  const lower = t.toLowerCase();
+  return needles.some((needle) => lower.includes(needle.toLowerCase()));
 }
 
 export function inProgressFollowUpAlreadySent(
@@ -157,7 +269,12 @@ export function isInProgressBotAutomatedText(
     return true;
   }
   const lower = t.toLowerCase();
-  const needles = [...FOLLOWUP_NEEDLES[country], ...PLAN_ASK_NEEDLES[country]];
+  const needles = [
+    ...FOLLOWUP_NEEDLES[country],
+    ...PLAN_ASK_NEEDLES[country],
+    ...ASK_ID_NEEDLES[country],
+    ...IDLE_REGISTRATION_ASK_NEEDLES[country],
+  ];
   if (country === "EG" || country === "JO") {
     return needles.some((needle) => t.includes(needle));
   }
@@ -398,17 +515,17 @@ export function resolveRecentInProgressEnteredAtMs(
 /** Customer answered the «already registered?» ping — may need «when do you plan?» or mute. */
 export function shouldHandleInProgressFollowUpCustomerReply(
   convState: ConversationRuntimeState,
+  options?: { registrationAskInThread?: boolean },
 ): boolean {
-  if (convState.inProgressMutedAt?.trim()) {
-    return false;
-  }
-  if (!convState.inProgressFollowUpSentAt?.trim()) {
-    return false;
-  }
   if (convState.inProgressPlanAskSentAt?.trim()) {
     return false;
   }
-  return true;
+  // Legacy follow-up ping was sent, or folder-idle / thread already asked about registration.
+  if (convState.inProgressFollowUpSentAt?.trim() || options?.registrationAskInThread) {
+    // Allow handling even if muted — yes→ask-ID recovers chats muted without ID ask.
+    return true;
+  }
+  return false;
 }
 
 export function isInProgressBotMuted(convState: ConversationRuntimeState): boolean {
@@ -426,9 +543,16 @@ export function classifyInProgressRegistrationReply(
     return "other";
   }
 
-  if (country === "CM" || country === "MG" || country === "DJ" || country === "CL") {
+  if (
+    country === "CM" ||
+    country === "MG" ||
+    country === "DJ" ||
+    country === "CL" ||
+    country === "GT" ||
+    country === "EC"
+  ) {
     if (
-      /\b(pas encore|non|encore non|je (vais|m[' ]?occupe|m[' ]?en occupe|travaille|suis en train)|bientôt|bientot|en cours|plus tard|après|apres|je m[' ]?en occupe|j[' ]?y travaille|ocupo|todavía no|todavia no|aún no|aun no)\b/.test(
+      /\b(pas encore|non|encore non|je (vais|m[' ]?occupe|m[' ]?en occupe|travaille|suis en train)|bientôt|bientot|en cours|plus tard|après|apres|je m[' ]?en occupe|j[' ]?y travaille|ocupo|todavía no|todavia no|aún no|aun no|otra dia|otro dia|une autre jour|un autre jour)\b/.test(
         t,
       ) ||
       /^(non|no)\s*[!.]*$/.test(t)
@@ -437,10 +561,12 @@ export function classifyInProgressRegistrationReply(
     }
     if (
       /^(oui|ouais|yes|si|sí|ok)\b/.test(t) ||
-      /\b(déjà inscrit|deja inscrit|j[' ]?ai (fini|fait|inscrit|enregistr)|c[' ]?est (fait|bon)|je suis inscrit|me suis inscrit|terminé|termine)\b/.test(
+      /\b(déjà inscrit|deja inscrit|déjà terminé|deja termine|déjà fini|deja fini|j[' ]?ai (fini|fait|inscrit|enregistr)|c[' ]?est (fait|bon)|je suis inscrit|me suis inscrit|terminé|termine|déjà terminé|deja termine)\b/.test(
         t,
       ) ||
-      /^(oui|si|sí)\s*[!.]*$/.test(t)
+      /^(oui|si|sí|déjà|deja)\s*[!.]*$/.test(t) ||
+      /déjà\s*termin/i.test(t) ||
+      /deja\s*termin/i.test(t)
     ) {
       return "yes";
     }
