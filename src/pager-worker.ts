@@ -32,6 +32,7 @@ import { looksLikeDepositFormInProgress } from "./funnel-screenshot.js";
 import {
   isLinkAccessProblemMessage,
   isCustomerClarificationMessage,
+  isCustomerSaysNotRegisteredYet,
   isScamOrTrustQuestion,
   looksLikeBrokenLinkScreenshot,
 } from "./customer-clarity.js";
@@ -9672,6 +9673,14 @@ async function trySendSpecialCustomerResponse(
 ): Promise<boolean> {
   // Game / login IDs (15–19…) must never trigger the «phone only» refusal.
   if (isLikelyGameId(ctx.text)) {
+    return false;
+  }
+
+  // Still registering — scripts must resend link; never park as «нет денег» / «не готов».
+  if (isCustomerSaysNotRegisteredYet(ctx.text)) {
+    console.log(
+      `Pager worker: ${ctx.channel.country} ${ctx.convId.slice(0, 8)} skip parking — not registered yet (text=${truncate(ctx.text)})`,
+    );
     return false;
   }
 

@@ -1,4 +1,5 @@
 import type { AppEnv } from "./env.js";
+import { isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
 import { normalizeCustomerText } from "./customer-intent.js";
 
 /** Parking folders after clear customer statements (not random words). */
@@ -10,6 +11,10 @@ export type FunnelParkingIntent = "no_money" | "not_ready" | "none";
 export function isClearNoMoneyPhrase(text: string): boolean {
   const t = normalizeCustomerText(text);
   if (!t || t.length > 160) {
+    return false;
+  }
+  // Registration still in progress — not a money problem.
+  if (isCustomerSaysNotRegisteredYet(text) || isCustomerSaysNotRegisteredYet(t)) {
     return false;
   }
   // Exclude deposit / already paid signals.
@@ -43,6 +48,10 @@ export function isClearNotReadyPhrase(text: string): boolean {
     return false;
   }
   if (isClearNoMoneyPhrase(t)) {
+    return false;
+  }
+  // Still registering («inscription pas terminée») — never park as «не готов».
+  if (isCustomerSaysNotRegisteredYet(text) || isCustomerSaysNotRegisteredYet(t)) {
     return false;
   }
   if (/\b(non merci|pas interesse|not interested|scam|arnaque|stop)\b/i.test(t)) {
@@ -97,8 +106,9 @@ export async function aiClassifyParkingIntent(
     "Classify the customer message for a registration/deposit funnel bot.",
     "Reply with exactly one token:",
     "NO_MONEY — they clearly say they have no money / cannot deposit now because of lack of funds.",
-    "NOT_READY — they are not ready now (later, busy, tomorrow, not ready) but NOT about lacking money and NOT a hard refuse.",
+    "NOT_READY — they are not ready now (later, busy, tomorrow, wait/attend) but NOT about lacking money and NOT a hard refuse.",
     "NONE — anything else (interest, questions, decline/scam, greetings, deposit proof, random words).",
+    "CRITICAL: If they say registration/inscription is not finished yet («pas encore terminé», still registering, no account yet) → NONE. That is NOT NOT_READY and NOT NO_MONEY.",
     "Do NOT guess. Random short words, slang without clear meaning, or mixed unclear text → NONE.",
   ].join(" ");
 
@@ -153,6 +163,10 @@ export async function resolveFunnelParkingIntent(
   env: AppEnv,
   customerText: string,
 ): Promise<FunnelParkingIntent> {
+  // «Inscription pas terminée» must stay in the funnel (resend link), never park.
+  if (isCustomerSaysNotRegisteredYet(customerText)) {
+    return "none";
+  }
   const clear = classifyParkingIntentHeuristic(customerText);
   if (clear !== "none") {
     return clear;
