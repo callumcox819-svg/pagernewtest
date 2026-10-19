@@ -5803,7 +5803,7 @@ async function processMgConversation(
 
   if (
     await trySupportAgentAfterScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
-      country: "CM",
+      country: "MG",
       customerText: latestCustomerText,
       recentCustomerTexts,
       outgoingTexts,
@@ -5879,7 +5879,7 @@ async function processMgConversation(
       convState,
       lastIncoming,
       {
-        country: "CM",
+        country: "MG",
         customerText: latestCustomerText,
         recentCustomerTexts,
         outgoingTexts,
@@ -5898,7 +5898,7 @@ async function processMgConversation(
   if (
     !mgFunnelBlocksEarlyAi &&
     (await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
-      country: "CM",
+      country: "MG",
       customerText: latestCustomerText,
       recentCustomerTexts,
       outgoingTexts,
@@ -5926,7 +5926,7 @@ async function processMgConversation(
         convState,
         lastIncoming,
         {
-          country: "CM",
+          country: "MG",
           customerText: latestCustomerText,
           recentCustomerTexts,
           outgoingTexts,
@@ -6447,7 +6447,7 @@ async function processDjConversation(
 
   if (
     await trySupportAgentAfterScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
-      country: "CM",
+      country: "DJ",
       customerText: latestCustomerText,
       recentCustomerTexts,
       outgoingTexts,
@@ -6487,7 +6487,7 @@ async function processDjConversation(
       convState,
       lastIncoming,
       {
-        country: "CM",
+        country: "DJ",
         customerText: latestCustomerText,
         recentCustomerTexts,
         outgoingTexts,
@@ -6570,7 +6570,7 @@ async function processDjConversation(
   if (
     !djFunnelBlocksEarlyAi &&
     (await trySupportAgentWhenNoScripts(deps, state, client, conv, runtime, convId, convState, lastIncoming, {
-      country: "CM",
+      country: "DJ",
       customerText: latestCustomerText,
       recentCustomerTexts,
       outgoingTexts,
@@ -6625,7 +6625,7 @@ async function processDjConversation(
         convState,
         lastIncoming,
         {
-          country: "CM",
+          country: "DJ",
           customerText: latestCustomerText,
           recentCustomerTexts,
           outgoingTexts,
@@ -7152,7 +7152,7 @@ async function tryRunAiAgentTurn(
   convState: ConversationRuntimeState,
   lastIncoming: PagerMessage,
   options: {
-    country: CountryCode;
+    country: import("./ai-support-phase.js").SupportCountry;
     customerText: string;
     recentCustomerTexts: string[];
     outgoingTexts: string[];
@@ -7184,7 +7184,11 @@ async function tryRunAiAgentTurn(
     return false;
   }
   if (
-    looksLikeOwnScriptEcho(options.customerText, options.country, options.outgoingTexts)
+    looksLikeOwnScriptEcho(
+      options.customerText,
+      resolvePlaybookCountry(options.country),
+      options.outgoingTexts,
+    )
   ) {
     return false;
   }
@@ -7242,7 +7246,7 @@ async function trySupportAgentWhenNoScripts(
   convState: ConversationRuntimeState,
   lastIncoming: PagerMessage,
   options: {
-    country: CountryCode;
+    country: import("./ai-support-phase.js").SupportCountry;
     customerText: string;
     recentCustomerTexts: string[];
     outgoingTexts: string[];
@@ -7274,7 +7278,7 @@ async function trySupportAgentAfterScripts(
   _convState: ConversationRuntimeState,
   _lastIncoming: PagerMessage,
   _options: {
-    country: CountryCode;
+    country: import("./ai-support-phase.js").SupportCountry;
     customerText: string;
     recentCustomerTexts: string[];
     outgoingTexts: string[];
@@ -9731,6 +9735,32 @@ function buildRuntimeChannelConfig(
   };
 }
 
+/**
+ * Real market for AI currency/promo — never the YAML playbook sibling alone.
+ * MG channel must stay MG (MGA), not CM (CFA), even when OCR playbook is CM.
+ */
+function resolveSupportMarketFromRuntime(
+  runtime: EnabledChannel,
+): import("./ai-support-phase.js").SupportCountry {
+  const code = (runtime.runtime.country || "").trim().toUpperCase();
+  if (code === "MG" || isMgChannelName(runtime.channelName)) {
+    return "MG";
+  }
+  if (code === "DJ" || isDjChannelName(runtime.channelName)) {
+    return "DJ";
+  }
+  if (code === "JO" || isJoChannelName(runtime.channelName)) {
+    return "JO";
+  }
+  if (code === "PK" || isPkChannelName(runtime.channelName)) {
+    return "PK";
+  }
+  if (code === "ZM" || code === "CM" || code === "EG") {
+    return code;
+  }
+  return resolvePlaybookCountry(code);
+}
+
 /** True when this script body (or its opening) was already sent in the current batch/thread. */
 function cmOutgoingAlreadyContainsText(outgoingTexts: string[], text: string): boolean {
   const body = text.trim().toLowerCase();
@@ -10091,10 +10121,11 @@ async function trySendWrongBettingBrandHelp(
     return false;
   }
   const brand = extractWrongBettingBrandLabel(blob);
-  const country = String(ctx.channel.country || "CM");
+  const market = resolveSupportMarketFromRuntime(ctx.runtime);
+  const country = String(market);
   const funnelStep = ctx.funnelStep ?? ctx.convState.funnelStep ?? 0;
   const support = buildSupportSnapshot(
-    ctx.channel.country,
+    market,
     isInProgressStatusConversation(ctx.conv),
     ctx.outgoingTexts,
     {
@@ -10114,7 +10145,7 @@ async function trySendWrongBettingBrandHelp(
     isConversationInAiEnabledFolders(ctx.conv, ctx.state, ctx.runtime.channelId)
   ) {
     reply = await runAiAgentVisionTurn(deps.env, {
-      country: ctx.channel.country,
+      country: market,
       caption: ctx.text,
       funnelStep,
       outgoingTexts: ctx.outgoingTexts,
@@ -10584,8 +10615,9 @@ async function tryHandleCustomerImage(
     readFunnelScreenshot(ocrCombinedText).scene === "platform_balance";
 
   const funnelStep = ctx.funnelStep ?? ctx.convState.funnelStep ?? 0;
+  const market = resolveSupportMarketFromRuntime(ctx.runtime);
   const support = buildSupportSnapshot(
-    ctx.channel.country,
+    market,
     isInProgressStatusConversation(ctx.conv),
     ctx.outgoingTexts,
     {
@@ -10663,7 +10695,7 @@ async function tryHandleCustomerImage(
       ? extractWrongBettingBrandLabel([ocrCombinedText, ctx.text].filter(Boolean).join("\n"))
       : undefined;
     const visionReply = await runAiAgentVisionTurn(deps.env, {
-      country: ctx.channel.country,
+      country: market,
       caption: ctx.text,
       funnelStep,
       outgoingTexts: ctx.outgoingTexts,
@@ -10681,7 +10713,7 @@ async function tryHandleCustomerImage(
       });
       if (sent) {
         console.log(
-          `Pager worker: ${ctx.channel.country} ${ctx.convId.slice(0, 8)} AI agent vision (${visionReply.length} chars) build=${getDeployLabel()}`,
+          `Pager worker: ${market} ${ctx.convId.slice(0, 8)} AI agent vision (${visionReply.length} chars) build=${getDeployLabel()}`,
         );
         await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
           conversationId: ctx.convId,

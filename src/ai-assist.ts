@@ -17,7 +17,8 @@ export type AiAgentTrigger =
   | "registration_proof_ack";
 
 export type AiAssistContext = {
-  country: CountryCode;
+  /** Real market (MG/DJ/JO…), not only YAML playbook ZM|CM|EG. */
+  country: SupportCountry;
   customerText: string;
   recentCustomerTexts: string[];
   recentOutgoingTexts: string[];
@@ -31,7 +32,8 @@ export type AiAssistContext = {
 };
 
 export type AiVisionContext = {
-  country: CountryCode;
+  /** Real market (MG/DJ/JO…), not only YAML playbook ZM|CM|EG. */
+  country: SupportCountry;
   caption: string;
   funnelStep: number;
   outgoingTexts: string[];
@@ -43,6 +45,13 @@ export type AiVisionContext = {
   /** OCR/classifier already saw a rival bookmaker (256bet, Bet261…). */
   wrongBettingBrand?: string;
 };
+
+/** Safe MG deposit tip when the model slips into CFA (Cameroon). */
+const MG_DEPOSIT_CURRENCY_FALLBACK =
+  "Félicitations pour votre inscription ! Pour le premier dépôt, ouvre « Faire un dépôt » dans ton portefeuille. Le minimum est 5000 MGA — choisis un montant de mon tableau (5000 / 8000 / 15000 MGA…). Ensuite envoie-moi une capture de ton solde.";
+
+const DJ_DEPOSIT_CURRENCY_FALLBACK =
+  "Félicitations pour votre inscription ! Pour le premier dépôt, suis les montants en DJF de mon tableau, puis envoie-moi une capture de ton solde.";
 
 const SERVICE_FRAMING = [
   "Business context: we OFFER A LEGITIMATE SERVICE — personal step-by-step guidance on using the platform (registration, deposit, gameplay). You are a service assistant, not a random spammer.",
@@ -158,8 +167,22 @@ const MARKET_RULES: Partial<Record<SupportCountry, string>> = {
   ].join(" "),
 };
 
-function resolveAiMarket(country: CountryCode, ctx?: AiAssistContext): SupportCountry {
-  return ctx?.support?.country ?? country;
+function isExtendedAiMarket(code?: SupportCountry): code is SupportCountry {
+  return code === "MG" || code === "DJ" || code === "JO" || code === "PK";
+}
+
+function resolveAiMarket(country: SupportCountry, ctx?: AiAssistContext): SupportCountry {
+  // Extended geos (MG/DJ/…) must win over YAML playbook siblings (CM/EG/ZM).
+  if (isExtendedAiMarket(ctx?.country)) {
+    return ctx.country;
+  }
+  if (isExtendedAiMarket(ctx?.support?.country)) {
+    return ctx.support.country;
+  }
+  if (isExtendedAiMarket(country)) {
+    return country;
+  }
+  return ctx?.support?.country ?? ctx?.country ?? country;
 }
 
 function resolveAiLanguageCountry(market: SupportCountry): CountryCode {
@@ -172,12 +195,13 @@ function resolveAiLanguageCountry(market: SupportCountry): CountryCode {
   return market;
 }
 
-function resolveAiMarketRules(country: CountryCode, ctx?: AiAssistContext): string {
+function resolveAiMarketRules(country: SupportCountry, ctx?: AiAssistContext): string {
   const market = resolveAiMarket(country, ctx);
-  return MARKET_RULES[market] ?? COUNTRY_RULES[country] ?? COUNTRY_RULES.CM;
+  const languageCountry = resolveAiLanguageCountry(market);
+  return MARKET_RULES[market] ?? COUNTRY_RULES[languageCountry] ?? COUNTRY_RULES.CM;
 }
 
-function buildSystemPrompt(country: CountryCode, ctx?: AiAssistContext): string {
+function buildSystemPrompt(country: SupportCountry, ctx?: AiAssistContext): string {
   const market = resolveAiMarket(country, ctx);
   const supportMode =
     ctx?.support?.active ||
@@ -283,7 +307,7 @@ function buildLanguageRetryUserPrompt(country: CountryCode): string {
 
 async function completeWithLanguageGuard(
   env: AppEnv,
-  country: CountryCode,
+  country: SupportCountry,
   system: string,
   user: string | Array<{ type: string; text?: string; image_url?: { url: string } }>,
   model?: string,
@@ -291,14 +315,15 @@ async function completeWithLanguageGuard(
 ): Promise<string | undefined> {
   const apiKey = env.AI_API_KEY!.trim();
   const resolvedModel = model?.trim() || env.AI_MODEL;
-  const languageCountry = resolveAiLanguageCountry(market ?? country);
+  const resolvedMarket = market ?? country;
+  const languageCountry = resolveAiLanguageCountry(resolvedMarket);
   let reply = sanitizeAiReply(
     await openAiChatCompletion(env, resolvedModel, system, user),
     languageCountry,
-    market ?? country,
+    resolvedMarket,
   );
   if (reply && aiReplyLooksWrongLanguage(languageCountry, reply)) {
-    console.warn(`AI assist wrong language for ${market ?? country}, retrying once`);
+    console.warn(`AI assist wrong language for ${resolvedMarket}, retrying once`);
     reply = sanitizeAiReply(
       await openAiChatCompletion(
         env,
@@ -312,18 +337,18 @@ async function completeWithLanguageGuard(
             ],
       ),
       languageCountry,
-      market ?? country,
+      resolvedMarket,
     );
   }
   if (reply && aiReplyLooksWrongLanguage(languageCountry, reply)) {
-    console.warn(`AI assist still wrong language for ${market ?? country} — dropping reply`);
+    console.warn(`AI assist still wrong language for ${resolvedMarket} — dropping reply`);
     return undefined;
   }
   return reply;
 }
 
 function buildVisionSystemPrompt(
-  country: CountryCode,
+  country: SupportCountry,
   support?: SupportSnapshot,
   wrongBrand?: string,
 ): string {
@@ -421,7 +446,7 @@ async function openAiChatCompletion(
 
 function sanitizeAiReply(
   reply: string | undefined,
-  country?: CountryCode,
+  languageCountry?: CountryCode,
   market?: SupportCountry,
 ): string | undefined {
   if (!reply?.trim()) {
@@ -432,22 +457,20 @@ function sanitizeAiReply(
     return undefined;
   }
   const trimmed = reply.trim();
-  const resolvedMarket = market ?? country;
-  if (
-    resolvedMarket === "MG" &&
-    /\b(cfa|fcfa|francs?\s*cfa)\b/i.test(trimmed)
-  ) {
-    console.warn("AI assist rejected MG reply containing CFA");
-    return undefined;
+  const resolvedMarket = market;
+  const hasCfa = /\b(cfa|fcfa|f\.?\s*cfa|francs?\s*cfa)\b/i.test(trimmed);
+  if (resolvedMarket === "MG" && hasCfa) {
+    console.warn("AI assist replaced MG reply containing CFA with MGA deposit tip");
+    return MG_DEPOSIT_CURRENCY_FALLBACK;
   }
   if (
     resolvedMarket === "DJ" &&
-    /\b(cfa|fcfa|mga|ariary)\b/i.test(trimmed)
+    (hasCfa || /\b(mga|ariary)\b/i.test(trimmed))
   ) {
-    console.warn("AI assist rejected DJ reply containing wrong currency");
-    return undefined;
+    console.warn("AI assist replaced DJ reply containing wrong currency with DJF tip");
+    return DJ_DEPOSIT_CURRENCY_FALLBACK;
   }
-  if (country && aiReplyLooksWrongLanguage(country, trimmed)) {
+  if (languageCountry && aiReplyLooksWrongLanguage(languageCountry, trimmed)) {
     return undefined;
   }
   return trimmed;

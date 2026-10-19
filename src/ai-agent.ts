@@ -1,8 +1,9 @@
-import type { CountryCode } from "./config.js";
+import { resolvePlaybookCountry, type CountryCode } from "./config.js";
 import type { AppEnv } from "./env.js";
 import {
   getSupportFunnelConfig,
   hasPreSupportFunnelScripts,
+  type SupportCountry,
   type SupportSnapshot,
 } from "./ai-support-phase.js";
 import { isCustomerClarificationMessage, isLinkAccessProblemMessage, isScamOrTrustQuestion, isCustomerSaysNotRegisteredYet } from "./customer-clarity.js";
@@ -64,7 +65,7 @@ function funnelProgressForTrollGate(country: string, outgoing: string[]): boolea
 }
 
 /** Pre-support: customer asked for link/instructions — funnel scripts must run, not AI. */
-function customerWantsPreSupportRegistration(country: CountryCode, text: string): boolean {
+function customerWantsPreSupportRegistration(country: SupportCountry, text: string): boolean {
   const t = text.trim();
   if (!t) {
     return false;
@@ -72,7 +73,8 @@ function customerWantsPreSupportRegistration(country: CountryCode, text: string)
   if (customerRequestsRegistrationMaterials(t) || customerAgreedAfterOfferTable(t)) {
     return true;
   }
-  if (country === "CM") {
+  const playbook = resolvePlaybookCountry(country);
+  if (playbook === "CM" || country === "MG" || country === "DJ") {
     return cmWantsRegistrationLink(t) || isCmRegistrationHelpRequest(t);
   }
   return wantsRegistrationLink(t) || isRegistrationHelpRequest(t);
@@ -246,9 +248,10 @@ export function shouldUseAiAgent(ctx: AiAgentContext): boolean {
   ) {
     return false;
   }
-  // MG/DJ use CM language routing; block AI on table picks after the offer.
+  // MG/DJ may be passed as themselves or as CM language sibling; block AI on table picks.
+  const aiMarket = ctx.support?.country ?? ctx.country;
   if (
-    ctx.country === "CM" &&
+    (aiMarket === "MG" || aiMarket === "DJ" || ctx.country === "CM") &&
     !ctx.support?.active &&
     (isMgOfferTableChoice(ctx.customerText.trim()) ||
       isDjOfferTableChoice(ctx.customerText.trim()) ||
@@ -313,14 +316,18 @@ export function shouldUseAiAgentForImage(options: {
   proofKind: string;
   caption: string;
   support?: SupportSnapshot;
-  country?: CountryCode;
+  country?: SupportCountry;
   outgoingTexts?: string[];
   ocrCombinedText?: string;
 }): boolean {
   const echoText = [options.ocrCombinedText, options.caption].filter(Boolean).join("\n");
   if (
     options.country &&
-    looksLikeOwnScriptEcho(echoText, options.country, options.outgoingTexts)
+    looksLikeOwnScriptEcho(
+      echoText,
+      resolvePlaybookCountry(options.country),
+      options.outgoingTexts,
+    )
   ) {
     return false;
   }
@@ -377,7 +384,7 @@ export async function runAiAgentVisionTurn(
 }
 
 export function supportSignalsFromOutgoing(
-  country: CountryCode,
+  country: SupportCountry,
   outgoingTexts: string[],
 ): { regLinkSent: boolean; depositScriptSent: boolean } {
   const cfg = getSupportFunnelConfig(country);
