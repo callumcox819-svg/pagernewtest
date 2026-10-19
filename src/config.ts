@@ -187,10 +187,23 @@ export function getTemplateBank(
   templateBankName: string,
 ): TemplateBankConfig {
   const bank = config.templateBanks.find((item) => item.name === templateBankName);
-  if (!bank) {
+  if (bank) {
+    return bank;
+  }
+  // Folder geos (MA/PK/PE/…) and script countries (MG/KE/DJ) often have no YAML bank —
+  // never crash the whole conversation poll over a missing name.
+  const fallback =
+    config.templateBanks.find((item) => item.name === "cm-default") ??
+    config.templateBanks.find((item) => item.name === "zm-default") ??
+    config.templateBanks.find((item) => item.name === "eg-default") ??
+    config.templateBanks[0];
+  if (!fallback) {
     throw new Error(`Missing template bank ${templateBankName}`);
   }
-  return bank;
+  console.warn(
+    `Missing template bank ${templateBankName} — using fallback ${fallback.name}`,
+  );
+  return fallback;
 }
 
 export function resolveYamlTemplateBankName(

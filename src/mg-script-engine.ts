@@ -476,7 +476,11 @@ export function resolveMgFunnelScripts(
       !isRegistrationHelpRequest(t) &&
       !isMgRegistrationAccountQuestion(t)
     ) {
-      if (!gameIdAskSent && !depositSent && (registrationConfirmed || idReceived)) {
+      // Customer flipped to «registered» after earlier «pas encore» — still ask ID.
+      if (!idReceived && registrationConfirmed) {
+        return ["07_game_id"];
+      }
+      if (!gameIdAskSent && !depositSent && idReceived) {
         return ["07_game_id"];
       }
       return [];
@@ -534,28 +538,25 @@ export function resolveMgFunnelScripts(
   }
 
   // After link: ask game ID when customer confirms registration (incl. «Oui» after ping).
-  // Deposit only after ID is received (or game-id already asked and they want deposit).
+  // Deposit only after ID is received. If deposit was wrongly sent first, still ask ID.
   if (!depositSent && idReceived) {
     return ["06_deposit"];
   }
 
-  if (!gameIdAskSent && !depositSent) {
-    if (!t && !options?.hasImage) {
-      return [];
-    }
-    if (isBarePostLinkAcknowledgment(t, intent) && !registrationConfirmed) {
-      return [];
-    }
-    if (
-      registrationConfirmed ||
-      intent === "game_id_text" ||
-      idReceived ||
-      (lastBotAskedRegistrationDone(lastBotText) &&
-        (intent === "positive" || intent === "ready"))
-    ) {
-      return ["07_game_id"];
-    }
-    return [];
+  if (!idReceived && (registrationConfirmed || intent === "game_id_text")) {
+    // Re-nudge ID even if ask/deposit already in thread — stops «Déjà terminé» hangs.
+    return ["07_game_id"];
+  }
+
+  if (
+    !gameIdAskSent &&
+    !depositSent &&
+    (t || options?.hasImage) &&
+    !(isBarePostLinkAcknowledgment(t, intent) && !registrationConfirmed) &&
+    (lastBotAskedRegistrationDone(lastBotText) &&
+      (intent === "positive" || intent === "ready"))
+  ) {
+    return ["07_game_id"];
   }
 
   if (depositSent && !gameIdAskSent) {

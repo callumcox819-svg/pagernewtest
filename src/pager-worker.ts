@@ -234,6 +234,8 @@ import {
   resolveMgFunnelScripts,
 } from "./mg-script-engine.js";
 import {
+  confirmsRegistrationAfterAsk,
+  isRegistrationConfirmed as mgIsRegistrationConfirmed,
   isRegistrationHelpRequest as mgIsRegistrationHelpRequest,
   wantsRegistrationLink as mgWantsRegistrationLink,
   isMgDepositAmountChoice,
@@ -5384,8 +5386,89 @@ async function processMgConversation(
     }
   }
 
+  // Registered but still no ID in thread — never leave as «no script» hang.
+  const lastBotMg = outgoingTexts[outgoingTexts.length - 1] || "";
+  const mgRegYes =
+    mgIsRegistrationConfirmed(latestCustomerText) ||
+    confirmsRegistrationAfterAsk(latestCustomerText, lastBotMg) ||
+    intent === "joined";
+  const mgIdInThread = recentCustomerTexts.some((line) =>
+    /\b(?:\+?\d{8,}|1[5-9]\d{7,10})\b/.test(line),
+  ) || /\b(?:\+?\d{8,}|1[5-9]\d{7,10})\b/.test(latestCustomerText);
+  if (
+    !scriptKeys.length &&
+    mgRegLinkSentInHistory(outgoingTexts) &&
+    mgRegYes &&
+    !mgIdInThread
+  ) {
+    scriptKeys = ["07_game_id"];
+    console.log(
+      `Pager worker: MG ${convId.slice(0, 8)} registered without ID → force ask game_id`,
+    );
+  }
+
   if (scriptKeys.length) {
+  // Allow one re-ask of game_id when customer confirms registration again.
+  const allowGameIdResend =
+    scriptKeys.includes("07_game_id") && mgRegYes && !mgIdInThread;
   scriptKeys = await dropScriptKeysAlreadyInThread(client, convId, "MG", scriptKeys);
+  if (!scriptKeys.length && allowGameIdResend) {
+    const lastAskMs = Date.parse(convState.lastReplyAt ?? "");
+    const askedIdRecently =
+      convState.lastReplyRole === "07_game_id" &&
+      Number.isFinite(lastAskMs) &&
+      Date.now() - lastAskMs < 45 * 60 * 1000;
+    if (askedIdRecently) {
+      console.log(
+        `Pager worker: MG ${convId.slice(0, 8)} waiting for ID (asked <45m ago)`,
+      );
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return false;
+    }
+    const remind =
+      loadLocalMgScript("07_game_id")?.trim() ||
+      "Envoie-moi ton identifiant de jeu (profil, coin droit). Il commence par +.";
+    await tryTakeConversationForProcessing(client, convId, "MG");
+    const sentRemind = await client.sendMessageReliable(convId, remind, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (sentRemind) {
+      const waitingId = findZmWaitingIdStatusId(currentState);
+      const operatorId = waitingId ? await client.probeOperatorUserId() : "";
+      const currentStatusId = (conv.statusId ?? conv.status?.id ?? "").trim();
+      if (waitingId && operatorId && currentStatusId !== waitingId) {
+        try {
+          await client.patchConversationStatus(convId, waitingId, operatorId);
+        } catch {
+          // non-fatal
+        }
+      }
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        currentStage: "waiting_id",
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: "07_game_id",
+        sendFailures: 0,
+      });
+      console.log(
+        `Pager worker: MG ${convId.slice(0, 8)} re-asked game_id after registration confirm`,
+      );
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return true;
+    }
+  }
   if (!scriptKeys.length) {
     console.log(`Pager worker: MG ${convId.slice(0, 8)} — scripts already in thread`);
   } else {
