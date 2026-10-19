@@ -5506,7 +5506,7 @@ async function processMgConversation(
     mgRegLinkSentInHistory(outgoingTexts)
   ) {
     const waitText =
-      "Ok boss, finis ton inscription. Quand c'est terminé, écris-moi ici et on continue (je te demanderai ton identifiant de jeu).";
+      "D'accord, finis ton inscription. Quand c'est terminé, écris-moi ici et on continue.";
     await tryTakeConversationForProcessing(client, convId, "MG");
     const sentWait = await client.sendMessageReliable(convId, waitText, {
       channelId: runtime.channelId,
