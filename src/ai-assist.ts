@@ -74,6 +74,7 @@ const COUNTRY_RULES: Record<CountryCode, string> = {
     "Acknowledge «Ok boss», «j'ai déjà fait», waiting for screenshot — brief and friendly.",
     "Link/MTN/Orange issues: Wi‑Fi, other operator, Google Chrome — no new URL.",
     "Screenshot of INSCRIPTION / Étape X sur Y / code promo form = still registering — tell them to finish signup with promo CASH056; NEVER ask for player ID yet.",
+    "1xlite / 1x Lite (domains 1xlite-*.pro/.top) IS official 1xBET mobile light — NEVER say wrong site.",
     "Player ID (when truly registered): say it starts with + (not 17 or 18).",
     "On «arnaque»: calm reassurance.",
     "Do not repeat deposit script verbatim.",
@@ -113,6 +114,7 @@ const MARKET_RULES: Partial<Record<SupportCountry, string>> = {
     "If they ask about the phone number on that screen (Malagasy «alefa… numéro… vola»): the number is for mobile-money payment ON the platform — confirm there, never send money to a personal chat wallet.",
     "NEVER open with «Je comprends vos préoccupations». NEVER repeat a message you already sent in this thread.",
     "Guide deposit on the platform (Déposer / green $). Ask for a screenshot after top-up.",
+    "1xlite / 1x Lite mobile web (1xlite-*.pro etc.) IS our 1xBET — never say wrong platform.",
     "Link issues: Wi‑Fi, Google Chrome — never paste a new URL.",
     "If they say NOT registered yet / no account — do NOT ask for ID or deposit; registration scripts handle that.",
     "On «arnaque»: calm reassurance.",
@@ -335,16 +337,19 @@ function buildVisionSystemPrompt(
         "Do NOT say the page is loading / ask only for Chrome refresh as if it were our link.",
         "No new URLs — point them back to the link already in the thread.",
       ].join(" ")
-    : "If URL/logo shows 256bet, Bet261, Melbet, Linebet, Mostbet or similar (not 1xBET): wrong platform — send them back to OUR 1xBET link+promo in chat. Not a loading error.";
+    : [
+        "If URL/logo shows 256bet, Bet261, Melbet, Linebet, Mostbet or similar (NOT 1xBET): wrong platform — send them back to OUR 1xBET link+promo in chat.",
+        "CRITICAL: 1xlite / 1x Lite / domains like 1xlite-****.pro|.top ARE the official 1xBET light mobile web — SAME platform. Never say «wrong site» / «pas la bonne plateforme». Treat as our 1xBET and help them continue (Inscription / deposit / ID).",
+      ].join(" ");
   return [
     "You see a customer screenshot (registration / app / deposit proof / loading error / wrong bookmaker / mobile-money SMS).",
     "If the image shows a Telegram/chat thread: ignore operator/bot bubbles (our scripts) — only react to the customer's new app screenshot or their caption.",
     "Do not reply to or repeat text visible from our own automated messages in the screenshot.",
     wrongBrandBlock,
-    "If registration button is loading / page stuck ON OUR 1xBET link: help refresh + Chrome + same link already in chat + remind promo from our script. No new URLs.",
+    "If registration button is loading / page stuck ON OUR 1xBET / 1xlite link: help refresh + Chrome + same link already in chat + remind promo from our script. No new URLs.",
     "If mobile-money SMS only: ask for 1xBET balance screenshot — SMS is not enough.",
     "If account ID / DÉPÔT screen with ID: acknowledge and push deposit (scripts may send deposit text).",
-    "If 1xBET balance visible: congratulate — deposit proof OK.",
+    "If 1xBET / 1xlite balance visible: congratulate — deposit proof OK.",
     buildSystemPrompt(country, support ? ({ country, support } as AiAssistContext) : undefined),
     supportHint,
     "Plain text reply only. No URLs. Never invent links.",

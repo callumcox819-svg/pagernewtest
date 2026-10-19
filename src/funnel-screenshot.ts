@@ -73,8 +73,32 @@ const FOREIGN_BRAND_PATTERNS: Array<{ re: RegExp; label: string }> = [
 
 const OWN_1XBET_RE = /\b1x\s*bet\b|\b1хбет\b|\b1xbet\b|1xbet\./i;
 
+/**
+ * Official 1xBET mobile/lite mirrors (1xlite-*.top/pro/…) — NOT a rival bookmaker.
+ * Logo still says 1XBET; domain is the light phone webapp.
+ */
+export function looksLikeOwn1xBetLite(text: string): boolean {
+  const raw = text || "";
+  if (!raw.trim()) {
+    return false;
+  }
+  return (
+    /\b1x\s*lite\b|\b1xlite\b|\b1х\s*лайт\b|\b1хлайт\b/i.test(raw) ||
+    /1xlite[-.][a-z0-9.-]+\.(pro|top|com|net|app|io|site|xyz|online)/i.test(raw) ||
+    (/1xlite/i.test(raw) && OWN_1XBET_RE.test(raw))
+  );
+}
+
+export function looksLikeOwn1xBetPlatform(text: string): boolean {
+  return OWN_1XBET_RE.test(text || "") || looksLikeOwn1xBetLite(text);
+}
+
 export function extractWrongBettingBrandLabel(text: string): string | undefined {
   const raw = text || "";
+  // Lite/mobile 1xBET must never be labeled as a rival.
+  if (looksLikeOwn1xBetLite(raw)) {
+    return undefined;
+  }
   for (const item of FOREIGN_BRAND_PATTERNS) {
     if (item.re.test(raw)) {
       return item.label;
@@ -92,6 +116,10 @@ export function looksLikeWrongBettingBrand(text: string): boolean {
   if (!raw.trim()) {
     return false;
   }
+  // 1xlite / phone light version = OUR platform (same brand, mobile web).
+  if (looksLikeOwn1xBetLite(raw)) {
+    return false;
+  }
   const foreign = extractWrongBettingBrandLabel(raw);
   if (!foreign) {
     return false;
@@ -101,7 +129,7 @@ export function looksLikeWrongBettingBrand(text: string): boolean {
     return true;
   }
   // Brand name visible without our 1xBET brand → wrong site.
-  if (!OWN_1XBET_RE.test(raw)) {
+  if (!looksLikeOwn1xBetPlatform(raw)) {
     return true;
   }
   // Both brands mentioned — still treat as wrong if foreign label is primary brand chrome.
