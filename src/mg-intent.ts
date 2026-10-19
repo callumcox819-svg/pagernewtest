@@ -224,6 +224,17 @@ export function lastBotAskedRegistrationDone(botText: string): boolean {
   if (!t) {
     return false;
   }
+  // Instructional «Une fois inscrit, envoie-moi un message» is NOT a yes/no ping.
+  if (
+    /une fois (que vous (etes|soyez) )?inscrit|once (you('re| are) )?registered|apres (ton|votre|l')?inscription/i.test(
+      t,
+    ) &&
+    !/avez[- ]vous|etes[- ]vous deja|deja inscrit\s*\?|termine[rz]? (votre|ton|l')?inscription\s*\?/i.test(
+      t,
+    )
+  ) {
+    return false;
+  }
   return (
     /termin[eé].{0,48}inscription|inscription.{0,24}termin|avez[- ]vous.{0,40}(inscrit|inscription)|deja inscrit|etes[- ]vous toujours.{0,40}inscri|etape.{0,30}inscription|finished registration|have you.{0,40}register|are you still.{0,40}register/i.test(
       t,
@@ -275,6 +286,34 @@ export function isBarePostLinkAcknowledgment(text: string, intent: MgIntent): bo
   }
   return /^(ok|okay|okey|oui|d'accord|daccord|merci|thanks|thank you|super|parfait|hum+|hm+|mhm+)[.!\s]*$/i.test(
     t,
+  );
+}
+
+/**
+ * After the reg link is out: interest / soft yes ≠ «I finished registration».
+ * Bot must ask whether inscription is done — never jump to player ID.
+ */
+export function isPostLinkInterestNotRegistered(text: string, intent: MgIntent): boolean {
+  if (isRegistrationConfirmed(text) || intent === "joined" || intent === "game_id_text") {
+    return false;
+  }
+  if (isCustomerSaysNotRegisteredYet(text)) {
+    return false;
+  }
+  const t = normalizeMgText(text);
+  if (!t) {
+    return false;
+  }
+  if (intent === "interested" || intent === "positive" || intent === "ready") {
+    return true;
+  }
+  if (isBarePostLinkAcknowledgment(text, intent)) {
+    return true;
+  }
+  return (
+    INTERESTED.test(t) ||
+    /^(ca|cela)\s*m[' ]?interesse\b/i.test(t) ||
+    /\bm[' ]?interesse\b/i.test(t)
   );
 }
 

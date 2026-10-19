@@ -237,6 +237,7 @@ import {
 } from "./mg-script-engine.js";
 import {
   confirmsRegistrationAfterAsk,
+  isPostLinkInterestNotRegistered,
   isRegistrationConfirmed as mgIsRegistrationConfirmed,
   isRegistrationHelpRequest as mgIsRegistrationHelpRequest,
   wantsRegistrationLink as mgWantsRegistrationLink,
@@ -5466,8 +5467,15 @@ async function processMgConversation(
     scriptKeys = ["04_registration", "05_link"];
   }
 
+  const lastBotMgEarly = outgoingTexts[outgoingTexts.length - 1] || "";
+  const mgRegistrationDoneSignal =
+    mgIsRegistrationConfirmed(latestCustomerText) ||
+    confirmsRegistrationAfterAsk(latestCustomerText, lastBotMgEarly) ||
+    intent === "joined";
+
   // AI catches Darija / soft positives the regex intent missed — push next funnel scripts.
   // Never advance on «je continue mon inscription» / still registering.
+  // After link: interest («Cela m'intéresse») must NOT jump to player ID.
   if (
     !scriptKeys.length &&
     latestCustomerText &&
@@ -5475,7 +5483,7 @@ async function processMgConversation(
   ) {
     const aiGo = await aiLooksLikeFunnelAdvance(deps.env, latestCustomerText, {
       recentCustomerTexts,
-      lastBotText: outgoingTexts[outgoingTexts.length - 1] || "",
+      lastBotText: lastBotMgEarly,
       languageHint: "fr",
     });
     if (aiGo) {
@@ -5485,10 +5493,16 @@ async function processMgConversation(
         scriptKeys = ["02_how_it_works", "03_mga_table"];
       } else if (!mgRegLinkSentInHistory(outgoingTexts)) {
         scriptKeys = ["04_registration", "05_link"];
-      } else if (!mgScriptSentInHistory(outgoingTexts, "07_game_id")) {
-        // After link: always ask ID before deposit instructions.
+      } else if (
+        mgRegistrationDoneSignal &&
+        !mgScriptSentInHistory(outgoingTexts, "07_game_id")
+      ) {
         scriptKeys = ["07_game_id"];
-      } else if (!mgDepositSentInHistory(outgoingTexts)) {
+      } else if (
+        mgRegistrationDoneSignal &&
+        mgScriptSentInHistory(outgoingTexts, "07_game_id") &&
+        !mgDepositSentInHistory(outgoingTexts)
+      ) {
         scriptKeys = ["06_deposit"];
       }
       if (scriptKeys.length) {
@@ -5496,6 +5510,43 @@ async function processMgConversation(
           `Pager worker: MG ${convId.slice(0, 8)} AI advance → scripts=[${scriptKeys.join(",")}]`,
         );
       }
+    }
+  }
+
+  // After link: «Cela m'intéresse» / ok → ask if registration is finished, never ID / чекаю ID.
+  if (
+    !scriptKeys.length &&
+    mgRegLinkSentInHistory(outgoingTexts) &&
+    !mgRegistrationDoneSignal &&
+    isPostLinkInterestNotRegistered(latestCustomerText, intent) &&
+    !outgoingAskedRegistrationStatus("MG", outgoingTexts)
+  ) {
+    const askDone = inProgressFollowUpMessage("MG", 0);
+    await tryTakeConversationForProcessing(client, convId, "MG");
+    const sentAsk = await client.sendMessageReliable(convId, askDone, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (sentAsk) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: "in_progress_followup",
+        inProgressFollowUpSentAt: new Date().toISOString(),
+        sendFailures: 0,
+      });
+      console.log(
+        `Pager worker: MG ${convId.slice(0, 8)} post-link interest → ask registration done (not ID)`,
+      );
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return true;
     }
   }
 
@@ -5536,11 +5587,8 @@ async function processMgConversation(
   }
 
   // Registered but still no ID in thread — never leave as «no script» hang.
-  const lastBotMg = outgoingTexts[outgoingTexts.length - 1] || "";
-  const mgRegYes =
-    mgIsRegistrationConfirmed(latestCustomerText) ||
-    confirmsRegistrationAfterAsk(latestCustomerText, lastBotMg) ||
-    intent === "joined";
+  const lastBotMg = lastBotMgEarly;
+  const mgRegYes = mgRegistrationDoneSignal;
   const mgIdInThread = recentCustomerTexts.some((line) =>
     /\b(?:\+?\d{8,}|1[5-9]\d{7,10})\b/.test(line),
   ) || /\b(?:\+?\d{8,}|1[5-9]\d{7,10})\b/.test(latestCustomerText);
@@ -6503,15 +6551,53 @@ async function processDjConversation(
     }
   }
 
-  // After link: Ok / ready / registered → ask game ID (DJ has no 07_game_id script key).
+  // After link: only ask ID when registration is confirmed (not bare interest / ok).
+  const djRegDone =
+    intent === "joined" ||
+    /\b(deja inscrit|deja termin|je suis inscrit|j['']?ai (fini|inscrit)|c['']?est (fait|bon)|termine|vita)\b/i.test(
+      latestCustomerText,
+    ) ||
+    (outgoingAskedRegistrationStatus("DJ", outgoingTexts) &&
+      /^(oui|ouais|yes|si|ok)\b/i.test(latestCustomerText.trim()));
   if (
     !scriptKeys.length &&
     djRegLinkSentInHistory(outgoingTexts) &&
-    (intent === "ready" ||
+    !djRegDone &&
+    (intent === "interested" ||
       intent === "positive" ||
-      intent === "joined" ||
-      /\b(oui|ok|okay|deja|termine|inscrit|fini|done|yes)\b/i.test(latestCustomerText))
+      intent === "ready" ||
+      /int[eé]ress/i.test(latestCustomerText)) &&
+    !outgoingAskedRegistrationStatus("DJ", outgoingTexts)
   ) {
+    const askDone = inProgressFollowUpMessage("DJ", 0);
+    await tryTakeConversationForProcessing(client, convId, "DJ");
+    const sentAsk = await client.sendMessageReliable(convId, askDone, {
+      channelId: runtime.channelId,
+      conv,
+    });
+    if (sentAsk) {
+      await patchConversationState(deps.stateStore, state.chatId, convId, {
+        conversationId: convId,
+        channelId: runtime.channelId,
+        lastCustomerMessageId: lastIncoming.id,
+        lastCustomerMessageAt: lastIncoming.createdAt,
+        lastReplyAt: new Date().toISOString(),
+        lastReplyRole: "in_progress_followup",
+        inProgressFollowUpSentAt: new Date().toISOString(),
+        sendFailures: 0,
+      });
+      console.log(
+        `Pager worker: DJ ${convId.slice(0, 8)} post-link interest → ask registration done (not ID)`,
+      );
+      try {
+        await client.acknowledgeConversation(convId);
+      } catch {
+        // non-fatal
+      }
+      return true;
+    }
+  }
+  if (!scriptKeys.length && djRegLinkSentInHistory(outgoingTexts) && djRegDone) {
     const askAlready = outgoingTexts.some((text) =>
       /identifiant de jeu|commence par \+/i.test(text),
     );
@@ -6556,7 +6642,7 @@ async function processDjConversation(
           lastReplyRole: "07_game_id",
           sendFailures: 0,
         });
-        console.log(`Pager worker: DJ ${convId.slice(0, 8)} post-link → ask ID`);
+        console.log(`Pager worker: DJ ${convId.slice(0, 8)} post-link registered → ask ID`);
         try {
           await client.acknowledgeConversation(convId);
         } catch {

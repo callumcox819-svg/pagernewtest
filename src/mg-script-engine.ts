@@ -21,6 +21,7 @@ import {
   isMgRegistrationAccountQuestion,
   isMgDepositPaymentQuestion,
   isBarePostLinkAcknowledgment,
+  isPostLinkInterestNotRegistered,
   isMgDepositAmountChoice,
   isMgOfferTableChoice,
   wantsDetailsAfterIntro,
@@ -554,6 +555,11 @@ export function resolveMgFunnelScripts(
     return [];
   }
 
+  // After link: «ça m'intéresse» / ok ≠ registered — scripts stay quiet; worker asks «terminé?».
+  if (linkSent && isPostLinkInterestNotRegistered(t, intent) && !registrationConfirmed) {
+    return [];
+  }
+
   // After link: ask game ID when customer confirms registration (incl. «Oui» after ping).
   // Deposit only after ID is received. If deposit was wrongly sent first, still ask ID.
   if (!depositSent && idReceived) {
@@ -578,7 +584,8 @@ export function resolveMgFunnelScripts(
     (t || options?.hasImage) &&
     !(isBarePostLinkAcknowledgment(t, intent) && !registrationConfirmed) &&
     (lastBotAskedRegistrationDone(lastBotText) &&
-      (intent === "positive" || intent === "ready"))
+      (intent === "positive" || intent === "ready") &&
+      !isPostLinkInterestNotRegistered(t, intent))
   ) {
     return ["07_game_id"];
   }
