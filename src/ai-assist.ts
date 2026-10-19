@@ -7,6 +7,10 @@ import {
   buildAiLanguageLockRule,
   describeAiMarketLanguage,
 } from "./ai-country-language.js";
+import {
+  extractWrongBettingBrandLabel,
+  looksLikeWrongBettingBrand,
+} from "./funnel-screenshot.js";
 
 export type AiAgentTrigger =
   | "deposit_script_just_sent"
@@ -36,6 +40,8 @@ export type AiVisionContext = {
   mimeType: string;
   support?: SupportSnapshot;
   ocrCombinedText?: string;
+  /** OCR/classifier already saw a rival bookmaker (256bet, Bet261…). */
+  wrongBettingBrand?: string;
 };
 
 const SERVICE_FRAMING = [
@@ -197,6 +203,7 @@ function buildSystemPrompt(country: CountryCode, ctx?: AiAssistContext): string 
     resolveAiMarketRules(country, ctx),
     "CRITICAL: Never invent or paste any URL, tinyurl, bit.ly, t.me, or mirror link. Only refer to the registration/Telegram link already sent in this chat from saved replies (say «le lien que je t'ai envoyé» / «the link I sent»).",
     "If the site does not load: tell them to refresh, use Chrome, reopen THE SAME link already in the chat. Never provide a different link.",
+    "If they are on a WRONG bookmaker (256bet, Bet261, Melbet, Linebet, Mostbet, etc.): say clearly this is NOT our platform. They must open OUR 1xBET registration link + promo already sent in this chat. Do NOT treat that as a loading/Chrome problem. Do NOT invent a new URL.",
     "Push toward registration → ID screenshot → deposit → balance screenshot. Do not skip ahead to Telegram handoff without deposit proof.",
     supportMode ? "Max 5 short sentences. No markdown. No JSON. No URLs." : "Max 5 short sentences. No markdown. No JSON. No URLs.",
   ]
@@ -235,6 +242,11 @@ function buildUserPrompt(ctx: AiAssistContext): string {
   if (ctx.agentTrigger === "registration_proof_ack") {
     parts.push(
       "Trigger: registration screenshot recognized. Acknowledge and guide to deposit + screenshot.",
+    );
+  }
+  if (ctx.intent === "wrong_betting_site" || ctx.intent === "wrong_betting_brand") {
+    parts.push(
+      "CRITICAL INTENT: customer opened a competitor site (256bet / Bet261 / Melbet…). Tell them this is the WRONG platform. They must use the 1xBET link + promo already sent in this chat. Not a loading/Wi‑Fi issue. No new URLs.",
     );
   }
   parts.push(
@@ -302,15 +314,28 @@ async function completeWithLanguageGuard(
   return reply;
 }
 
-function buildVisionSystemPrompt(country: CountryCode, support?: SupportSnapshot): string {
+function buildVisionSystemPrompt(
+  country: CountryCode,
+  support?: SupportSnapshot,
+  wrongBrand?: string,
+): string {
   const supportHint = support?.active
     ? "SUPPORT AGENT: praise registration proof, guide deposit + screenshot; thank for balance shot; ask for clearer image if needed."
     : "Describe briefly what you see if relevant, then reply to the customer.";
+  const wrongBrandBlock = wrongBrand
+    ? [
+        `CRITICAL: OCR/vision shows rival bookmaker «${wrongBrand}» (NOT 1xBET).`,
+        "Tell the customer this is the WRONG site. They must open OUR 1xBET registration link + promo already sent in this chat.",
+        "Do NOT say the page is loading / ask only for Chrome refresh as if it were our link.",
+        "No new URLs — point them back to the link already in the thread.",
+      ].join(" ")
+    : "If URL/logo shows 256bet, Bet261, Melbet, Linebet, Mostbet or similar (not 1xBET): wrong platform — send them back to OUR 1xBET link+promo in chat. Not a loading error.";
   return [
-    "You see a customer screenshot (registration / app / deposit proof / loading error / mobile-money SMS).",
+    "You see a customer screenshot (registration / app / deposit proof / loading error / wrong bookmaker / mobile-money SMS).",
     "If the image shows a Telegram/chat thread: ignore operator/bot bubbles (our scripts) — only react to the customer's new app screenshot or their caption.",
     "Do not reply to or repeat text visible from our own automated messages in the screenshot.",
-    "If registration button is loading / page stuck: help refresh + Chrome + same link already in chat + remind promo from our script. No new URLs.",
+    wrongBrandBlock,
+    "If registration button is loading / page stuck ON OUR 1xBET link: help refresh + Chrome + same link already in chat + remind promo from our script. No new URLs.",
     "If mobile-money SMS only: ask for 1xBET balance screenshot — SMS is not enough.",
     "If account ID / DÉPÔT screen with ID: acknowledge and push deposit (scripts may send deposit text).",
     "If 1xBET balance visible: congratulate — deposit proof OK.",
@@ -513,6 +538,10 @@ export async function maybeAiAssistVision(
     support: ctx.support,
   } as AiAssistContext);
   const languageCountry = resolveAiLanguageCountry(market);
+  const ocrBlob = [ctx.ocrCombinedText, ctx.caption].filter(Boolean).join("\n");
+  const wrongBrand =
+    ctx.wrongBettingBrand ||
+    (looksLikeWrongBettingBrand(ocrBlob) ? extractWrongBettingBrandLabel(ocrBlob) : undefined);
   const dataUrl = `data:${ctx.mimeType};base64,${ctx.imageBase64}`;
   const userParts = [
     {
@@ -522,7 +551,13 @@ export async function maybeAiAssistVision(
         `Required reply language: ${describeAiMarketLanguage(languageCountry)}`,
         `Funnel step: ${ctx.funnelStep}`,
         `OCR/proof classifier: ${ctx.proofKind}`,
+        wrongBrand
+          ? `WRONG BOOKMAKER DETECTED: ${wrongBrand} — coach back to our 1xBET link+promo in chat (not a loading issue).`
+          : "",
         `Caption: ${ctx.caption || "(none)"}`,
+        ctx.ocrCombinedText?.trim()
+          ? `OCR text (may include address bar / logo):\n${ctx.ocrCombinedText.slice(0, 800)}`
+          : "",
         ctx.support?.active ? `Support phase: ${ctx.support.phase}` : "",
         market === "MG"
           ? "Currency lock: MGA only. Never mention CFA/FCFA."
@@ -540,7 +575,7 @@ export async function maybeAiAssistVision(
     return await completeWithLanguageGuard(
       env,
       ctx.country,
-      buildVisionSystemPrompt(ctx.country, ctx.support),
+      buildVisionSystemPrompt(ctx.country, ctx.support, wrongBrand),
       userParts,
       model,
       market,

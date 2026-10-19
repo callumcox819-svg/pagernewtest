@@ -4,6 +4,7 @@
  */
 
 export type FunnelScreenshotScene =
+  | "wrong_betting_brand"
   | "site_loading_stuck"
   | "registration_form"
   | "account_id_ready"
@@ -18,6 +19,8 @@ export type FunnelScreenshotRead = {
   accountId?: string;
   /** Parsed balance amount if visible on platform UI. */
   balanceAmount?: number;
+  /** Foreign brand label when scene is wrong_betting_brand (e.g. 256bet, Bet261). */
+  foreignBrand?: string;
 };
 
 const ACCOUNT_ID_RE = /\b((?:15|16|17|18|19)\d{7,10})\b/;
@@ -51,6 +54,83 @@ export function looksLikeMobileMoneySms(text: string): boolean {
       t,
     );
   return hasSmsTransfer && !hasPlatformUi;
+}
+
+/** Rival bookmakers / wrong casino — NOT a «page won't load» issue for our 1xBET funnel. */
+const FOREIGN_BRAND_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  { re: /\b256\s*bet\b|256bet\.com/i, label: "256bet" },
+  { re: /\bbet\s*261\b|bet261\.|bet261\.mg/i, label: "Bet261" },
+  { re: /\bmel\s*bet\b|melbet\.|мелбет/i, label: "Melbet" },
+  { re: /\bline\s*bet\b|linebet\./i, label: "Linebet" },
+  { re: /\bmost\s*bet\b|mostbet\./i, label: "Mostbet" },
+  { re: /\b22\s*bet\b|22bet\./i, label: "22bet" },
+  { re: /\bmegapari\b|megapari\./i, label: "Megapari" },
+  { re: /\bparipesa\b|paripesa\./i, label: "Paripesa" },
+  { re: /\b888starz\b|888starz\./i, label: "888starz" },
+  { re: /\bbetway\b|betway\./i, label: "Betway" },
+];
+
+const OWN_1XBET_RE = /\b1x\s*bet\b|\b1хбет\b|\b1xbet\b|1xbet\./i;
+
+export function extractWrongBettingBrandLabel(text: string): string | undefined {
+  const raw = text || "";
+  for (const item of FOREIGN_BRAND_PATTERNS) {
+    if (item.re.test(raw)) {
+      return item.label;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Customer opened a competitor site (256bet, Bet261, Melbet…) instead of our 1xBET link.
+ * Must win over «site loading» heuristics — sports UI is not a Chrome/refresh problem.
+ */
+export function looksLikeWrongBettingBrand(text: string): boolean {
+  const raw = text || "";
+  if (!raw.trim()) {
+    return false;
+  }
+  const foreign = extractWrongBettingBrandLabel(raw);
+  if (!foreign) {
+    return false;
+  }
+  // Explicit foreign host in URL bar always wins.
+  if (/256bet\.|bet261\.|melbet\.|linebet\.|mostbet\.|22bet\./i.test(raw)) {
+    return true;
+  }
+  // Brand name visible without our 1xBET brand → wrong site.
+  if (!OWN_1XBET_RE.test(raw)) {
+    return true;
+  }
+  // Both brands mentioned — still treat as wrong if foreign label is primary brand chrome.
+  return /logo|sports|top match|top jeux|aviator|casino/i.test(raw);
+}
+
+/** Localized coach text: use OUR 1xBET link + promo, not the foreign brand. */
+export function wrongBettingBrandCoachReply(
+  country: string,
+  brandLabel?: string,
+): string {
+  const brand = (brandLabel || "ce site").trim();
+  const code = (country || "").trim().toUpperCase();
+  if (code === "EG" || code === "JO" || code === "PK") {
+    return `هذا ليس الموقع الصحيح — أنت على ${brand}. لازم تفتح رابط تسجيل 1xBET اللي بعتُه لك مع كود البرومو بتاعنا. مش ${brand}. افتح الرابط من الشات في Chrome وكمل التسجيل هناك.`;
+  }
+  if (
+    code === "CL" ||
+    code === "GT" ||
+    code === "EC" ||
+    code === "CR" ||
+    code === "PE"
+  ) {
+    return `Esa no es la plataforma correcta — estás en ${brand}. Tienes que abrir el enlace de registro 1xBET que ya te envié con nuestro código promo. No ${brand}. Abre mi enlace del chat en Chrome y regístrate ahí.`;
+  }
+  if (code === "ZM" || code === "KE" || code === "RW") {
+    return `That's the wrong site — you're on ${brand}. You need to open the 1xBET registration link I already sent you with our promo code — not ${brand}. Open my link from this chat in Chrome and register there.`;
+  }
+  // CM / MG / DJ / MA / FR markets
+  return `Ce n'est pas la bonne plateforme — tu es sur ${brand}. Il faut ouvrir le lien d'inscription 1xBET que je t'ai déjà envoyé avec notre code promo, pas ${brand}. Rouvre mon lien depuis ce chat dans Chrome et inscris-toi là.`;
 }
 
 /** Registration form still open / button spinning — help load, don't treat as done. */
@@ -129,6 +209,16 @@ export function readFunnelScreenshot(text: string): FunnelScreenshotRead {
       scene: "mobile_money_sms",
       reason: "mobile-money SMS receipt, not 1xBET balance",
       balanceAmount: parseBalanceAmount(raw),
+    };
+  }
+
+  // Before «loading stuck» — sports UI of 256bet/Bet261 is not a Chrome/refresh issue.
+  if (looksLikeWrongBettingBrand(raw)) {
+    const foreignBrand = extractWrongBettingBrandLabel(raw);
+    return {
+      scene: "wrong_betting_brand",
+      reason: `wrong bookmaker UI (${foreignBrand ?? "foreign"}) — need our 1xBET link`,
+      foreignBrand,
     };
   }
 

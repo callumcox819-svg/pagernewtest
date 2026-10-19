@@ -87,6 +87,13 @@ export function classifyProofFromText(
       reason: "Mobile-money SMS receipt — need 1xBET balance screenshot",
     };
   }
+  if (scene.scene === "wrong_betting_brand") {
+    return {
+      proofKind: "unclear_screenshot",
+      combinedText: inputText,
+      reason: scene.reason || "Wrong bookmaker (not 1xBET) — redirect to our link+promo",
+    };
+  }
   if (scene.scene === "site_loading_stuck" || looksLikeSiteLoadingStuck(inputText)) {
     return {
       proofKind: "unclear_screenshot",

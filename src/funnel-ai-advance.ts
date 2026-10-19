@@ -72,6 +72,7 @@ export function verdictFromScreenshotScene(scene: FunnelScreenshotScene): Funnel
       return "advance";
     case "mobile_money_sms":
       return "need_balance_shot";
+    case "wrong_betting_brand":
     case "site_loading_stuck":
     case "registration_form":
       return "hold_help";

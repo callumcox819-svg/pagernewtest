@@ -46,7 +46,12 @@ import {
   type PresetPlan,
 } from "./folder-presets.js";
 import { aiLooksLikeFunnelAdvance } from "./funnel-ai-advance.js";
-import { readFunnelScreenshot } from "./funnel-screenshot.js";
+import {
+  extractWrongBettingBrandLabel,
+  looksLikeWrongBettingBrand,
+  readFunnelScreenshot,
+  wrongBettingBrandCoachReply,
+} from "./funnel-screenshot.js";
 import { resolveFunnelParkingIntent, type FunnelParkingIntent } from "./funnel-parking.js";
 import {
   defaultCountryForChannelName,
@@ -7504,6 +7509,36 @@ async function processFolderMarketConversation(
         // Prefer Telegram handoff after deposit proof; then move to «Завершено».
         forcedPlan =
           planFolderPresetForKinds(replies, outgoingTexts, ["telegram"]) ?? undefined;
+      } else if (scene.scene === "wrong_betting_brand") {
+        const reply = wrongBettingBrandCoachReply(
+          runtime.runtime.country,
+          scene.foreignBrand,
+        );
+        const sent = await client.sendMessageReliable(convId, reply, {
+          channelId: runtime.channelId,
+          conv,
+        });
+        if (sent) {
+          console.log(
+            `Pager worker: ${runtime.runtime.country} ${convId.slice(0, 8)} wrong brand (${scene.foreignBrand ?? "?"}) → coach to 1xBET link`,
+          );
+          await patchConversationState(deps.stateStore, state.chatId, convId, {
+            conversationId: convId,
+            channelId: runtime.channelId,
+            lastCustomerMessageId: lastIncoming.id,
+            lastCustomerMessageAt: lastIncoming.createdAt,
+            lastReplyAt: new Date().toISOString(),
+            lastReplyRole: "wrong_betting_brand",
+            sendFailures: 0,
+          });
+          try {
+            await client.acknowledgeConversation(convId);
+          } catch {
+            // non-fatal
+          }
+          return true;
+        }
+        screenshotHelpIntent = "wrong_betting_site";
       } else if (
         scene.scene === "site_loading_stuck" ||
         scene.scene === "registration_form" ||
@@ -9449,6 +9484,85 @@ async function tryMoveConversationToParkingFolder(
   }
 }
 
+/** Rival bookmaker screenshot — redirect to our 1xBET link+promo (not Chrome/loading tips). */
+async function trySendWrongBettingBrandHelp(
+  deps: WorkerDeps,
+  ctx: SpecialResponseContext & {
+    outgoingTexts: string[];
+    funnelStep?: number;
+    sortedMessages?: PagerMessage[];
+    operatorUserId?: string;
+  },
+  combinedText: string,
+  options?: { image?: Buffer; proofKind?: string },
+): Promise<boolean> {
+  const blob = [combinedText, ctx.text].filter(Boolean).join("\n");
+  if (!looksLikeWrongBettingBrand(blob)) {
+    return false;
+  }
+  const brand = extractWrongBettingBrandLabel(blob);
+  const country = String(ctx.channel.country || "CM");
+  const funnelStep = ctx.funnelStep ?? ctx.convState.funnelStep ?? 0;
+  const support = buildSupportSnapshot(
+    ctx.channel.country,
+    isInProgressStatusConversation(ctx.conv),
+    ctx.outgoingTexts,
+    {
+      operatorFolderEnabled: isConversationInAiEnabledFolders(
+        ctx.conv,
+        ctx.state,
+        ctx.runtime.channelId,
+      ),
+    },
+  );
+
+  let reply: string | undefined;
+  if (
+    deps.env.AI_ENABLED &&
+    options?.image &&
+    options.image.length > 0 &&
+    isConversationInAiEnabledFolders(ctx.conv, ctx.state, ctx.runtime.channelId)
+  ) {
+    reply = await runAiAgentVisionTurn(deps.env, {
+      country: ctx.channel.country,
+      caption: ctx.text,
+      funnelStep,
+      outgoingTexts: ctx.outgoingTexts,
+      proofKind: options.proofKind ?? "unclear_screenshot",
+      imageBase64: options.image.toString("base64"),
+      mimeType: detectImageMimeType(options.image),
+      support,
+      ocrCombinedText: combinedText,
+      wrongBettingBrand: brand,
+    });
+  }
+  if (!reply?.trim()) {
+    reply = wrongBettingBrandCoachReply(country, brand);
+  }
+
+  await tryTakeConversationForProcessing(ctx.client, ctx.convId, country);
+  const sent = await ctx.client.sendMessageReliable(ctx.convId, reply.trim(), {
+    channelId: ctx.runtime.channelId,
+    conv: ctx.conv,
+  });
+  if (!sent) {
+    return false;
+  }
+  console.log(
+    `Pager worker: ${country} ${ctx.convId.slice(0, 8)} wrong brand (${brand ?? "?"}) → 1xBET link coach build=${getDeployLabel()}`,
+  );
+  await patchConversationState(deps.stateStore, ctx.state.chatId, ctx.convId, {
+    conversationId: ctx.convId,
+    channelId: ctx.runtime.channelId,
+    lastCustomerMessageId: ctx.lastIncoming.id,
+    lastCustomerMessageAt: ctx.lastIncoming.createdAt,
+    lastReplyAt: new Date().toISOString(),
+    lastReplyRole: "wrong_betting_brand",
+    sendFailures: 0,
+  });
+  return true;
+}
+
 /** Client stuck on INSCRIPTION form — coach finish + promo, never ask player ID. */
 async function trySendRegistrationFormHelp(
   deps: WorkerDeps,
@@ -9756,6 +9870,16 @@ async function tryHandleCustomerImage(
     proofKind = classification.proofKind;
     ocrCombinedText = classification.combinedText;
 
+    // Rival bookmaker (256bet / Bet261 / Melbet…) — not a «site loading» Chrome tip.
+    if (
+      await trySendWrongBettingBrandHelp(deps, ctx, ocrCombinedText, {
+        image,
+        proofKind,
+      })
+    ) {
+      return true;
+    }
+
     // INSCRIPTION form (Étape X/Y) — not a finished account; never ask for player ID.
     if (await trySendRegistrationFormHelp(deps, ctx, ocrCombinedText)) {
       return true;
@@ -9943,6 +10067,11 @@ async function tryHandleCustomerImage(
         `Pager worker: skip ${ctx.convId.slice(0, 8)} ZM AI vision — deposit_screenshot_uses_script`,
       );
     } else {
+    const wrongBrandHint = looksLikeWrongBettingBrand(
+      [ocrCombinedText, ctx.text].filter(Boolean).join("\n"),
+    )
+      ? extractWrongBettingBrandLabel([ocrCombinedText, ctx.text].filter(Boolean).join("\n"))
+      : undefined;
     const visionReply = await runAiAgentVisionTurn(deps.env, {
       country: ctx.channel.country,
       caption: ctx.text,
@@ -9953,6 +10082,7 @@ async function tryHandleCustomerImage(
       mimeType: detectImageMimeType(image),
       support,
       ocrCombinedText: ocrCombinedText,
+      wrongBettingBrand: wrongBrandHint,
     });
     if (visionReply) {
       const sent = await ctx.client.sendMessageReliable(ctx.convId, visionReply, {
